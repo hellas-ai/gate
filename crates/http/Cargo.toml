@@ -65,7 +65,7 @@ gate-core = { workspace = true, features = ["tracing"], optional = true }
 http = { workspace = true, optional = true }
 opentelemetry = { version = "0.30", default-features = false, features = ["trace"] }
 hyper = { workspace = true, optional = true }
-rand = { version = "0.8", optional = true }
+rand = { version = "0.9", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = { workspace = true, optional = true }
