@@ -32,15 +32,17 @@ fn app() -> Html {
             dark_mode.set(new_state);
 
             // Update the document element class
-            if let Some(window) = window()
-                && let Some(document) = window.document()
-                && let Some(element) = document.document_element()
-            {
-                let class_list = element.class_list();
-                if new_state {
-                    let _ = class_list.add_1("dark");
-                } else {
-                    let _ = class_list.remove_1("dark");
+            #[allow(clippy::collapsible_if)]
+            if let Some(window) = window() {
+                if let Some(document) = window.document() {
+                    if let Some(element) = document.document_element() {
+                        let class_list = element.class_list();
+                        if new_state {
+                            let _ = class_list.add_1("dark");
+                        } else {
+                            let _ = class_list.remove_1("dark");
+                        }
+                    }
                 }
             }
         })

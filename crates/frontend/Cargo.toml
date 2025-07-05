@@ -17,8 +17,8 @@ gate-fixtures = { path = "../fixtures" }
 
 # Gate HTTP client
 gate-http = { path = "../http", default-features = false, features = ["client"] }
-gloo = "0.11"
-js-sys = "0.3"
+gloo = { workspace = true }
+js-sys = { workspace = true }
 
 once_cell = "1.19"
 
@@ -27,10 +27,10 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 # Use workspace dependencies where available
 serde = { workspace = true }
 serde_json = { workspace = true }
-wasm-bindgen = { version = "0.2", features = ["serde-serialize"] }
-wasm-bindgen-futures = "0.4"
-wasm-logger = "0.2"
-web-sys = { version = "0.3", features = [
+wasm-bindgen = { workspace = true, features = ["serde-serialize"] }
+wasm-bindgen-futures = { workspace = true }
+wasm-logger = { workspace = true }
+web-sys = { workspace = true, features = [
     "console",
     "Credential",
     "CredentialCreationOptions",
@@ -59,4 +59,4 @@ web-sys = { version = "0.3", features = [
 ] }
 
 # Frontend-specific dependencies
-yew = { version = "0.21", features = ["csr"] }
+yew = { workspace = true, features = ["csr"] }

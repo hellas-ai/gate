@@ -142,7 +142,7 @@ impl Component for DaemonStatusComponent {
                             _ => 500,
                         };
                     }
-                } else if self.poll_delay_ms != 500 {
+                } else {
                     self.poll_delay_ms = 500;
                 }
 
@@ -317,11 +317,7 @@ impl Component for DaemonStatusComponent {
                                 "border", "rounded", "px-3", "py-1", "text-sm", "cursor-pointer", "transition-all",
                                 if self.show_debug_log {
                                     if is_dark { "bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600" } else { "bg-gray-200 border-gray-300 text-gray-700 hover:bg-gray-300" }
-                                } else if is_dark {
-                                    "bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700"
-                                } else {
-                                    "bg-white border-gray-300 text-gray-600 hover:bg-gray-100"
-                                }
+                                } else if is_dark { "bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700" } else { "bg-white border-gray-300 text-gray-600 hover:bg-gray-100" }
                             )}
                             title={if self.show_debug_log { "Hide debug log" } else { "Show debug log" }}
                         >
@@ -336,11 +332,7 @@ impl Component for DaemonStatusComponent {
                                 "px-2", "py-1", "rounded", "text-xs", "font-medium", "uppercase", "tracking-wider",
                                 if self.is_running {
                                     if is_dark { "text-green-400 bg-green-900/50" } else { "text-green-700 bg-green-50" }
-                                } else if is_dark {
-                                    "text-red-400 bg-red-900/50"
-                                } else {
-                                    "text-red-700 bg-red-50"
-                                }
+                                } else if is_dark { "text-red-400 bg-red-900/50" } else { "text-red-700 bg-red-50" }
                             )}>
                                 {if self.is_running {
                                     "Connected"

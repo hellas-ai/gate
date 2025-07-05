@@ -9,12 +9,11 @@ path = "main.rs"
 
 [dependencies]
 gate-chat-ui = { path = "../.." }
-wasm-bindgen = "0.2"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "DomTokenList", "HtmlSelectElement", "Request", "RequestInit", "Response"] }
-yew = { version = "0.21", features = ["csr"] }
-console_error_panic_hook = "0.1"
-serde_json = "1.0"
-wasm-bindgen-futures = "0.4"
-gloo-net = "0.4"
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlElement", "DomTokenList", "HtmlSelectElement", "Request", "RequestInit", "Response"] }
+yew = { workspace = true, features = ["csr"] }
+console_error_panic_hook = { workspace = true }
+serde_json = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+gloo-net = { workspace = true }
 
-[workspace]

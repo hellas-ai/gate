@@ -283,10 +283,11 @@ pub fn user_management() -> Html {
                             </h3>
 
                             {if let Some(user) = (*selected_user).as_ref() {
+                                let display_name = user.name.as_deref().unwrap_or(&user.id);
                                 html! {
                                     <>
                                         <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                                            {format!("Changing role for: {}", user.name.as_deref().unwrap_or(&user.id))}
+                                            {format!("Changing role for: {display_name}")}
                                         </p>
 
                                         <div class="mb-6">

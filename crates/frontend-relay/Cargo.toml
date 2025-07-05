@@ -8,19 +8,19 @@ description = "Relay web UI frontend for Gate"
 
 [dependencies]
 gate-frontend-common = { path = "../frontend-common" }
-yew = { version = "0.21", features = ["csr"] }
-yew-router = "0.18"
-web-sys = { version = "0.3" }
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-wasm-logger = "0.2"
+yew = { workspace = true, features = ["csr"] }
+yew-router = { workspace = true }
+web-sys = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+wasm-logger = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
-tracing-web = "0.1"
-gloo-timers = "0.3"
-gloo-net = "0.6"
+tracing-web = { workspace = true }
+gloo-timers = { workspace = true }
+gloo-net = { workspace = true }
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3"
+wasm-bindgen-test = { workspace = true }

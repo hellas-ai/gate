@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/chat-ui",
+    "crates/chat-ui/examples/trunk-demo",
     "crates/core",
     "crates/daemon",
     "crates/fixtures",
@@ -97,11 +98,29 @@ utoipa-axum = { version = "0.2" }
 utoipa-rapidoc = { version = "4.0", features = ["axum"] }
 utoipa-redoc = { version = "6.0", features = ["axum"] }
 utoipa-scalar = { version = "0.3", features = ["axum"] }
+
+# Frontend
+yew = { git = "https://github.com/yewstack/yew", default-features = false }
+yew-router = { git = "https://github.com/yewstack/yew", default-features = false }
+wasm-bindgen = { version = "0.2", default-features = false }
+wasm-bindgen-futures = { version = "0.4", default-features = false }
+web-sys = { version = "0.3", default-features = false }
+js-sys = { version = "0.3", default-features = false }
+gloo = { version = "0.11", default-features = false }
+gloo-timers = { version = "0.3", default-features = false }
+gloo-utils = { version = "0.2", default-features = false }
+gloo-events = { version = "0.2", default-features = false }
+gloo-net = { version = "0.5", default-features = false }
+wasm-logger = { version = "0.2", default-features = false }
+tracing-web = { version = "0.1", default-features = false }
+serde-wasm-bindgen = { version = "0.6", default-features = false }
 utoipa-swagger-ui = { version = "8.0", features = ["axum"] }
 
 # Utilities
 uuid = { version = "1.0", features = ["v4", "serde", "js"] }
 wiremock = "0.6"
+wasm-bindgen-test = { version = "0.3", default-features = false }
+console_error_panic_hook = { version = "0.1", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "warn"

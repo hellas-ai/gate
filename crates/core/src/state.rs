@@ -34,3 +34,7 @@ pub trait StateBackend: Send + Sync {
     async fn get_organization(&self, id: &str) -> Result<Option<Organization>>;
     async fn create_organization(&self, org: &Organization) -> Result<()>;
 }
+
+// Mock implementation for testing
+// TODO: Fix mockall lifetime issues with Option<&str> in async functions
+// For now, mocks can be created manually in tests as needed

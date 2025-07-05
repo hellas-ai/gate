@@ -16,6 +16,17 @@ use tokio::sync::{Mutex, RwLock, watch};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
+// Struct to group daemon runtime parameters
+struct DaemonRuntimeParams {
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    shutdown_tx: tokio::sync::oneshot::Sender<()>,
+    runtime_tx: tokio::sync::oneshot::Sender<DaemonRuntime>,
+    tlsforward_state_tx: tokio::sync::oneshot::Sender<Option<TlsForwardState>>,
+    tlsforward_state: Arc<RwLock<Option<TlsForwardState>>>,
+    tlsforward_state_rx:
+        Arc<RwLock<Option<watch::Receiver<gate_daemon::services::tlsforward::TlsForwardState>>>>,
+}
+
 // Helper functions module
 mod helpers {
     use super::*;
@@ -483,12 +494,14 @@ pub async fn start_daemon(
         async move {
             match run_daemon_server(
                 daemon_config,
-                shutdown_rx,
-                shutdown_tx,
-                runtime_tx,
-                tlsforward_state_tx,
-                tlsforward_state,
-                tlsforward_state_rx,
+                DaemonRuntimeParams {
+                    shutdown_rx,
+                    shutdown_tx,
+                    runtime_tx,
+                    tlsforward_state_tx,
+                    tlsforward_state,
+                    tlsforward_state_rx,
+                },
                 app,
             )
             .await
@@ -578,16 +591,19 @@ pub async fn restart_daemon(
 #[allow(clippy::too_many_arguments)]
 async fn run_daemon_server(
     config: DaemonConfig,
-    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
-    shutdown_tx: tokio::sync::oneshot::Sender<()>,
-    runtime_tx: tokio::sync::oneshot::Sender<DaemonRuntime>,
-    tlsforward_state_tx: tokio::sync::oneshot::Sender<Option<TlsForwardState>>,
-    tlsforward_state: Arc<RwLock<Option<TlsForwardState>>>,
-    tlsforward_state_rx: Arc<
-        RwLock<Option<watch::Receiver<gate_daemon::services::tlsforward::TlsForwardState>>>,
-    >,
+    params: DaemonRuntimeParams,
     app: AppHandle,
 ) -> Result<()> {
+    // Destructure params
+    let DaemonRuntimeParams {
+        shutdown_rx,
+        shutdown_tx,
+        runtime_tx,
+        tlsforward_state_tx,
+        tlsforward_state,
+        tlsforward_state_rx,
+    } = params;
+
     info!(
         "Starting embedded daemon server on {}:{}",
         config.host, config.port

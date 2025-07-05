@@ -226,7 +226,8 @@
             cargoLock = {
               lockFile = ./Cargo.lock;
               outputHashes = {
-                "instant-acme-0.8.0" = "sha256-+eXYEBk3IZ0hzjR+zpdb1pA/KS4y7nrjOTbwBIlnFco=";
+                "instant-acme-0.8.0" = "sha256-0I3ot5mVLnimVz7RLBWpwIsZt0UpYz8jlNouLtePJ18=";
+                "yew-0.21.0" = "sha256-G1F3KyvMAViqypWxmFfdUsgZSERhXSXkLFSq8DGsD1M=";
               };
             };
             
@@ -268,7 +269,8 @@
             cargoLock = {
               lockFile = ./Cargo.lock;
               outputHashes = {
-                "instant-acme-0.8.0" = "sha256-+eXYEBk3IZ0hzjR+zpdb1pA/KS4y7nrjOTbwBIlnFco=";
+                "instant-acme-0.8.0" = "sha256-0I3ot5mVLnimVz7RLBWpwIsZt0UpYz8jlNouLtePJ18=";
+                "yew-0.21.0" = "sha256-G1F3KyvMAViqypWxmFfdUsgZSERhXSXkLFSq8DGsD1M=";
               };
             };
             
@@ -310,7 +312,8 @@
             cargoLock = {
               lockFile = ./Cargo.lock;
               outputHashes = {
-                "instant-acme-0.8.0" = "sha256-+eXYEBk3IZ0hzjR+zpdb1pA/KS4y7nrjOTbwBIlnFco=";
+                "instant-acme-0.8.0" = "sha256-0I3ot5mVLnimVz7RLBWpwIsZt0UpYz8jlNouLtePJ18=";
+                "yew-0.21.0" = "sha256-G1F3KyvMAViqypWxmFfdUsgZSERhXSXkLFSq8DGsD1M=";
               };
             };
             
@@ -353,7 +356,8 @@
             cargoLock = {
               lockFile = ./Cargo.lock;
               outputHashes = {
-                "instant-acme-0.8.0" = "sha256-+eXYEBk3IZ0hzjR+zpdb1pA/KS4y7nrjOTbwBIlnFco=";
+                "instant-acme-0.8.0" = "sha256-0I3ot5mVLnimVz7RLBWpwIsZt0UpYz8jlNouLtePJ18=";
+                "yew-0.21.0" = "sha256-G1F3KyvMAViqypWxmFfdUsgZSERhXSXkLFSq8DGsD1M=";
               };
             };
             cargoBuildFlags = [ "--package" "gate-daemon" ];
@@ -458,7 +462,8 @@
             cargoLock = {
               lockFile = ./Cargo.lock;
               outputHashes = {
-                "instant-acme-0.8.0" = "sha256-+eXYEBk3IZ0hzjR+zpdb1pA/KS4y7nrjOTbwBIlnFco=";
+                "instant-acme-0.8.0" = "sha256-0I3ot5mVLnimVz7RLBWpwIsZt0UpYz8jlNouLtePJ18=";
+                "yew-0.21.0" = "sha256-G1F3KyvMAViqypWxmFfdUsgZSERhXSXkLFSq8DGsD1M=";
               };
             };
             buildFeatures = [ "server" ];
@@ -482,7 +487,8 @@
             cargoLock = {
               lockFile = ./Cargo.lock;
               outputHashes = {
-                "instant-acme-0.8.0" = "sha256-+eXYEBk3IZ0hzjR+zpdb1pA/KS4y7nrjOTbwBIlnFco=";
+                "instant-acme-0.8.0" = "sha256-0I3ot5mVLnimVz7RLBWpwIsZt0UpYz8jlNouLtePJ18=";
+                "yew-0.21.0" = "sha256-G1F3KyvMAViqypWxmFfdUsgZSERhXSXkLFSq8DGsD1M=";
               };
             };
             

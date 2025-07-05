@@ -80,7 +80,9 @@ impl DnsChallengeManager {
             // Find the last two parts (TLD and domain)
             let parts: Vec<&str> = base_domain.split('.').collect();
             if parts.len() >= 2 {
-                format!("{}.{}", parts[parts.len() - 2], parts[parts.len() - 1])
+                let second_last = parts[parts.len() - 2];
+                let last = parts[parts.len() - 1];
+                format!("{second_last}.{last}")
             } else {
                 base_domain.clone()
             }
@@ -88,10 +90,7 @@ impl DnsChallengeManager {
             base_domain.clone()
         };
 
-        info!(
-            "DNS Challenge Manager: base_domain={}, zone_domain={}",
-            base_domain, zone_domain
-        );
+        info!("DNS Challenge Manager: base_domain={base_domain}, zone_domain={zone_domain}");
 
         Ok(Self {
             cf_client: Arc::new(cf_client),
@@ -118,8 +117,8 @@ impl DnsChallengeManager {
         let id = Uuid::new_v4().to_string();
 
         info!(
-            "DnsChallengeManager: Creating challenge {} for domain {} (owner: {})",
-            id, challenge.domain, owner_node_id
+            "DnsChallengeManager: Creating challenge {id} for domain {} (owner: {owner_node_id})",
+            challenge.domain
         );
 
         // Extract subdomain from the full domain
@@ -144,9 +143,11 @@ impl DnsChallengeManager {
                 // Extract the middle part (e.g., "private" from "private.hellas.ai")
                 let middle_len = self.base_domain.len() - self.zone_domain.len() - 1;
                 let middle_part = &self.base_domain[..middle_len];
-                format!("{}.{}.{}", challenge.challenge, subdomain, middle_part)
+                let challenge_name = &challenge.challenge;
+                format!("{challenge_name}.{subdomain}.{middle_part}")
             } else {
-                format!("{}.{}", challenge.challenge, subdomain)
+                let challenge_name = &challenge.challenge;
+                format!("{challenge_name}.{subdomain}")
             }
         } else {
             return Err(anyhow!(
@@ -156,10 +157,9 @@ impl DnsChallengeManager {
             ));
         };
 
-        info!(
-            "Creating TXT record: {} (in zone {}) = {}",
-            record_name, self.zone_domain, challenge.value
-        );
+        let zone_domain = &self.zone_domain;
+        let value = &challenge.value;
+        info!("Creating TXT record: {record_name} (in zone {zone_domain}) = {value}");
 
         // Create the DNS record via Cloudflare
         let params = CreateDnsRecordParams {
@@ -172,10 +172,8 @@ impl DnsChallengeManager {
             priority: None,
         };
 
-        debug!(
-            "Sending request to Cloudflare API for zone {}",
-            self.zone_id
-        );
+        let zone_id = &self.zone_id;
+        debug!("Sending request to Cloudflare API for zone {zone_id}");
         match self
             .cf_client
             .request(&CreateDnsRecord {
@@ -186,15 +184,16 @@ impl DnsChallengeManager {
         {
             Ok(response) => {
                 let record_id = response.result.id;
-                info!("Successfully created DNS record with ID: {}", record_id);
+                info!("Successfully created DNS record with ID: {record_id}");
 
                 // Store challenge state with DNS record details
+                let zone_domain = &self.zone_domain;
                 let state = ChallengeState {
                     owner_node_id,
                     record_id: Some(record_id),
                     status: ChallengeStatus::Pending,
                     checks: 0,
-                    record_name: format!("{}.{}", record_name, self.zone_domain),
+                    record_name: format!("{record_name}.{zone_domain}"),
                     txt_value: challenge.value.clone(),
                 };
 
@@ -206,44 +205,39 @@ impl DnsChallengeManager {
                 Ok(id)
             }
             Err(e) => {
-                tracing::error!("Failed to create DNS record: {:?}", e);
+                tracing::error!("Failed to create DNS record: {e:?}");
                 // Log detailed error information
                 let error_msg = match e {
                     ApiFailure::Error(status, api_errors) => {
-                        error!("Cloudflare API error (HTTP {}): {:?}", status, api_errors);
+                        error!("Cloudflare API error (HTTP {status}): {api_errors:?}");
                         // Log each error detail
                         for err in &api_errors.errors {
-                            error!(
-                                "  Error {}: {} (other: {:?})",
-                                err.code, err.message, err.other
-                            );
+                            let code = &err.code;
+                            let message = &err.message;
+                            let other = &err.other;
+                            error!("  Error {code}: {message} (other: {other:?})");
                         }
                         // Log any additional error information
                         for (k, v) in &api_errors.other {
-                            error!("  {}: {}", k, v);
+                            error!("  {k}: {v}");
                         }
-                        format!(
-                            "Cloudflare API error (HTTP {}): {}",
-                            status,
-                            api_errors
-                                .errors
-                                .first()
-                                .map(|e| e.message.as_str())
-                                .unwrap_or("Unknown error")
-                        )
+                        let error_message = api_errors
+                            .errors
+                            .first()
+                            .map(|e| e.message.as_str())
+                            .unwrap_or("Unknown error");
+                        format!("Cloudflare API error (HTTP {status}): {error_message}")
                     }
                     ApiFailure::Invalid(req_err) => {
-                        error!("Request error creating DNS record: {}", req_err);
+                        error!("Request error creating DNS record: {req_err}");
                         format!("Request error: {req_err}")
                     }
                 };
 
-                error!(
-                    "Failed to create DNS record '{}': {}",
-                    record_name, error_msg
-                );
+                error!("Failed to create DNS record '{record_name}': {error_msg}");
 
                 // Store failed state
+                let zone_domain = &self.zone_domain;
                 let state = ChallengeState {
                     owner_node_id,
                     record_id: None,
@@ -251,16 +245,14 @@ impl DnsChallengeManager {
                         error: error_msg.clone(),
                     },
                     checks: 0,
-                    record_name: format!("{}.{}", record_name, self.zone_domain),
+                    record_name: format!("{record_name}.{zone_domain}"),
                     txt_value: challenge.value.clone(),
                 };
 
                 self.challenges.write().await.insert(id.clone(), state);
 
                 Err(anyhow!(
-                    "Failed to create DNS record '{}': {}",
-                    record_name,
-                    error_msg
+                    "Failed to create DNS record '{record_name}': {error_msg}"
                 ))
             }
         }
@@ -304,7 +296,7 @@ impl DnsChallengeManager {
 
         // Delete from Cloudflare if we have a record ID
         if let Some(record_id) = state.record_id {
-            info!("Deleting DNS record: {}", record_id);
+            info!("Deleting DNS record: {record_id}");
 
             match self
                 .cf_client
@@ -314,30 +306,26 @@ impl DnsChallengeManager {
                 })
                 .await
             {
-                Ok(_) => info!("Successfully deleted DNS record: {}", record_id),
+                Ok(_) => info!("Successfully deleted DNS record: {record_id}"),
                 Err(e) => {
                     let error_msg = match e {
                         ApiFailure::Error(status, api_errors) => {
                             error!(
-                                "Cloudflare API error deleting DNS record (HTTP {}): {:?}",
-                                status, api_errors
+                                "Cloudflare API error deleting DNS record (HTTP {status}): {api_errors:?}"
                             );
-                            format!(
-                                "Cloudflare API error (HTTP {}): {}",
-                                status,
-                                api_errors
-                                    .errors
-                                    .first()
-                                    .map(|e| e.message.as_str())
-                                    .unwrap_or("Unknown error")
-                            )
+                            let error_message = api_errors
+                                .errors
+                                .first()
+                                .map(|e| e.message.as_str())
+                                .unwrap_or("Unknown error");
+                            format!("Cloudflare API error (HTTP {status}): {error_message}")
                         }
                         ApiFailure::Invalid(req_err) => {
-                            error!("Request error deleting DNS record: {}", req_err);
+                            error!("Request error deleting DNS record: {req_err}");
                             format!("Request error: {req_err}")
                         }
                     };
-                    return Err(anyhow!("Failed to delete DNS record: {}", error_msg));
+                    return Err(anyhow!("Failed to delete DNS record: {error_msg}"));
                 }
             }
         }
@@ -366,11 +354,8 @@ impl DnsChallengeManager {
                         check_dns_propagation(&state.record_name, &state.txt_value).await;
 
                     if propagated {
-                        info!(
-                            "Challenge {} has propagated after {} seconds",
-                            challenge_id,
-                            checks * 10
-                        );
+                        let seconds = checks * 10;
+                        info!("Challenge {challenge_id} has propagated after {seconds} seconds");
                         state.status = ChallengeStatus::Propagated;
                         state.checks = checks;
                         break;
@@ -379,10 +364,7 @@ impl DnsChallengeManager {
                     state.checks = checks;
 
                     if checks >= MAX_CHECKS {
-                        warn!(
-                            "Challenge {} timed out waiting for propagation",
-                            challenge_id
-                        );
+                        warn!("Challenge {challenge_id} timed out waiting for propagation");
                         state.status = ChallengeStatus::Failed {
                             error: "DNS propagation timeout".to_string(),
                         };
@@ -390,7 +372,7 @@ impl DnsChallengeManager {
                     }
                 } else {
                     // Challenge was deleted
-                    debug!("Challenge {} no longer exists", challenge_id);
+                    debug!("Challenge {challenge_id} no longer exists");
                     break;
                 }
             }
@@ -405,17 +387,14 @@ async fn check_dns_propagation(record_name: &str, expected_value: &str) -> bool 
     // Use Cloudflare's DNS over TLS for faster resolution
     let resolver = TokioAsyncResolver::tokio(ResolverConfig::cloudflare(), ResolverOpts::default());
 
-    debug!(
-        "Checking DNS propagation for {} = {}",
-        record_name, expected_value
-    );
+    debug!("Checking DNS propagation for {record_name} = {expected_value}");
 
     match resolver.txt_lookup(record_name).await {
         Ok(response) => {
             for txt_data in response.iter() {
                 let txt_value = txt_data.to_string();
 
-                debug!("Found TXT record: {} = {}", record_name, txt_value);
+                debug!("Found TXT record: {record_name} = {txt_value}");
 
                 // DNS servers may or may not include quotes in the response
                 // Compare the actual content without quotes
@@ -423,23 +402,19 @@ async fn check_dns_propagation(record_name: &str, expected_value: &str) -> bool 
                 let normalized_expected = expected_value.trim_matches('"');
 
                 debug!(
-                    "Comparing DNS values - found: '{}' (normalized: '{}'), expected: '{}' (normalized: '{}')",
-                    txt_value, normalized_txt, expected_value, normalized_expected
+                    "Comparing DNS values - found: '{txt_value}' (normalized: '{normalized_txt}'), expected: '{expected_value}' (normalized: '{normalized_expected}')"
                 );
 
                 if normalized_txt == normalized_expected {
-                    info!("DNS propagation confirmed for {}", record_name);
+                    info!("DNS propagation confirmed for {record_name}");
                     return true;
                 }
             }
-            debug!(
-                "DNS record found but value doesn't match for {}",
-                record_name
-            );
+            debug!("DNS record found but value doesn't match for {record_name}");
             false
         }
         Err(e) => {
-            debug!("DNS lookup failed for {}: {}", record_name, e);
+            debug!("DNS lookup failed for {record_name}: {e}");
             false
         }
     }

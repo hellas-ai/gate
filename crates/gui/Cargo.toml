@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "native-tls"] }
+tauri = { version = "2", features = ["tray-icon", "rustls-tls"] }
 tauri-plugin-opener = "2"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync"] }
 gate-daemon = { path = "../daemon" }
