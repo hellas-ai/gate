@@ -54,7 +54,10 @@
         };
         
         # Build dependencies only (for caching)
-        cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+        cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
+          # Fix for git dependencies
+          doCheck = false;
+        });
         
         # Function to build individual packages
         buildPackage = name: craneLib.buildPackage (commonArgs // {

@@ -19,6 +19,13 @@ jobs:
     
     - uses: DeterminateSystems/magic-nix-cache-action@main
     
+    - name: Detect system
+      id: system
+      run: |
+        system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
+        echo "System: $system"
+        echo "system=$system" >> $GITHUB_OUTPUT
+    
     - name: Check flake
       run: nix flake check
     
@@ -28,9 +35,12 @@ jobs:
         nix build .#gate-tlsforward
     
     - name: Run tests
-      run: nix build .#checks.x86_64-linux.test
-      if: runner.os == 'Linux'
+      run: |
+        echo "Running tests for system: ${{ steps.system.outputs.system }}"
+        nix build .#checks.${{ steps.system.outputs.system }}.test
     
-    - name: Run tests (macOS)
-      run: nix build .#checks.x86_64-darwin.test
-      if: runner.os == 'macOS'
+    - name: Run clippy
+      run: nix build .#checks.${{ steps.system.outputs.system }}.clippy
+    
+    - name: Check formatting
+      run: nix build .#checks.${{ steps.system.outputs.system }}.fmt
