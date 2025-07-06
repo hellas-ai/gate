@@ -55,6 +55,8 @@
         
         # Build dependencies only (for caching)
         cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
+          pname = "gate-deps";
+          version = "0.1.0";
           # Fix for git dependencies
           doCheck = false;
         });
