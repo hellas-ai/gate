@@ -9330,7 +9330,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -10137,7 +10137,7 @@ dependencies = [
 [[package]]
 name = "yew"
 version = "0.21.0"
-source = "git+https://github.com/yewstack/yew#4d08a0335542a5b310976624c5d1744a102cb5dd"
+source = "git+https://github.com/yewstack/yew#8945ab7856a9948760eb0e7e75e2ab723d30d324"
 dependencies = [
  "console_error_panic_hook",
  "futures",
@@ -10161,7 +10161,7 @@ dependencies = [
 [[package]]
 name = "yew-macro"
 version = "0.21.0"
-source = "git+https://github.com/yewstack/yew#4d08a0335542a5b310976624c5d1744a102cb5dd"
+source = "git+https://github.com/yewstack/yew#8945ab7856a9948760eb0e7e75e2ab723d30d324"
 dependencies = [
  "once_cell",
  "prettyplease",
@@ -10175,7 +10175,7 @@ dependencies = [
 [[package]]
 name = "yew-router"
 version = "0.18.0"
-source = "git+https://github.com/yewstack/yew#4d08a0335542a5b310976624c5d1744a102cb5dd"
+source = "git+https://github.com/yewstack/yew#8945ab7856a9948760eb0e7e75e2ab723d30d324"
 dependencies = [
  "gloo",
  "js-sys",
@@ -10193,7 +10193,7 @@ dependencies = [
 [[package]]
 name = "yew-router-macro"
 version = "0.18.0"
-source = "git+https://github.com/yewstack/yew#4d08a0335542a5b310976624c5d1744a102cb5dd"
+source = "git+https://github.com/yewstack/yew#8945ab7856a9948760eb0e7e75e2ab723d30d324"
 dependencies = [
  "proc-macro2",
  "quote",
