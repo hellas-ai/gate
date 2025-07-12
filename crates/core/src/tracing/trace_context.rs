@@ -50,9 +50,8 @@ impl TraceContext {
         // Use getrandom for WASM compatibility
         #[cfg(target_arch = "wasm32")]
         {
-            use getrandom::getrandom;
-            getrandom(&mut trace_id).expect("Failed to generate random trace ID");
-            getrandom(&mut span_id).expect("Failed to generate random span ID");
+            getrandom::getrandom(&mut trace_id).expect("Failed to generate random trace ID");
+            getrandom::getrandom(&mut span_id).expect("Failed to generate random span ID");
         }
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -151,8 +150,7 @@ impl TraceContext {
         // Generate new span ID
         #[cfg(target_arch = "wasm32")]
         {
-            use getrandom::getrandom;
-            getrandom(&mut child.span_id).expect("Failed to generate random span ID");
+            getrandom::getrandom(&mut child.span_id).expect("Failed to generate random span ID");
         }
 
         #[cfg(not(target_arch = "wasm32"))]

@@ -2,11 +2,10 @@ use crate::components::{ConfigEditor, UserManagement};
 use crate::local_auth::LocalAuth;
 use gate_frontend_common::{
     auth::{use_auth, use_is_authenticated, AuthAction, AuthProvider},
-    client::create_client,
+    client::create_authenticated_client,
     components::{LiveChat, ThemeToggle},
     theme::ThemeProvider,
 };
-use reqwest::Method;
 use yew::prelude::*;
 
 #[function_component(LocalApp)]
@@ -217,30 +216,16 @@ fn local_app_content() -> Html {
 }
 
 // Helper function to check user role
-async fn check_user_role(token: &str) -> Result<String, String> {
-    let client = create_client().map_err(|e| format!("Failed to create client: {e}"))?;
+async fn check_user_role(_token: &str) -> Result<String, String> {
+    let client = create_authenticated_client()
+        .map_err(|e| format!("Failed to create client: {e}"))?
+        .ok_or_else(|| "Not authenticated".to_string())?;
 
-    // Get current user info
-    let response = client
-        .request(Method::GET, "/api/auth/me")
-        .header("Authorization", format!("Bearer {token}"))
-        .send()
+    // Get current user info using typed client method
+    let user_info = client
+        .get_me()
         .await
         .map_err(|e| format!("Failed to get user info: {e}"))?;
-
-    if !response.status().is_success() {
-        return Err("Failed to get user info".to_string());
-    }
-
-    #[derive(serde::Deserialize)]
-    struct UserInfo {
-        role: String,
-    }
-
-    let user_info: UserInfo = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse user info: {e}"))?;
 
     Ok(user_info.role)
 }

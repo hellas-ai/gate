@@ -1,6 +1,6 @@
 use crate::tauri_api::{
     configure_tlsforward, enable_tlsforward, get_daemon_runtime_config, get_daemon_status,
-    start_daemon, DaemonRuntimeConfig, TlsForwardState,
+    start_daemon, DaemonRuntimeConfig, Settings, TlsForwardState,
 };
 use gloo_timers::callback::Interval;
 use wasm_bindgen::JsCast;
@@ -28,11 +28,14 @@ pub struct DaemonStatusComponent {
     initial_connect_attempts: u32,
     poll_delay_ms: u32,
     show_debug_log: bool,
+    needs_email_setup: bool,
+    daemon_config: Option<Settings>,
 }
 
 pub enum Msg {
     UpdateStatus(bool, Option<String>, bool),
     UpdateConfig(DaemonRuntimeConfig),
+    UpdateDaemonConfig(Settings),
     Refresh,
     StartDaemon,
     SetError(String),
@@ -76,6 +79,8 @@ impl Component for DaemonStatusComponent {
             initial_connect_attempts: 0,
             poll_delay_ms: 1, // Start with 1ms polling
             show_debug_log: false,
+            needs_email_setup: false,
+            daemon_config: None,
         };
 
         // Fetch initial status immediately
@@ -94,6 +99,12 @@ impl Component for DaemonStatusComponent {
             }
             Msg::UpdateConfig(config) => {
                 self.runtime_config = Some(config);
+                true
+            }
+            Msg::UpdateDaemonConfig(config) => {
+                // Check if we need email setup
+                self.needs_email_setup = config.letsencrypt.email.is_none();
+                self.daemon_config = Some(config);
                 true
             }
             Msg::Refresh => {
@@ -117,6 +128,16 @@ impl Component for DaemonStatusComponent {
                                     }
                                     Err(_) => {
                                         // Silent error during polling
+                                    }
+                                }
+
+                                // Also get daemon config to check for email
+                                match crate::tauri_api::get_daemon_config().await {
+                                    Ok(config) => {
+                                        link.send_message(Msg::UpdateDaemonConfig(config));
+                                    }
+                                    Err(_) => {
+                                        // Silent error
                                     }
                                 }
                             }
@@ -162,8 +183,8 @@ impl Component for DaemonStatusComponent {
                     .send_message(Msg::AddDebugMessage("Starting daemon...".to_string()));
                 let link = ctx.link().clone();
                 spawn_local(async move {
-                    // Start daemon with default config
-                    match start_daemon(None).await {
+                    // Start daemon
+                    match start_daemon().await {
                         Ok(msg) => {
                             web_sys::console::log_1(&format!("Daemon started: {msg}").into());
                             link.send_message(Msg::AddDebugMessage(format!(
@@ -298,33 +319,28 @@ impl Component for DaemonStatusComponent {
         let is_dark = ctx.props().is_dark;
         html! {
             <div class="w-full max-w-2xl mx-auto">
-                <div class="mb-8">
-                    <h1 class={classes!("text-2xl", "font-semibold", "mb-2", if is_dark { "text-white" } else { "text-gray-900" })}>{"Gate AI Gateway"}</h1>
-                    <p class={classes!("text-sm", if is_dark { "text-gray-400" } else { "text-gray-600" })}>{"Local inference daemon status and configuration"}</p>
-                </div>
+                {if self.needs_email_setup && self.is_running && !self.show_tlsforward_form {
+                    html! {
+                        <div class={classes!("mb-6", "p-4", "rounded-lg", "border", if is_dark { "bg-blue-900/20 border-blue-700" } else { "bg-blue-50 border-blue-300" })}>
+                            <h3 class={classes!("text-sm", "font-medium", "mb-2", if is_dark { "text-blue-300" } else { "text-blue-800" })}>
+                                {"Email Required for SSL Certificates"}
+                            </h3>
+                            <p class={classes!("text-xs", "mb-3", if is_dark { "text-blue-200" } else { "text-blue-700" })}>
+                                {"Please provide your email address to enable automatic SSL certificates from Let's Encrypt."}
+                            </p>
+                            <button
+                                onclick={ctx.link().callback(|_| Msg::ShowTlsForwardForm)}
+                                class={classes!("text-sm", "font-medium", "border", "rounded", "px-4", "py-2", "cursor-pointer", "transition-colors", if is_dark { "bg-blue-800 hover:bg-blue-700 border-blue-600 text-white" } else { "bg-blue-600 hover:bg-blue-700 border-blue-700 text-white" })}
+                            >
+                                {"Configure Email"}
+                            </button>
+                        </div>
+                    }
+                } else {
+                    html! {}
+                }}
 
                 <div class="space-y-6">
-                    <div>
-                        <h3 class={classes!("text-sm", "font-medium", "mb-3", "uppercase", "tracking-wider", if is_dark { "text-gray-400" } else { "text-gray-500" })}>{"Connection Status"}</h3>
-                        <button
-                            onclick={ctx.link().callback(|e: MouseEvent| {
-                                web_sys::console::log_1(&"Debug button clicked (from onclick)".into());
-                                e.prevent_default();
-                                e.stop_propagation();
-                                Msg::ToggleDebugLog
-                            })}
-                            class={classes!(
-                                "border", "rounded", "px-3", "py-1", "text-sm", "cursor-pointer", "transition-all",
-                                if self.show_debug_log {
-                                    if is_dark { "bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600" } else { "bg-gray-200 border-gray-300 text-gray-700 hover:bg-gray-300" }
-                                } else if is_dark { "bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700" } else { "bg-white border-gray-300 text-gray-600 hover:bg-gray-100" }
-                            )}
-                            title={if self.show_debug_log { "Hide debug log" } else { "Show debug log" }}
-                        >
-                            {if self.show_debug_log { "🐛 Debug ON" } else { "🐛 Debug" }}
-                        </button>
-                    </div>
-
                     <div class="space-y-2">
                         <div class="flex items-center justify-between">
                             <span class={classes!("text-xs", "uppercase", "tracking-wider", "font-medium", "text-gray-500")}>{"Daemon Status"}</span>
@@ -461,35 +477,55 @@ impl Component for DaemonStatusComponent {
                                     {match &config.tlsforward_state {
                                         Some(TlsForwardState::Connected { server_address: _, assigned_domain }) => {
                                             html! {
+                                                <>
                                                 <div class="flex items-center justify-between">
-                                                    <span class={classes!("text-xs", "uppercase", "tracking-wider", "font-medium", "text-gray-500")}>{"Encrypted URL"}</span>
+                                                    <span class={classes!("text-xs", "uppercase", "tracking-wider", "font-medium", "text-gray-500")}>{"TLS Forward Domain"}</span>
                                                     <div class="flex items-center gap-2">
-                                                        <a
-                                                            href={format!("https://{assigned_domain}")}
-                                                            class={classes!("text-xs", "font-mono", "font-medium", "underline", if is_dark { "text-green-400 hover:text-green-300" } else { "text-green-600 hover:text-green-700" })}
-                                                            title="Click to open in browser"
-                                                            onclick={
-                                                                let full_url = format!("https://{assigned_domain}");
-                                                                let link = ctx.link().clone();
-                                                                Callback::from(move |e: MouseEvent| {
-                                                                    web_sys::console::log_1(&format!("Link clicked: {full_url}").into());
-                                                                    e.prevent_default();
-                                                                    e.stop_propagation();
-                                                                    let url = full_url.clone();
-                                                                    link.send_message(Msg::OpenUrl(url));
-                                                                })
+                                                        {if let Some(daemon_cfg) = &self.daemon_config {
+                                                            if daemon_cfg.letsencrypt.email.is_some() {
+                                                                // Email configured - show HTTPS URL
+                                                                html! {
+                                                                    <a
+                                                                        href={format!("https://{assigned_domain}")}
+                                                                        class={classes!("text-xs", "font-mono", "font-medium", "underline", if is_dark { "text-green-400 hover:text-green-300" } else { "text-green-600 hover:text-green-700" })}
+                                                                        title="Access your secure AI gateway"
+                                                                        onclick={
+                                                                            let full_url = format!("https://{assigned_domain}");
+                                                                            let link = ctx.link().clone();
+                                                                            Callback::from(move |e: MouseEvent| {
+                                                                                e.prevent_default();
+                                                                                e.stop_propagation();
+                                                                                let url = full_url.clone();
+                                                                                link.send_message(Msg::OpenUrl(url));
+                                                                            })
+                                                                        }
+                                                                    >
+                                                                        {format!("https://{assigned_domain}")}
+                                                                    </a>
+                                                                }
+                                                            } else {
+                                                                // No email - just show domain
+                                                                html! {
+                                                                    <span class={classes!("text-xs", "font-mono", if is_dark { "text-gray-300" } else { "text-gray-700" })}>
+                                                                        {assigned_domain.clone()}
+                                                                    </span>
+                                                                }
                                                             }
-                                                        >
-                                                            {format!("https://{assigned_domain}")}
-                                                        </a>
+                                                        } else {
+                                                            html! {
+                                                                <span class={classes!("text-xs", "font-mono", if is_dark { "text-gray-300" } else { "text-gray-700" })}>
+                                                                    {assigned_domain.clone()}
+                                                                </span>
+                                                            }
+                                                        }}
                                                         <button
                                                             class={classes!("p-1", if is_dark { "text-gray-400 hover:text-gray-200" } else { "text-gray-400 hover:text-gray-600" })}
-                                                            title="Copy to clipboard"
+                                                            title="Copy domain to clipboard"
                                                             onclick={
-                                                                let full_url = format!("https://{assigned_domain}");
+                                                                let domain = assigned_domain.clone();
                                                                 Callback::from(move |_| {
                                                                     if let Some(window) = web_sys::window() {
-                                                                        let _ = window.navigator().clipboard().write_text(&full_url);
+                                                                        let _ = window.navigator().clipboard().write_text(&domain);
                                                                     }
                                                                 })
                                                             }
@@ -500,6 +536,7 @@ impl Component for DaemonStatusComponent {
                                                         </button>
                                                     </div>
                                                 </div>
+                                                </>
                                             }
                                         }
                                         Some(TlsForwardState::Error(msg)) => {
@@ -599,6 +636,26 @@ impl Component for DaemonStatusComponent {
                 } else {
                     html! {}
                 }}
+                    <div>
+                        <h3 class={classes!("text-sm", "font-medium", "mb-3", "uppercase", "tracking-wider", if is_dark { "text-gray-400" } else { "text-gray-500" })}>{"Connection Status"}</h3>
+                        <button
+                            onclick={ctx.link().callback(|e: MouseEvent| {
+                                web_sys::console::log_1(&"Debug button clicked (from onclick)".into());
+                                e.prevent_default();
+                                e.stop_propagation();
+                                Msg::ToggleDebugLog
+                            })}
+                            class={classes!(
+                                "border", "rounded", "px-3", "py-1", "text-sm", "cursor-pointer", "transition-all",
+                                if self.show_debug_log {
+                                    if is_dark { "bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600" } else { "bg-gray-200 border-gray-300 text-gray-700 hover:bg-gray-300" }
+                                } else if is_dark { "bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700" } else { "bg-white border-gray-300 text-gray-600 hover:bg-gray-100" }
+                            )}
+                            title={if self.show_debug_log { "Hide debug log" } else { "Show debug log" }}
+                        >
+                            {if self.show_debug_log { "🐛 ON" } else { "🐛" }}
+                        </button>
+                    </div>
 
                 {if self.show_debug_log && !self.debug_messages.is_empty() {
                     html! {

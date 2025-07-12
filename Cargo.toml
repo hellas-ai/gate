@@ -43,7 +43,7 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 
 # Configuration
-config = { version = "0.14", features = ["yaml", "toml"] }
+config = { version = "0.15", features = ["yaml", "toml"] }
 directories = "6"
 futures = "0.3"
 
@@ -68,6 +68,9 @@ mockall = "0.13"
 
 # Platform-specific (file watching)
 notify = "6.1"
+
+# Random
+getrandom = { version = "0.3", default-features=false, features = ["wasm_js"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -110,7 +113,7 @@ gloo = { version = "0.11", default-features = false }
 gloo-timers = { version = "0.3", default-features = false }
 gloo-utils = { version = "0.2", default-features = false }
 gloo-events = { version = "0.2", default-features = false }
-gloo-net = { version = "0.5", default-features = false }
+gloo-net = { version = "0.6", default-features = false }
 wasm-logger = { version = "0.2", default-features = false }
 tracing-web = { version = "0.1", default-features = false }
 serde-wasm-bindgen = { version = "0.6", default-features = false }

@@ -15,6 +15,7 @@ pub struct AuthState {
     pub user_id: String,
     pub name: String,
     pub token: String,
+    pub role: String,
     pub expires_at: Option<i64>, // Unix timestamp
 }
 

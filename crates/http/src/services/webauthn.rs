@@ -79,7 +79,6 @@ impl WebAuthnService {
         &self,
         session_id: String,
         credential_json: serde_json::Value,
-        _device_name: Option<String>,
     ) -> Result<(Passkey, String, String), HttpError> {
         // Get session
         let session = self

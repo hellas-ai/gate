@@ -45,18 +45,29 @@ async fn invoke(cmd: &str, args: JsValue) -> Result<JsValue, String> {
     Ok(result)
 }
 
+// Minimal Settings struct that matches backend
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
-pub struct DaemonConfig {
-    pub port: u16,
+pub struct Settings {
+    pub server: ServerConfig,
+    pub letsencrypt: LetsEncryptConfig,
+    pub tlsforward: TlsForwardConfig,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+pub struct ServerConfig {
     pub host: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub database_url: Option<String>,
-    #[serde(default)]
-    pub enable_tlsforward: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tlsforward_server: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub letsencrypt_email: Option<String>,
+    pub port: u16,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+pub struct LetsEncryptConfig {
+    pub enabled: bool,
+    pub email: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+pub struct TlsForwardConfig {
+    pub enabled: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -89,14 +100,12 @@ pub struct DaemonRuntimeConfig {
     pub p2p_listen_addresses: Vec<String>,
     pub tlsforward_enabled: bool,
     pub tlsforward_state: Option<TlsForwardState>,
+    pub needs_bootstrap: bool,
 }
 
-/// Start the daemon with optional configuration
-pub async fn start_daemon(config: Option<DaemonConfig>) -> Result<String, String> {
-    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "config": config }))
-        .map_err(|e| e.to_string())?;
-
-    let result = invoke("start_daemon", args).await?;
+/// Start the daemon
+pub async fn start_daemon() -> Result<String, String> {
+    let result = invoke("start_daemon", JsValue::UNDEFINED).await?;
 
     serde_wasm_bindgen::from_value::<String>(result).map_err(|e| e.to_string())
 }
@@ -116,10 +125,10 @@ pub async fn daemon_status() -> Result<bool, String> {
 }
 
 /// Get daemon configuration
-pub async fn get_daemon_config() -> Result<DaemonConfig, String> {
+pub async fn get_daemon_config() -> Result<Settings, String> {
     let result = invoke("get_daemon_config", JsValue::UNDEFINED).await?;
 
-    serde_wasm_bindgen::from_value::<DaemonConfig>(result).map_err(|e| e.to_string())
+    serde_wasm_bindgen::from_value::<Settings>(result).map_err(|e| e.to_string())
 }
 
 /// Get daemon runtime status
@@ -141,12 +150,9 @@ pub async fn get_daemon_runtime_config() -> Result<DaemonRuntimeConfig, String> 
     serde_wasm_bindgen::from_value::<DaemonRuntimeConfig>(result).map_err(|e| e.to_string())
 }
 
-/// Restart daemon with optional new configuration
-pub async fn restart_daemon(config: Option<DaemonConfig>) -> Result<String, String> {
-    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "config": config }))
-        .map_err(|e| e.to_string())?;
-
-    let result = invoke("restart_daemon", args).await?;
+/// Restart daemon
+pub async fn restart_daemon() -> Result<String, String> {
+    let result = invoke("restart_daemon", JsValue::UNDEFINED).await?;
 
     serde_wasm_bindgen::from_value::<String>(result).map_err(|e| e.to_string())
 }

@@ -73,15 +73,35 @@ impl UseWebAuthnHandle {
                                 Ok(complete_response) => {
                                     gloo::console::log!("Registration successful!");
 
-                                    // Update auth state
-                                    auth_context.dispatch(AuthAction::Login(AuthState {
-                                        user_id: complete_response.user_id,
-                                        name: complete_response.name,
-                                        token: complete_response.token,
-                                        expires_at: None,
-                                    }));
+                                    // Fetch user role
+                                    match auth_api.get_current_user(&complete_response.token).await
+                                    {
+                                        Ok(user_info) => {
+                                            // Update auth state with role
+                                            auth_context.dispatch(AuthAction::Login(AuthState {
+                                                user_id: complete_response.user_id,
+                                                name: complete_response.name,
+                                                token: complete_response.token,
+                                                role: user_info.role,
+                                                expires_at: None,
+                                            }));
 
-                                    state.set(WebAuthnState::Idle);
+                                            state.set(WebAuthnState::Idle);
+                                        }
+                                        Err(e) => {
+                                            gloo::console::error!("Failed to fetch user info:", &e);
+                                            // Fall back to default role
+                                            auth_context.dispatch(AuthAction::Login(AuthState {
+                                                user_id: complete_response.user_id,
+                                                name: complete_response.name,
+                                                token: complete_response.token,
+                                                role: "user".to_string(),
+                                                expires_at: None,
+                                            }));
+
+                                            state.set(WebAuthnState::Idle);
+                                        }
+                                    }
                                 }
                                 Err(e) => {
                                     gloo::console::error!("Registration failed:", &e);
@@ -146,15 +166,35 @@ impl UseWebAuthnHandle {
                                 Ok(complete_response) => {
                                     gloo::console::log!("Authentication successful!");
 
-                                    // Update auth state
-                                    auth_context.dispatch(AuthAction::Login(AuthState {
-                                        user_id: complete_response.user_id,
-                                        name: complete_response.name,
-                                        token: complete_response.token,
-                                        expires_at: None,
-                                    }));
+                                    // Fetch user role
+                                    match auth_api.get_current_user(&complete_response.token).await
+                                    {
+                                        Ok(user_info) => {
+                                            // Update auth state with role
+                                            auth_context.dispatch(AuthAction::Login(AuthState {
+                                                user_id: complete_response.user_id,
+                                                name: complete_response.name,
+                                                token: complete_response.token,
+                                                role: user_info.role,
+                                                expires_at: None,
+                                            }));
 
-                                    state.set(WebAuthnState::Idle);
+                                            state.set(WebAuthnState::Idle);
+                                        }
+                                        Err(e) => {
+                                            gloo::console::error!("Failed to fetch user info:", &e);
+                                            // Fall back to default role
+                                            auth_context.dispatch(AuthAction::Login(AuthState {
+                                                user_id: complete_response.user_id,
+                                                name: complete_response.name,
+                                                token: complete_response.token,
+                                                role: "user".to_string(),
+                                                expires_at: None,
+                                            }));
+
+                                            state.set(WebAuthnState::Idle);
+                                        }
+                                    }
                                 }
                                 Err(e) => {
                                     gloo::console::error!("Authentication failed:", &e);

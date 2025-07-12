@@ -1,6 +1,6 @@
 //! Inference service for communicating with LLM endpoints
 
-use crate::client::create_client;
+use crate::client::create_authenticated_client;
 use gate_http::client::error::ClientError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -86,15 +86,24 @@ pub struct ModelsResponse {
 pub struct InferenceService;
 
 impl InferenceService {
-    /// Fetch available models
+    /// Fetch available models (requires authentication)
     pub async fn get_models() -> Result<Vec<Model>, ClientError> {
-        let client = create_client()?;
-        let req = client.request(reqwest::Method::GET, "/v1/models");
-        let response: ModelsResponse = client.execute(req).await?;
-        Ok(response.data)
+        // This now requires authentication
+        let client = create_authenticated_client()?
+            .ok_or_else(|| ClientError::Configuration("Not authenticated".into()))?;
+
+        let response = client.list_models().await?;
+        Ok(response
+            .data
+            .into_iter()
+            .map(|m| Model {
+                id: m.id,
+                owned_by: m.owned_by,
+            })
+            .collect())
     }
 
-    /// Send a chat completion request
+    /// Send a chat completion request (requires authentication)
     pub async fn chat_completion(
         provider: Provider,
         model: String,
@@ -102,56 +111,64 @@ impl InferenceService {
         temperature: Option<f32>,
         max_tokens: Option<u32>,
     ) -> Result<JsonValue, ClientError> {
-        let client = create_client()?;
+        let client = create_authenticated_client()?
+            .ok_or_else(|| ClientError::Configuration("Not authenticated".into()))?;
 
         match provider {
             Provider::OpenAI => {
                 // Build OpenAI-style request
-                let request = ChatCompletionRequest {
+                let messages = messages
+                    .into_iter()
+                    .map(|msg| gate_http::client::inference_typed::ChatMessage {
+                        role: match msg.role {
+                            Role::System => "system",
+                            Role::User => "user",
+                            Role::Assistant => "assistant",
+                        }
+                        .to_string(),
+                        content: msg.content,
+                    })
+                    .collect();
+
+                let request = gate_http::client::inference_typed::ChatCompletionRequest {
                     model,
                     messages,
                     temperature,
                     max_tokens,
-                    stream: false,
+                    stream: Some(false),
                 };
 
-                let req = client
-                    .request(reqwest::Method::POST, "/v1/chat/completions")
-                    .json(&request);
-
-                client.execute(req).await
+                let response = client.create_chat_completion(request).await?;
+                serde_json::to_value(response).map_err(ClientError::Serialization)
             }
             Provider::Anthropic => {
                 // Convert messages to Anthropic format
-                let anthropic_messages: Vec<AnthropicMessage> = messages
-                    .into_iter()
-                    .filter(|msg| !matches!(msg.role, Role::System)) // Anthropic doesn't use system role in messages
-                    .map(|msg| AnthropicMessage {
-                        role: match msg.role {
-                            Role::User => "user".to_string(),
-                            Role::Assistant => "assistant".to_string(),
-                            Role::System => unreachable!(),
-                        },
-                        content: vec![AnthropicContent {
-                            content_type: "text".to_string(),
-                            text: msg.content,
-                        }],
-                    })
-                    .collect();
+                let anthropic_messages: Vec<gate_http::client::inference_typed::AnthropicMessage> =
+                    messages
+                        .into_iter()
+                        .filter(|msg| !matches!(msg.role, Role::System)) // Anthropic doesn't use system role in messages
+                        .map(|msg| gate_http::client::inference_typed::AnthropicMessage {
+                            role: match msg.role {
+                                Role::User => "user",
+                                Role::Assistant => "assistant",
+                                Role::System => unreachable!(),
+                            }
+                            .to_string(),
+                            content: msg.content,
+                        })
+                        .collect();
 
-                let request = AnthropicMessagesRequest {
+                let request = gate_http::client::inference_typed::MessageRequest {
                     model,
                     messages: anthropic_messages,
-                    max_tokens: max_tokens.or(Some(1024)), // Anthropic requires max_tokens
+                    max_tokens: max_tokens.unwrap_or(1024), // Anthropic requires max_tokens
                     temperature,
-                    stream: false,
+                    stream: Some(false),
+                    system: None, // TODO: Extract system message if present
                 };
 
-                let req = client
-                    .request(reqwest::Method::POST, "/v1/messages")
-                    .json(&request);
-
-                client.execute(req).await
+                let response = client.create_message(request).await?;
+                serde_json::to_value(response).map_err(ClientError::Serialization)
             }
         }
     }

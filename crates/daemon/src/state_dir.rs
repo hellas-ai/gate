@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use std::path::PathBuf;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 /// Manages platform-specific application directories
 pub struct StateDir {
@@ -17,11 +17,9 @@ impl StateDir {
     /// Create a new StateDir instance
     pub fn new() -> Self {
         let project_dirs = ProjectDirs::from("com.hellas", "Gate", "Gate");
-
         if project_dirs.is_none() {
             warn!("Failed to determine platform-specific directories, will use fallback");
         }
-
         Self {
             project_dirs,
             override_dir: None,
@@ -98,14 +96,9 @@ impl StateDir {
         self.keys_dir().join("iroh_secret.key")
     }
 
-    /// Get the startup config path (immutable, provided by deployment system)
-    pub fn startup_config_path(&self) -> PathBuf {
-        self.config_dir().join("startup.json")
-    }
-
-    /// Get the runtime config path (mutable, for runtime changes)
-    pub fn runtime_config_path(&self) -> PathBuf {
-        self.config_dir().join("runtime-config.json")
+    /// Get the config path
+    pub fn config_path(&self) -> PathBuf {
+        self.config_dir().join("config.json")
     }
 
     /// Create all required directories
@@ -126,10 +119,10 @@ impl StateDir {
             debug!("Ensured directory exists: {}", dir.display());
         }
 
-        info!("Created state directories:");
-        info!("  Config: {}", self.config_dir().display());
-        info!("  Data: {}", self.data_dir().display());
-        info!("  Cache: {}", self.cache_dir().display());
+        debug!("Using state directories:");
+        debug!("  Config: {}", self.config_dir().display());
+        debug!("  Data: {}", self.data_dir().display());
+        debug!("  Cache: {}", self.cache_dir().display());
 
         Ok(())
     }

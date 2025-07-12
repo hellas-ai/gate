@@ -1,6 +1,6 @@
 //! Bootstrap service for initial admin setup
 
-use crate::client::create_client;
+use crate::client::create_public_client;
 use serde::{Deserialize, Serialize};
 
 /// Bootstrap status response
@@ -23,7 +23,7 @@ impl BootstrapService {
 
     /// Check if bootstrap is needed
     pub async fn check_status(&self) -> Result<BootstrapStatus, String> {
-        let client = create_client().map_err(|e| format!("Failed to get client: {e}"))?;
+        let client = create_public_client().map_err(|e| format!("Failed to get client: {e}"))?;
 
         let response = client
             .request(reqwest::Method::GET, "/auth/bootstrap/status")

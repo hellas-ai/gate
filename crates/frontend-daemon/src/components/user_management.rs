@@ -1,7 +1,9 @@
 //! User management component for admins
 
 use gate_frontend_common::{
-    auth::use_auth, client::create_client, components::Spinner as LoadingSpinner,
+    auth::use_auth,
+    client::{create_authenticated_client, set_auth_token},
+    components::Spinner as LoadingSpinner,
 };
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
@@ -39,19 +41,22 @@ pub fn user_management() -> Html {
     let show_role_dialog = use_state(|| false);
     let new_role = use_state(|| "user".to_string());
 
-    // Load users on mount
+    // Load users on mount and ensure auth client is updated
     {
         let users = users.clone();
         let loading = loading.clone();
         let error = error.clone();
         let auth = auth.clone();
 
-        use_effect_with((), move |_| {
-            if let Some(auth_state) = &auth.auth_state {
+        use_effect_with(auth.auth_state.clone(), move |auth_state| {
+            if let Some(auth_state) = auth_state {
                 let token = auth_state.token.clone();
+                // Ensure the typed auth client is updated
+                let _ = set_auth_token(Some(&token));
+
                 wasm_bindgen_futures::spawn_local(async move {
                     loading.set(true);
-                    match load_users(&token).await {
+                    match load_users().await {
                         Ok(user_list) => {
                             users.set(user_list);
                             error.set(None);
@@ -102,7 +107,7 @@ pub fn user_management() -> Html {
                         match update_user_role(&token, &user_id, &role).await {
                             Ok(_) => {
                                 // Reload users
-                                if let Ok(user_list) = load_users(&token).await {
+                                if let Ok(user_list) = load_users().await {
                                     users.set(user_list);
                                 }
                                 show_role_dialog.set(false);
@@ -144,7 +149,7 @@ pub fn user_management() -> Html {
                         match delete_user(&token, &user_id).await {
                             Ok(_) => {
                                 // Reload users
-                                if let Ok(user_list) = load_users(&token).await {
+                                if let Ok(user_list) = load_users().await {
                                     users.set(user_list);
                                 }
                             }
@@ -343,12 +348,14 @@ pub fn user_management() -> Html {
 }
 
 // Helper functions
-async fn load_users(token: &str) -> Result<Vec<UserInfo>, String> {
-    let client = create_client().map_err(|e| format!("Failed to create client: {e}"))?;
+async fn load_users() -> Result<Vec<UserInfo>, String> {
+    let client = create_authenticated_client()
+        .map_err(|e| format!("Failed to create client: {e}"))?
+        .ok_or_else(|| "Not authenticated".to_string())?;
 
+    // The authenticated client already has the token, so we don't need to add headers
     let response = client
         .request(Method::GET, "/api/admin/users")
-        .header("Authorization", format!("Bearer {token}"))
         .send()
         .await
         .map_err(|e| format!("Failed to load users: {e}"))?;
@@ -369,8 +376,10 @@ async fn load_users(token: &str) -> Result<Vec<UserInfo>, String> {
     Ok(user_list.users)
 }
 
-async fn update_user_role(token: &str, user_id: &str, role: &str) -> Result<(), String> {
-    let client = create_client().map_err(|e| format!("Failed to create client: {e}"))?;
+async fn update_user_role(_token: &str, user_id: &str, role: &str) -> Result<(), String> {
+    let client = create_authenticated_client()
+        .map_err(|e| format!("Failed to create client: {e}"))?
+        .ok_or_else(|| "Not authenticated".to_string())?;
 
     let request = UpdateUserRoleRequest {
         role: role.to_string(),
@@ -378,7 +387,6 @@ async fn update_user_role(token: &str, user_id: &str, role: &str) -> Result<(), 
 
     let response = client
         .request(Method::PUT, &format!("/api/admin/users/{user_id}/role"))
-        .header("Authorization", format!("Bearer {token}"))
         .json(&request)
         .send()
         .await
@@ -395,12 +403,13 @@ async fn update_user_role(token: &str, user_id: &str, role: &str) -> Result<(), 
     Ok(())
 }
 
-async fn delete_user(token: &str, user_id: &str) -> Result<(), String> {
-    let client = create_client().map_err(|e| format!("Failed to create client: {e}"))?;
+async fn delete_user(_token: &str, user_id: &str) -> Result<(), String> {
+    let client = create_authenticated_client()
+        .map_err(|e| format!("Failed to create client: {e}"))?
+        .ok_or_else(|| "Not authenticated".to_string())?;
 
     let response = client
         .request(Method::DELETE, &format!("/api/admin/users/{user_id}"))
-        .header("Authorization", format!("Bearer {token}"))
         .send()
         .await
         .map_err(|e| format!("Failed to delete user: {e}"))?;

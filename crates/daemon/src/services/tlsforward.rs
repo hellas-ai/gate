@@ -47,10 +47,13 @@ impl TlsForwardServiceBuilder {
 
     /// Build and start the TLS forward service
     pub async fn build(self) -> Result<Arc<TlsForwardService>> {
-        info!("TlsForward config: {:?}", self.config);
+        debug!("TlsForward config: {:?}", self.config);
 
         if !self.config.enabled {
-            info!("TLS forward service is disabled");
+            warn!(
+                "Tried creating TlsForwardServiceBuilder but TLS forward service is disabled: {:?}",
+                self.config
+            );
             return Err(anyhow::anyhow!("TLS forward service is disabled"));
         }
 
@@ -149,20 +152,16 @@ impl TlsForwardService {
 
     /// Connect to relay server
     async fn connect_to_relay(&self, reconnect_attempts: &mut u32) -> Result<()> {
-        info!("Attempting to connect to relay...");
-        info!(
-            "Configured relay addresses: {:?}",
-            self.config.tlsforward_addresses
-        );
+        debug!("Attempting to connect to relay...");
 
         // Update state
         self.state_tx.send(TlsForwardState::Connecting)?;
 
-        info!("Endpoint ready, parsing relay addresses...");
+        debug!("Endpoint ready, parsing relay addresses...");
 
         // Try each relay address
         for tlsforward_addr_str in &self.config.tlsforward_addresses {
-            info!("Trying TLS forward address: {}", tlsforward_addr_str);
+            debug!("Trying TLS forward address: {}", tlsforward_addr_str);
 
             // Parse node ID from address string
             // We now only care about the node ID part, as addresses are handled by discovery
@@ -179,7 +178,7 @@ impl TlsForwardService {
                     })?
                 };
 
-            info!("Connecting to TLS forward server with node ID: {}", node_id);
+            debug!("Connecting to TLS forward server with node ID: {}", node_id);
 
             match self.connect_to_tlsforward_addr(node_id).await {
                 Ok(assigned_domain) => {
@@ -323,11 +322,5 @@ impl Drop for TlsForwardService {
     fn drop(&mut self) {
         // Trigger shutdown when service is dropped
         self.shutdown_tx.send(true).ok();
-    }
-}
-
-impl Clone for TlsForwardService {
-    fn clone(&self) -> Self {
-        panic!("TlsForwardService should not be cloned directly, use Arc<TlsForwardService>");
     }
 }

@@ -1,11 +1,14 @@
+use anyhow::anyhow;
 use anyhow::{Context, Result};
 use clap::Parser;
+use gate_core::BootstrapTokenValidator;
 use gate_core::tracing::{
     config::{InstrumentationConfig, OtlpConfig},
     init::init_tracing,
     metrics,
     prometheus::export_prometheus,
 };
+use gate_daemon::bootstrap::BootstrapTokenManager;
 use gate_daemon::{
     Settings, StateDir, server::ServerBuilder, services::TlsForwardService,
     tls_reload::ReloadableTlsAcceptor,
@@ -16,7 +19,7 @@ use iroh::{NodeAddr, discovery::static_provider::StaticProvider, protocol::Route
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Gate daemon - High-performance AI gateway
 #[derive(Parser, Debug)]
@@ -55,89 +58,65 @@ async fn main() -> Result<()> {
     };
     init_tracing(&instrumentation_config)?;
 
-    // Load initial configuration (will be reloaded with runtime config later)
-    let temp_settings = if let Some(config_path) = &cli.config {
-        info!("Loading configuration from: {}", config_path);
-        Settings::load_from_file(config_path)?
-    } else {
-        Settings::new()?
-    };
-
-    // Initialize daemon metrics
-    metrics::gauge("daemon_info").set(1);
-    metrics::gauge("daemon_upstreams_configured").set(temp_settings.upstreams.len() as i64);
-    metrics::gauge("daemon_tlsforward_enabled").set(if temp_settings.tlsforward.enabled {
-        1
-    } else {
-        0
-    });
-    metrics::gauge("daemon_webauthn_enabled").set(if temp_settings.auth.webauthn.enabled {
-        1
-    } else {
-        0
-    });
-
-    // Create state directory manager early to get runtime config path
-    let state_dir_for_config = if let Some(custom_dir) = &temp_settings.state_dir {
-        StateDir::with_override(custom_dir)
-    } else {
-        StateDir::new()
-    };
+    // Create state directory manager
+    let state_dir = StateDir::new();
+    let config_path = state_dir.config_path();
 
     // Load configuration with startup and runtime config support
-    let startup_config_path = state_dir_for_config.startup_config_path();
-    let runtime_config_path = state_dir_for_config.runtime_config_path();
-
-    let mut settings = if let Some(config_path) = &cli.config {
+    let settings = if let Some(config_path) = &cli.config {
         // Use explicit config path
         info!("Loading configuration from: {}", config_path);
-        Settings::load_from_file(config_path)?
-    } else if startup_config_path.exists() {
+        Settings::load_from_file(config_path)
+            .inspect_err(|e| println!("Error loading config from {config_path}: {e}"))?
+    } else if config_path.exists() {
         // Use startup config from state directory
         info!(
             "Loading startup configuration from: {}",
-            startup_config_path.display()
+            config_path.display()
         );
-        Settings::load_from_file(&startup_config_path.to_string_lossy())?
+        Settings::load_from_file(&config_path.to_string_lossy()).inspect_err(|e| {
+            println!(
+                "Error loading config from {}: {e}",
+                &config_path.to_string_lossy()
+            )
+        })?
     } else {
-        // Fall back to default config search
-        Settings::new()?
+        // Fall back to default config
+        info!("Didn't find config file, using default settings");
+        Settings::default()
     };
+    let settings_arc = Arc::new(settings.clone());
 
-    // Apply runtime config if it exists
-    if runtime_config_path.exists() {
-        info!(
-            "Merging runtime configuration from: {}",
-            runtime_config_path.display()
-        );
-        settings = settings.merge_runtime_config(&runtime_config_path)?;
-    }
-
-    info!("Configuration loaded successfully");
-
-    // Create state directory manager
-    let state_dir = if let Some(custom_dir) = &settings.state_dir {
-        StateDir::with_override(custom_dir)
-    } else {
-        StateDir::new()
-    };
-
+    debug!("Starting Gate Daemon with configuration: {:#?}", settings);
     // Create directories
     state_dir.create_directories().await?;
 
-    // Store settings in Arc for sharing
-    let settings_arc = Arc::new(settings.clone());
-
     // Create state backend
-    let state_backend = Arc::new(SqliteStateBackend::new(&settings.database.url).await?);
-    info!("Connected to database");
+    let database_url = format!(
+        "sqlite://{}",
+        state_dir.data_dir().join("gate.db").display()
+    );
+    let state_backend = Arc::new(SqliteStateBackend::new(&database_url).await?);
+    debug!("Connected to database");
 
     // Create WebAuthn backend using the same pool
     let webauthn_backend = Arc::new(gate_sqlx::SqlxWebAuthnBackend::new(
         state_backend.pool().clone(),
     ));
 
-    // State directory was already created earlier for config watcher
+    // Generate + print bootstrap token if needed
+    let bootstrap_manager = Arc::new(BootstrapTokenManager::new(webauthn_backend.clone()));
+    if bootstrap_manager
+        .needs_bootstrap()
+        .await
+        .map_err(|e| anyhow!(e))?
+    {
+        let token = bootstrap_manager
+            .generate_token()
+            .await
+            .map_err(|e| anyhow!(e))?;
+        println!("Bootstrap token: {token}");
+    }
 
     // Create certificate manager with platform-specific data directory
     let certificate_manager = Arc::new(tokio::sync::Mutex::new(CertificateManager::new(
@@ -191,7 +170,7 @@ async fn main() -> Result<()> {
 
         Some(tlsforward_config)
     } else {
-        info!("TLS forward service is disabled");
+        warn!("TLS forward service is disabled: {:?}", settings.tlsforward);
         None
     };
 
@@ -208,7 +187,18 @@ async fn main() -> Result<()> {
     }
 
     // Build router
-    let router = ServerBuilder::build_router();
+    let mut router = gate_http::routes::router();
+
+    // Add all route modules
+    router = gate_http::routes::dashboard::add_routes(router);
+    router = gate_http::routes::inference::add_routes(router);
+    router = gate_http::routes::models::add_routes(router);
+    router = gate_http::routes::observability::add_routes(router);
+
+    // Add daemon-specific routes
+    router = gate_daemon::routes::config::add_routes(router);
+    router = gate_daemon::routes::auth::add_routes(router);
+    router = gate_daemon::routes::admin::add_routes(router);
 
     // Get static directory from environment
     let static_dir = std::env::var("GATE_SERVER__STATIC_DIR")
@@ -217,12 +207,17 @@ async fn main() -> Result<()> {
     // Build the complete axum router
     let app = ServerBuilder::build_axum_router(router, state.clone(), Some(static_dir));
 
+    // Apply correlation ID middleware
+    let app = app.layer(axum::middleware::from_fn(
+        gate_http::middleware::correlation_id_middleware,
+    ));
+
     // Create HTTP server for stream handling
     let http_server = Arc::new(gate_http::server::HttpServer::new(app.clone()));
 
     // Create P2P endpoint and router if TLS forward is enabled
     let (p2p_endpoint, _p2p_router) = if tlsforward_config.is_some() {
-        info!("Creating P2P endpoint for TLS forward service");
+        debug!("Creating P2P endpoint for TLS forward service");
 
         // Load or create P2P secret key
         let secret_key_path = state_dir.iroh_secret_key_path();
@@ -277,7 +272,7 @@ async fn main() -> Result<()> {
                     .accept(TLS_FORWARD_ALPN, tls_handler)
                     .spawn();
 
-                info!("Registered TLS forward handler on P2P endpoint");
+                debug!("Registered TLS forward handler on P2P endpoint");
 
                 (Some(Arc::new(endpoint)), Some(router))
             }
@@ -292,7 +287,7 @@ async fn main() -> Result<()> {
 
     // Create TLS forward service if enabled (for connecting to relay server)
     let tlsforward_service = if let Some(config) = tlsforward_config {
-        info!("Initializing TLS forward client service");
+        debug!("Initializing TLS forward client service");
 
         let endpoint = p2p_endpoint
             .as_ref()
@@ -312,7 +307,7 @@ async fn main() -> Result<()> {
                 }
                 retry_count += 1;
                 if retry_count > 30 {
-                    info!(
+                    warn!(
                         "TLS forward server not connected after 30 seconds, Let's Encrypt will not be available"
                     );
                     break None;
@@ -329,7 +324,7 @@ async fn main() -> Result<()> {
                     .lock()
                     .await
                     .set_tls_forward_client(tls_forward_client);
-                info!("Certificate manager configured with TLS forward client");
+                debug!("Certificate manager configured with TLS forward client");
             }
         }
 
@@ -374,7 +369,7 @@ async fn main() -> Result<()> {
                                 {
                                     error!("Failed to add TLS forward origin to WebAuthn: {}", e);
                                 } else {
-                                    info!(
+                                    debug!(
                                         "Successfully added {} to WebAuthn allowed origins",
                                         tlsforward_origin
                                     );
@@ -455,9 +450,6 @@ async fn main() -> Result<()> {
     } else {
         None
     };
-
-    // Configuration change handlers removed - hot-reload no longer supported
-    info!("Configuration loaded. Changes require restart.");
 
     // Start server
     let addr = format!("{}:{}", settings.server.host, settings.server.port);

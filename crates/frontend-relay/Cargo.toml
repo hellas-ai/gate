@@ -20,7 +20,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 tracing-web = { workspace = true }
 gloo-timers = { workspace = true }
-gloo-net = { workspace = true }
+gloo-net = { workspace = true, features = ["http", "json"] }
 
 [dev-dependencies]
 wasm-bindgen-test = { workspace = true }

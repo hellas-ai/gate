@@ -91,35 +91,6 @@ impl TlsForwardStateDir {
 
         Ok(())
     }
-
-    /// Check if we should migrate from old locations
-    pub async fn migrate_from_legacy(&self) -> Result<()> {
-        // Check for systemd state directory
-        let systemd_path = PathBuf::from("/var/lib/private-gate-relay-default");
-        if systemd_path.exists() && systemd_path != self.data_dir() {
-            info!(
-                "Found legacy systemd state directory at {}, checking for migration",
-                systemd_path.display()
-            );
-
-            // Migrate secret key
-            let old_key = systemd_path.join("secret.key");
-            if old_key.exists() {
-                let new_key = self.secret_key_path();
-                if !new_key.exists() {
-                    tokio::fs::create_dir_all(self.keys_dir()).await?;
-                    tokio::fs::copy(&old_key, &new_key).await?;
-                    info!(
-                        "Migrated relay secret key from {} to {}",
-                        old_key.display(),
-                        new_key.display()
-                    );
-                }
-            }
-        }
-
-        Ok(())
-    }
 }
 
 impl Default for TlsForwardStateDir {

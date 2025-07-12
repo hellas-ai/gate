@@ -231,16 +231,6 @@ pub fn live_chat() -> Html {
                             {err}
                         </div>
                     }
-
-                    <div class="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
-                        <h3 class="text-base font-semibold text-gray-700 dark:text-gray-300 mb-3">{"About"}</h3>
-                        <p class="text-sm text-gray-600 dark:text-gray-400 mb-2">
-                            {"This is a live chat interface that connects to real LLM providers through the Gate API gateway."}
-                        </p>
-                        <p class="text-sm text-gray-600 dark:text-gray-400">
-                            {"Make sure you have configured upstream providers in your Gate instance."}
-                        </p>
-                    </div>
                 </div>
             }
 

@@ -114,27 +114,17 @@ pub async fn update_config(
             "Admin access required".to_string(),
         ));
     }
+
     // Deserialize the new configuration
     let new_config: Settings = serde_json::from_value(request.config.clone())
         .map_err(|e| HttpError::BadRequest(format!("Invalid configuration: {e}")))?;
 
-    // Validate the configuration using the validation trait from core
-    use gate_core::ValidateConfig;
-    new_config
-        .validate()
-        .map_err(|e| HttpError::BadRequest(format!("Configuration validation failed: {e}")))?;
-
     // Write to runtime config file
-    let state_dir = if let Some(custom_dir) = &new_config.state_dir {
-        StateDir::with_override(custom_dir)
-    } else {
-        StateDir::new()
-    };
-
-    let runtime_config_path = state_dir.runtime_config_path();
+    let state_dir = StateDir::new();
+    let config_path = state_dir.config_path();
 
     // Ensure parent directory exists
-    if let Some(parent) = runtime_config_path.parent() {
+    if let Some(parent) = config_path.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|e| {
             HttpError::InternalServerError(format!("Failed to create config directory: {e}"))
         })?;
@@ -144,13 +134,13 @@ pub async fn update_config(
     let config_string = serde_json::to_string_pretty(&new_config)
         .map_err(|e| HttpError::InternalServerError(format!("Failed to serialize config: {e}")))?;
 
-    tokio::fs::write(&runtime_config_path, config_string)
+    tokio::fs::write(&config_path, config_string)
         .await
         .map_err(|e| HttpError::InternalServerError(format!("Failed to write config file: {e}")))?;
 
     info!(
         "Wrote updated config to {}. Restart required to apply changes.",
-        runtime_config_path.display()
+        config_path.display()
     );
 
     // Return the updated configuration (with sensitive fields redacted)

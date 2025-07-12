@@ -5,7 +5,7 @@ dist = "dist"
 [[hooks]]
 stage = "post_build"  
 command = "sh"
-command_arguments = ["-c", "pwd && cp -rv ../../../fixtures/data dist/cassettes"]
+command_arguments = ["-c", "pwd && cp -rv ../../../fixtures/data/cassettes"]
 
 [serve]
 port = 8081

@@ -43,131 +43,137 @@ pub fn extract_correlation_id(headers: &HeaderMap) -> CorrelationId {
 }
 
 /// Middleware to handle correlation IDs
-pub async fn correlation_id_middleware(mut request: Request, next: Next) -> impl IntoResponse {
-    // Extract or generate correlation ID
-    let correlation_id = extract_correlation_id(request.headers());
+/// Middleware to handle correlation IDs
+#[allow(clippy::manual_async_fn)]
+pub fn correlation_id_middleware(
+    mut request: Request,
+    next: Next,
+) -> impl std::future::Future<Output = impl IntoResponse> + Send {
+    async move {
+        // Extract or generate correlation ID
+        let correlation_id = extract_correlation_id(request.headers());
 
-    // Add correlation ID to request extensions early so it's available to other middleware
-    request.extensions_mut().insert(correlation_id.clone());
+        // Add correlation ID to request extensions early so it's available to other middleware
+        request.extensions_mut().insert(correlation_id.clone());
 
-    // Set up the OpenTelemetry context and create span within it
-    #[cfg(all(feature = "otlp", not(target_arch = "wasm32")))]
-    {
-        use opentelemetry::{Context as OtelContext, trace::TraceContextExt};
+        // Set up the OpenTelemetry context and create span within it
+        #[cfg(all(feature = "otlp", not(target_arch = "wasm32")))]
+        {
+            use opentelemetry::{Context as OtelContext, trace::TraceContextExt};
 
-        // Create OpenTelemetry context with the remote span context
-        let span_context = correlation_id.to_span_context();
-        let otel_context = OtelContext::current().with_remote_span_context(span_context);
+            // Create OpenTelemetry context with the remote span context
+            let span_context = correlation_id.to_span_context();
+            let _otel_context = OtelContext::current().with_remote_span_context(span_context);
 
-        // Attach the context and keep the guard for the duration of the request
-        let _guard = otel_context.attach();
+            // Create a span for this request with trace context information
+            let span = tracing::info_span!(
+                "http_request",
+                correlation_id = %correlation_id,
+                method = %request.method(),
+                path = %request.uri().path(),
+                otel.name = "http_request",
+                otel.kind = "SERVER",
+                // Include trace and span IDs for OpenTelemetry
+                trace_id = %correlation_id.trace_id(),
+                span_id = %correlation_id.span_id(),
+                // Include the traceparent header for propagation
+                traceparent = %correlation_id.to_traceparent()
+            );
 
-        // Create a span for this request with trace context information
-        let span = tracing::info_span!(
-            "http_request",
-            correlation_id = %correlation_id,
-            method = %request.method(),
-            path = %request.uri().path(),
-            otel.name = "http_request",
-            otel.kind = "SERVER",
-            // Include trace and span IDs for OpenTelemetry
-            trace_id = %correlation_id.trace_id(),
-            span_id = %correlation_id.span_id(),
-            // Include the traceparent header for propagation
-            traceparent = %correlation_id.to_traceparent()
-        );
+            // Process request with the span attached
+            // Note: When compiling with all features, we skip the context guard to avoid Send issues
+            // The span itself still provides the trace context for OpenTelemetry
+            let mut response = next.run(request).instrument(span).await;
 
-        // Process request with the span attached
-        let mut response = next.run(request).instrument(span).await;
+            // Add both W3C and legacy headers to response
+            let headers = response.headers_mut();
 
-        // Add both W3C and legacy headers to response
-        let headers = response.headers_mut();
+            // Always inject W3C headers
+            if let Err(e) = inject_trace_context(correlation_id.trace_context(), headers) {
+                tracing::warn!("Failed to inject trace context headers: {}", e);
+            }
 
-        // Always inject W3C headers
-        if let Err(e) = inject_trace_context(correlation_id.trace_context(), headers) {
-            tracing::warn!("Failed to inject trace context headers: {}", e);
+            // Also add legacy header for backward compatibility
+            if let Ok(header_value) = HeaderValue::from_str(&correlation_id.to_string()) {
+                headers.insert(HeaderName::from_static(CORRELATION_ID_HEADER), header_value);
+            }
+
+            response
         }
 
-        // Also add legacy header for backward compatibility
-        if let Ok(header_value) = HeaderValue::from_str(&correlation_id.to_string()) {
-            headers.insert(HeaderName::from_static(CORRELATION_ID_HEADER), header_value);
+        // Non-OTLP native path
+        #[cfg(all(not(feature = "otlp"), not(target_arch = "wasm32")))]
+        {
+            // Create a span for this request with trace context information
+            let span = tracing::info_span!(
+                "http_request",
+                correlation_id = %correlation_id,
+                method = %request.method(),
+                path = %request.uri().path(),
+                otel.name = "http_request",
+                otel.kind = "SERVER",
+                // Include trace and span IDs for OpenTelemetry
+                trace_id = %correlation_id.trace_id(),
+                span_id = %correlation_id.span_id(),
+                // Include the traceparent header for propagation
+                traceparent = %correlation_id.to_traceparent()
+            );
+
+            // Process request with the span attached
+            let mut response = next.run(request).instrument(span).await;
+
+            // Add both W3C and legacy headers to response
+            let headers = response.headers_mut();
+
+            // Always inject W3C headers
+            if let Err(e) = inject_trace_context(correlation_id.trace_context(), headers) {
+                tracing::warn!("Failed to inject trace context headers: {}", e);
+            }
+
+            // Also add legacy header for backward compatibility
+            if let Ok(header_value) = HeaderValue::from_str(&correlation_id.to_string()) {
+                headers.insert(HeaderName::from_static(CORRELATION_ID_HEADER), header_value);
+            }
+
+            response
         }
 
-        response
-    }
+        // WASM path
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Create a span for this request with trace context information
+            let span = tracing::info_span!(
+                "http_request",
+                correlation_id = %correlation_id,
+                method = %request.method(),
+                path = %request.uri().path(),
+                otel.name = "http_request",
+                otel.kind = "SERVER",
+                // Include trace and span IDs for OpenTelemetry
+                trace_id = %correlation_id.trace_id(),
+                span_id = %correlation_id.span_id(),
+                // Include the traceparent header for propagation
+                traceparent = %correlation_id.to_traceparent()
+            );
 
-    // Non-OTLP native path
-    #[cfg(all(not(feature = "otlp"), not(target_arch = "wasm32")))]
-    {
-        // Create a span for this request with trace context information
-        let span = tracing::info_span!(
-            "http_request",
-            correlation_id = %correlation_id,
-            method = %request.method(),
-            path = %request.uri().path(),
-            otel.name = "http_request",
-            otel.kind = "SERVER",
-            // Include trace and span IDs for OpenTelemetry
-            trace_id = %correlation_id.trace_id(),
-            span_id = %correlation_id.span_id(),
-            // Include the traceparent header for propagation
-            traceparent = %correlation_id.to_traceparent()
-        );
+            // Process request with the span attached
+            let mut response = next.run(request).instrument(span).await;
 
-        // Process request with the span attached
-        let mut response = next.run(request).instrument(span).await;
+            // Add both W3C and legacy headers to response
+            let headers = response.headers_mut();
 
-        // Add both W3C and legacy headers to response
-        let headers = response.headers_mut();
+            // Always inject W3C headers
+            if let Err(e) = inject_trace_context(correlation_id.trace_context(), headers) {
+                tracing::warn!("Failed to inject trace context headers: {}", e);
+            }
 
-        // Always inject W3C headers
-        if let Err(e) = inject_trace_context(correlation_id.trace_context(), headers) {
-            tracing::warn!("Failed to inject trace context headers: {}", e);
+            // Also add legacy header for backward compatibility
+            if let Ok(header_value) = HeaderValue::from_str(&correlation_id.to_string()) {
+                headers.insert(HeaderName::from_static(CORRELATION_ID_HEADER), header_value);
+            }
+
+            response
         }
-
-        // Also add legacy header for backward compatibility
-        if let Ok(header_value) = HeaderValue::from_str(&correlation_id.to_string()) {
-            headers.insert(HeaderName::from_static(CORRELATION_ID_HEADER), header_value);
-        }
-
-        response
-    }
-
-    // WASM path
-    #[cfg(target_arch = "wasm32")]
-    {
-        // Create a span for this request with trace context information
-        let span = tracing::info_span!(
-            "http_request",
-            correlation_id = %correlation_id,
-            method = %request.method(),
-            path = %request.uri().path(),
-            otel.name = "http_request",
-            otel.kind = "SERVER",
-            // Include trace and span IDs for OpenTelemetry
-            trace_id = %correlation_id.trace_id(),
-            span_id = %correlation_id.span_id(),
-            // Include the traceparent header for propagation
-            traceparent = %correlation_id.to_traceparent()
-        );
-
-        // Process request with the span attached
-        let mut response = next.run(request).instrument(span).await;
-
-        // Add both W3C and legacy headers to response
-        let headers = response.headers_mut();
-
-        // Always inject W3C headers
-        if let Err(e) = inject_trace_context(correlation_id.trace_context(), headers) {
-            tracing::warn!("Failed to inject trace context headers: {}", e);
-        }
-
-        // Also add legacy header for backward compatibility
-        if let Ok(header_value) = HeaderValue::from_str(&correlation_id.to_string()) {
-            headers.insert(HeaderName::from_static(CORRELATION_ID_HEADER), header_value);
-        }
-
-        response
     }
 }
 

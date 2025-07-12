@@ -40,6 +40,7 @@ where
     tracing::Span::current().record("upstream_count", all_upstreams.len());
     let mut models = Vec::new();
 
+    // Add upstream models
     for (upstream_name, upstream_info) in &all_upstreams {
         for model_id in &upstream_info.models {
             models.push(json!({
@@ -47,6 +48,21 @@ where
                 "object": "model",
                 "owned_by": upstream_name,
                 "created": chrono::Utc::now().timestamp(),
+            }));
+        }
+    }
+
+    // Add local inference models if available
+    if let Some(inference_backend) = &app_state.inference_backend
+        && let Ok(local_models) = inference_backend.list_models().await
+    {
+        for model in local_models {
+            models.push(json!({
+                "id": model.id,
+                "object": "model",
+                "owned_by": "local",
+                "created": chrono::Utc::now().timestamp(),
+                "context_length": model.context_length,
             }));
         }
     }

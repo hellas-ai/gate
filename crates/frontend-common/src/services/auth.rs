@@ -1,6 +1,6 @@
 //! Authentication API service
 
-use crate::client::create_client;
+use crate::client::create_public_client;
 use gate_http::types::{
     AuthCompleteRequest, AuthCompleteResponse, AuthStartResponse, RegisterCompleteRequest,
     RegisterCompleteResponse, RegisterStartResponse,
@@ -25,9 +25,13 @@ impl Default for AuthApiService {
 impl AuthApiService {
     /// Start registration process
     pub async fn start_registration(&self, name: String) -> Result<RegisterStartResponse, String> {
-        let client = create_client().map_err(|e| format!("Failed to get client: {e}"))?;
+        let client = create_public_client().map_err(|e| format!("Failed to get client: {e}"))?;
 
-        client.register_start(name).await.map_err(|e| e.to_string())
+        let request = gate_http::types::RegisterStartRequest { name };
+        client
+            .register_start(request)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Complete registration with the credential
@@ -38,7 +42,7 @@ impl AuthApiService {
         device_name: Option<String>,
         bootstrap_token: Option<String>,
     ) -> Result<RegisterCompleteResponse, String> {
-        let client = create_client().map_err(|e| format!("Failed to get client: {e}"))?;
+        let client = create_public_client().map_err(|e| format!("Failed to get client: {e}"))?;
 
         let request = RegisterCompleteRequest {
             session_id,
@@ -55,7 +59,7 @@ impl AuthApiService {
 
     /// Start authentication process
     pub async fn start_authentication(&self) -> Result<AuthStartResponse, String> {
-        let client = create_client().map_err(|e| format!("Failed to get client: {e}"))?;
+        let client = create_public_client().map_err(|e| format!("Failed to get client: {e}"))?;
 
         client.auth_start().await.map_err(|e| e.to_string())
     }
@@ -66,7 +70,7 @@ impl AuthApiService {
         session_id: String,
         credential: serde_json::Value,
     ) -> Result<AuthCompleteResponse, String> {
-        let client = create_client().map_err(|e| format!("Failed to get client: {e}"))?;
+        let client = create_public_client().map_err(|e| format!("Failed to get client: {e}"))?;
 
         let request = AuthCompleteRequest {
             session_id,

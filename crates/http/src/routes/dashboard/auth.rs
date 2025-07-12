@@ -8,13 +8,9 @@ use crate::{
 };
 use axum::{extract::State, response::Json};
 use chrono::Utc;
-use gate_core::types::User;
+use gate_core::User;
 use tracing::{info, instrument};
 use utoipa_axum::{router::OpenApiRouter, routes};
-
-// Types are imported from crate::types
-
-// Types are imported from crate::types
 
 /// Start WebAuthn registration
 #[utoipa::path(
@@ -91,14 +87,22 @@ where
 
     let device_name = request.device_name.clone();
     let (passkey, credential_id, user_name) = webauthn_service
-        .complete_registration(request.session_id, request.credential, device_name.clone())
+        .complete_registration(request.session_id, request.credential)
         .await?;
+
+    let role = if request.bootstrap_token.is_some() {
+        // If bootstrap token is provided, create admin user
+        "admin".to_string()
+    } else {
+        // Otherwise, create regular user
+        "user".to_string()
+    };
 
     // Create user with default role
     let user = User {
         id: credential_id.clone(),
         name: Some(user_name.clone()),
-        role: "user".to_string(), // Default role for basic registration
+        role,
         created_at: Utc::now(),
         updated_at: Utc::now(),
         metadata: std::collections::HashMap::new(),

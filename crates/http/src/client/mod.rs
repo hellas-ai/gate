@@ -1,13 +1,18 @@
 //! Gate HTTP client
 
 pub mod auth;
+pub mod auth_typed;
 pub mod config;
 pub mod error;
 pub mod inference;
+pub mod inference_typed;
+pub mod typed;
 
 use error::ClientError;
 use reqwest::{Client, ClientBuilder, header};
 use std::time::Duration;
+
+pub use typed::{AuthenticatedGateClient, PublicGateClient, TypedClientBuilder};
 
 /// Gate API client
 #[derive(Clone)]

@@ -1,12 +1,15 @@
 //! Client configuration and initialization
 
-use gate_http::client::{error::ClientError, GateClient, GateClientBuilder};
+use gate_http::client::{
+    error::ClientError, AuthenticatedGateClient, PublicGateClient, TypedClientBuilder,
+};
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 use web_sys::window;
 
-/// Global client instance
-static CLIENT: Lazy<Mutex<Option<GateClient>>> = Lazy::new(|| Mutex::new(None));
+/// Global client instances
+static PUBLIC_CLIENT: Lazy<Mutex<Option<PublicGateClient>>> = Lazy::new(|| Mutex::new(None));
+static AUTH_CLIENT: Lazy<Mutex<Option<AuthenticatedGateClient>>> = Lazy::new(|| Mutex::new(None));
 
 /// Get the base URL for API calls
 fn get_base_url() -> String {
@@ -21,34 +24,50 @@ fn get_base_url() -> String {
     String::new()
 }
 
-/// Get the client instance
-pub fn create_client() -> Result<GateClient, ClientError> {
-    let mut client_lock = CLIENT.lock().expect("Failed to acquire client lock");
+/// Get the public client instance (for unauthenticated endpoints)
+pub fn create_public_client() -> Result<PublicGateClient, ClientError> {
+    let mut client_lock = PUBLIC_CLIENT
+        .lock()
+        .expect("Failed to acquire public client lock");
 
     if client_lock.is_none() {
-        // Initialize on first use
-        let client = GateClientBuilder::default()
+        let client = TypedClientBuilder::new()
             .base_url(get_base_url())
-            .build()?;
+            .build_public()?;
         *client_lock = Some(client.clone());
         Ok(client)
     } else {
         Ok(client_lock
             .as_ref()
-            .expect("Client should be initialized")
+            .expect("Public client should be initialized")
             .clone())
     }
 }
 
-/// Update the client with an authentication token
+/// Get the authenticated client instance (returns None if not authenticated)
+pub fn create_authenticated_client() -> Result<Option<AuthenticatedGateClient>, ClientError> {
+    let client_lock = AUTH_CLIENT
+        .lock()
+        .expect("Failed to acquire auth client lock");
+    Ok(client_lock.clone())
+}
+
+/// Update the typed clients with an authentication token
 pub fn set_auth_token(token: Option<&str>) -> Result<(), ClientError> {
-    let mut builder = GateClientBuilder::default().base_url(get_base_url());
+    let mut auth_lock = AUTH_CLIENT
+        .lock()
+        .expect("Failed to acquire auth client lock");
 
     if let Some(token) = token {
-        builder = builder.api_key(token);
+        // Create authenticated client
+        let auth_client = TypedClientBuilder::new()
+            .base_url(get_base_url())
+            .build_authenticated(token)?;
+        *auth_lock = Some(auth_client);
+    } else {
+        // Clear authenticated client
+        *auth_lock = None;
     }
 
-    let client = builder.build()?;
-    *CLIENT.lock().expect("Failed to acquire client lock") = Some(client);
     Ok(())
 }

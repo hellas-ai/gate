@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Load initial configuration
-    let initial_config = if let Some(config_path) = &cli.config {
+    let config = if let Some(config_path) = &cli.config {
         info!("Loading configuration from: {}", config_path);
         TlsForwardConfig::load_from_file(config_path)?
     } else {
@@ -48,8 +48,7 @@ async fn main() -> Result<()> {
     let instrumentation_config = InstrumentationConfig {
         service_name: "gate-tlsforward".to_string(),
         service_version: env!("CARGO_PKG_VERSION").to_string(),
-        log_level: std::env::var("RUST_LOG")
-            .unwrap_or_else(|_| initial_config.server.log_level.clone()),
+        log_level: std::env::var("RUST_LOG").unwrap_or_else(|_| config.server.log_level.clone()),
         otlp: std::env::var("OTLP_ENDPOINT")
             .ok()
             .map(|endpoint| OtlpConfig {
@@ -59,18 +58,14 @@ async fn main() -> Result<()> {
     };
     init_tracing(&instrumentation_config)?;
 
-    info!("Starting Gate TLS Forward Server");
-    info!("Configuration: {:#?}", initial_config);
-
-    // Configuration watching removed - hot-reload no longer supported
-    info!("Configuration loaded. Changes require restart.");
-
-    let config = initial_config;
+    info!(
+        "Starting Gate TLS Forward Server with configuration: {:#?}",
+        config
+    );
 
     // Create state directory manager
     let state_dir = TlsForwardStateDir::new();
     state_dir.create_directories().await?;
-    state_dir.migrate_from_legacy().await?;
 
     // Load or generate secret key
     let secret_key_path = config

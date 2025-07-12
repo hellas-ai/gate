@@ -5,13 +5,12 @@ use crate::config::Settings;
 use crate::{NativeRequestContext, ServerState};
 use anyhow::Result;
 use axum;
-use gate_core::{PluginManager, StateBackend, WebAuthnBackend};
+use gate_core::{StateBackend, WebAuthnBackend};
 use gate_http::{
     AppState, UpstreamRegistry,
     forwarding::ForwardingConfig,
     middleware::WebAuthnConfig,
     model_detection,
-    routes::{dashboard, inference, models, observability},
     services::{AuthService, JwtConfig, JwtService, WebAuthnService},
 };
 use std::sync::Arc;
@@ -117,21 +116,48 @@ impl ServerBuilder {
         Ok(upstream_registry)
     }
 
+    /// Build the inference service if configured
+    async fn build_inference_service(&self) -> Option<Arc<dyn gate_core::InferenceBackend>> {
+        if let Some(inference_config) = &self.settings.local_inference {
+            info!("Initializing local inference service");
+
+            // Use the config as-is
+            let config = inference_config.clone();
+
+            match crate::services::LocalInferenceServiceBuilder::new(config).build() {
+                Ok(inference_service) => {
+                    let inference_backend: Arc<dyn gate_core::InferenceBackend> =
+                        Arc::new(inference_service);
+
+                    // List available models
+                    if let Ok(models) = inference_backend.list_models().await {
+                        info!("Loaded {} local models:", models.len());
+                        for model in models {
+                            info!("  - {} ({})", model.id, model.name);
+                        }
+                    }
+
+                    Some(inference_backend)
+                }
+                Err(e) => {
+                    warn!("Failed to initialize local inference service: {}", e);
+                    info!("Continuing without local inference support");
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    }
+
     /// Build the app state
     pub async fn build_app_state(
         &self,
         jwt_service: Arc<JwtService>,
         upstream_registry: Arc<UpstreamRegistry>,
     ) -> Result<AppState<ServerState>> {
-        let plugin_manager = Arc::new(PluginManager::new());
-
-        // TODO: Load plugins from configured directories
-        if self.settings.plugins.enabled {
-            info!("Plugin system enabled");
-            for dir in &self.settings.plugins.directories {
-                info!("Would load plugins from: {}", dir);
-            }
-        }
+        // Build inference service if configured
+        let inference_backend = self.build_inference_service().await;
 
         // Create a dummy request context for now (will be created per-request later)
         let request_context = Arc::new(NativeRequestContext::new(
@@ -163,15 +189,12 @@ impl ServerBuilder {
 
                 // Also update RP origin to use a relay domain as primary
                 // This ensures the WebAuthn builder has a valid primary origin
-                webauthn_config.rp_origin = "https://gate.private.hellas.ai".to_string();
+                webauthn_config.rp_origin = "https://private.hellas.ai".to_string();
 
                 // Add common Hellas relay patterns
                 webauthn_config
                     .allowed_origins
                     .push("https://*.private.hellas.ai".to_string());
-                webauthn_config
-                    .allowed_origins
-                    .push("https://*.public.hellas.ai".to_string());
                 webauthn_config.allow_subdomains = true; // Enable subdomain matching for relay domains
 
                 // Also keep the original origin if it was configured
@@ -188,7 +211,7 @@ impl ServerBuilder {
             let webauthn_backend = self.webauthn_backend.clone();
 
             // Log the WebAuthn configuration being used
-            info!(
+            debug!(
                 "Creating WebAuthn service with RP ID: '{}', RP Origin: '{}', Allow Relay: {}",
                 webauthn_config.rp_id,
                 webauthn_config.rp_origin,
@@ -213,16 +236,23 @@ impl ServerBuilder {
 
             // Create server state with WebAuthn
             let server_state = ServerState {
-                plugin_manager,
                 auth_service,
                 webauthn_service,
                 jwt_service,
                 settings: self.settings_arc.clone(),
                 bootstrap_manager,
+                inference_service: inference_backend.clone(),
             };
 
-            AppState::new(request_context, self.state_backend.clone(), server_state)
-                .with_upstream_registry(upstream_registry)
+            let mut app_state =
+                AppState::new(request_context, self.state_backend.clone(), server_state)
+                    .with_upstream_registry(upstream_registry);
+
+            if let Some(backend) = inference_backend {
+                app_state = app_state.with_inference_backend(backend);
+            }
+
+            app_state
         } else {
             info!("WebAuthn is disabled, using JWT authentication only");
 
@@ -248,16 +278,23 @@ impl ServerBuilder {
 
             // Create server state with services
             let server_state = ServerState {
-                plugin_manager,
                 auth_service,
                 webauthn_service,
                 jwt_service,
                 settings: self.settings_arc.clone(),
                 bootstrap_manager,
+                inference_service: inference_backend.clone(),
             };
 
-            AppState::new(request_context, self.state_backend.clone(), server_state)
-                .with_upstream_registry(upstream_registry)
+            let mut app_state =
+                AppState::new(request_context, self.state_backend.clone(), server_state)
+                    .with_upstream_registry(upstream_registry);
+
+            if let Some(backend) = inference_backend {
+                app_state = app_state.with_inference_backend(backend);
+            }
+
+            app_state
         };
 
         Ok(state)
@@ -266,25 +303,6 @@ impl ServerBuilder {
     /// Get the WebAuthn service for relay monitoring
     pub fn get_webauthn_service(state: &AppState<ServerState>) -> Arc<WebAuthnService> {
         state.data.webauthn_service.clone()
-    }
-
-    /// Build the router (specifically for ServerState)
-    pub fn build_router() -> OpenApiRouter<AppState<ServerState>> {
-        let mut router = gate_http::routes::router();
-
-        // Add all route modules
-        router = dashboard::add_routes(router);
-        router = inference::add_routes(router);
-        router = models::add_routes(router);
-        router = observability::add_routes(router);
-
-        // Add daemon-specific routes
-        router = crate::routes::config::add_routes(router);
-        // Add custom auth routes (includes bootstrap endpoints)
-        router = crate::routes::auth::add_routes(router);
-        router = crate::routes::admin::add_routes(router);
-
-        router
     }
 
     /// Build the complete axum router with documentation
@@ -370,10 +388,10 @@ impl ServerBuilder {
             }
         }
 
-        // Convert to regular Axum router and add middleware
+        // Convert to regular Axum router with middleware
+        // Note: Correlation middleware is applied after building this router to avoid type issues
         router
             .with_state(state.clone())
-            // Apply auth middleware to all routes that need it
             .route_layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 gate_http::middleware::auth::auth_middleware::<T>,
@@ -412,10 +430,6 @@ mod tests {
                 cors_origins: vec![],
                 metrics_port: None,
             },
-            database: daemon_config::DatabaseConfig {
-                url: ":memory:".to_string(),
-                max_connections: 5,
-            },
             auth: daemon_config::AuthConfig {
                 jwt: daemon_config::JwtConfig {
                     secret: Some("test-secret".to_string()),
@@ -442,19 +456,27 @@ mod tests {
             },
             upstreams: vec![],
             tlsforward: daemon_config::TlsForwardConfig::default(),
-            plugins: daemon_config::PluginConfig {
-                enabled: false,
-                directories: vec![],
-            },
             letsencrypt: daemon_config::LetsEncryptConfig::default(),
-            state_dir: None,
+            local_inference: None,
         }
     }
 
     #[tokio::test]
     async fn test_router_builds_without_panic() {
         // This test ensures the router can be built without overlapping routes
-        let _router = ServerBuilder::build_router();
+        let mut router = gate_http::routes::router();
+
+        // Add all route modules
+        router = gate_http::routes::dashboard::add_routes(router);
+        router = gate_http::routes::inference::add_routes(router);
+        router = gate_http::routes::models::add_routes(router);
+        router = gate_http::routes::observability::add_routes(router);
+
+        // Add daemon-specific routes
+        router = crate::routes::config::add_routes(router);
+        router = crate::routes::auth::add_routes(router);
+        let _router = crate::routes::admin::add_routes(router);
+
         // If we get here without panic, the test passes
     }
 

@@ -15,5 +15,5 @@ yew = { workspace = true, features = ["csr"] }
 console_error_panic_hook = { workspace = true }
 serde_json = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
-gloo-net = { workspace = true }
+gloo-net = { workspace = true, features = ["http"] }
 

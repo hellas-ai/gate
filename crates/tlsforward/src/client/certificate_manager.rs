@@ -364,7 +364,7 @@ impl CertificateManager {
             .with_single_cert(vec![cert_der], key_der)
             .context("Failed to create TLS config")?;
 
-        info!("Generated self-signed certificate for domain: {}", domain);
+        debug!("Generated self-signed certificate for domain: {}", domain);
         Ok(tokio_rustls::TlsAcceptor::from(Arc::new(config)))
     }
 }

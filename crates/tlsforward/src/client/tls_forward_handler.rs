@@ -94,7 +94,7 @@ impl<P: TlsAcceptorProvider> TlsForwardHandler<P> {
         gauge("relay_connections_active").increment();
         counter("relay_connections_total").increment();
 
-        info!(
+        debug!(
             "Handling TLS forward connection from relay (node: {})",
             node_id
         );
@@ -179,7 +179,6 @@ impl<P: TlsAcceptorProvider> ProtocolHandler for TlsForwardHandler<P> {
         span.record("remote_node_id", node_id.to_string());
 
         info!("TLS forward handler: Accepted connection from {}", node_id);
-        debug!("About to accept bidirectional stream...");
 
         // Track spawned tasks
         let mut tasks = JoinSet::new();
@@ -219,7 +218,7 @@ impl<P: TlsAcceptorProvider> ProtocolHandler for TlsForwardHandler<P> {
         // Wait for all spawned tasks to complete
         let pending_tasks = tasks.len();
         if pending_tasks > 0 {
-            info!(
+            debug!(
                 "Waiting for {} active stream handlers to complete",
                 pending_tasks
             );

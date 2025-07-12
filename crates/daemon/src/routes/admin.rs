@@ -111,7 +111,10 @@ where
         .any(|admin_role| user.roles.contains(admin_role));
 
     if !is_admin {
-        warn!("Non-admin user {} attempted to list users", user.id);
+        warn!(
+            "Non-admin user {} attempted to list users. User roles: {:?}, Configured admin roles: {:?}",
+            user.id, user.roles, settings.auth.registration.admin_roles
+        );
         return Err(HttpError::AuthorizationFailed(
             "Admin access required".to_string(),
         ));

@@ -10,6 +10,8 @@ pub mod types;
 #[path = "config/mod.rs"]
 pub mod config;
 #[cfg(feature = "server")]
+pub mod dispatcher;
+#[cfg(feature = "server")]
 pub mod forwarding;
 #[cfg(feature = "server")]
 pub mod middleware;
