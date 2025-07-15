@@ -4038,8 +4038,8 @@ dependencies = [
 
 [[package]]
 name = "instant-acme"
-version = "0.8.0"
-source = "git+https://github.com/djc/instant-acme.git#b3da4d07685932249b8a13c55323ce247cd8d765"
+version = "0.8.2"
+source = "git+https://github.com/djc/instant-acme.git#1cc1b82e9cffe15ff6c49ec3d6490a4e450cd98f"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4555,7 +4555,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.53.2",
 ]
 
 [[package]]
@@ -10066,7 +10066,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
