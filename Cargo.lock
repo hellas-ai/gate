@@ -884,7 +884,7 @@ dependencies = [
 [[package]]
 name = "catgrad"
 version = "0.1.1"
-source = "git+https://github.com/hellas-ai/catgrad#6a066b9f80c6f0bca982067585bc8a4d7aaba297"
+source = "git+https://github.com/hellas-ai/catgrad#de2783b6f70f5353bfb21ee28be2cbbbf0021d22"
 dependencies = [
  "gemm",
  "half 2.6.0",
@@ -902,7 +902,7 @@ dependencies = [
 [[package]]
 name = "catgrad-llm"
 version = "0.1.1"
-source = "git+https://github.com/hellas-ai/catgrad#6a066b9f80c6f0bca982067585bc8a4d7aaba297"
+source = "git+https://github.com/hellas-ai/catgrad#de2783b6f70f5353bfb21ee28be2cbbbf0021d22"
 dependencies = [
  "catgrad",
  "half 2.6.0",
@@ -7718,7 +7718,7 @@ version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1961e2ef424c1424204d3a5d6975f934f56b6d50ff5732382d84ebf460e147f7"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "proc-macro2",
  "quote",
  "syn 2.0.104",
@@ -10074,7 +10074,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
