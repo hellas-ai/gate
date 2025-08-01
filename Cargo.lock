@@ -10881,7 +10881,7 @@ dependencies = [
 [[package]]
 name = "yew"
 version = "0.21.0"
-source = "git+https://github.com/yewstack/yew#6a5d149047c53652d8f41f55c35c9b9d9d112a13"
+source = "git+https://github.com/yewstack/yew#56abb153336680763955c2c023bf0e664471e342"
 dependencies = [
  "console_error_panic_hook",
  "futures",
@@ -10905,7 +10905,7 @@ dependencies = [
 [[package]]
 name = "yew-macro"
 version = "0.21.0"
-source = "git+https://github.com/yewstack/yew#6a5d149047c53652d8f41f55c35c9b9d9d112a13"
+source = "git+https://github.com/yewstack/yew#56abb153336680763955c2c023bf0e664471e342"
 dependencies = [
  "once_cell",
  "prettyplease",
@@ -10919,7 +10919,7 @@ dependencies = [
 [[package]]
 name = "yew-router"
 version = "0.18.0"
-source = "git+https://github.com/yewstack/yew#6a5d149047c53652d8f41f55c35c9b9d9d112a13"
+source = "git+https://github.com/yewstack/yew#56abb153336680763955c2c023bf0e664471e342"
 dependencies = [
  "gloo",
  "js-sys",
@@ -10937,7 +10937,7 @@ dependencies = [
 [[package]]
 name = "yew-router-macro"
 version = "0.18.0"
-source = "git+https://github.com/yewstack/yew#6a5d149047c53652d8f41f55c35c9b9d9d112a13"
+source = "git+https://github.com/yewstack/yew#56abb153336680763955c2c023bf0e664471e342"
 dependencies = [
  "proc-macro2",
  "quote",
