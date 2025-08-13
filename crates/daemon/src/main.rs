@@ -63,10 +63,33 @@ async fn main() -> Result<()> {
     let runtime = builder.build().await?;
 
     // Print startup information
-    if let Some(url) = runtime.bootstrap_url() {
-        println!("Server running at: {}", url);
+    if let Some(token) = runtime.bootstrap_token() {
+        println!("\n===========================================");
+        println!("First-time setup required!");
+        println!("Please visit the following URL to create your admin account:");
+        println!(
+            "\n  http://localhost:{}/bootstrap/{}",
+            runtime
+                .server_address()
+                .split(':')
+                .nth(1)
+                .unwrap_or("31145"),
+            token
+        );
+        println!("\n===========================================\n");
+        info!("Bootstrap URL printed for token: {}", token);
     } else {
-        println!("Server running at: http://{}/", runtime.server_address());
+        println!("\n===========================================");
+        println!("Gate daemon is running");
+        println!("\n  URL: http://{}/", runtime.server_address());
+        let user_count = runtime.user_count();
+        if user_count == 1 {
+            println!("  Users: {} registered user", user_count);
+        } else {
+            println!("  Users: {} registered users", user_count);
+        }
+        println!("\n  Login with your passkey to access the admin panel");
+        println!("===========================================\n");
     }
 
     // Start monitoring tasks

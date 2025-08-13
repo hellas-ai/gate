@@ -1,10 +1,10 @@
 //! Configuration management routes
 
-use crate::permissions::LocalPermissionManager;
+use crate::permissions::LocalContext;
 use crate::{ServerState, Settings, StateDir};
 use axum::{extract, response, routing};
 use gate_core::access::{
-    Action, ObjectId, ObjectIdentity, ObjectKind, Permissions, TargetNamespace,
+    Action, ObjectId, ObjectIdentity, ObjectKind, Permissions, SubjectIdentity, TargetNamespace,
 };
 use gate_http::{
     AppState,
@@ -12,7 +12,6 @@ use gate_http::{
     services::HttpIdentity,
     types::{ConfigResponse, ConfigUpdateRequest},
 };
-use std::sync::Arc;
 use tracing::info;
 
 /// Get the full configuration
@@ -41,16 +40,9 @@ pub async fn get_config(
         id: ObjectId::new("*"),
     };
 
-    let local_ctx = crate::permissions::LocalContext::from_http_identity(
-        &identity,
-        state.state_backend.as_ref(),
-    )
-    .await;
-    let local_identity = gate_core::access::SubjectIdentity::new(
-        identity.id.clone(),
-        identity.source.clone(),
-        local_ctx,
-    );
+    let local_ctx = LocalContext::from_http_identity(&identity, state.state_backend.as_ref()).await;
+    let local_identity =
+        SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
 
     if let Err(_) = permission_manager
         .check(&local_identity, Action::Read, &config_object)
@@ -130,11 +122,8 @@ pub async fn update_config(
         _state.state_backend.as_ref(),
     )
     .await;
-    let local_identity = gate_core::access::SubjectIdentity::new(
-        identity.id.clone(),
-        identity.source.clone(),
-        local_ctx,
-    );
+    let local_identity =
+        SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
 
     if let Err(_) = permission_manager
         .check(&local_identity, Action::Write, &config_object)

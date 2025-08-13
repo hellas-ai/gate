@@ -2,7 +2,6 @@ use crate::components::{ConfigEditor, UserManagement};
 use crate::local_auth::LocalAuth;
 use gate_frontend_common::{
     auth::{use_auth, use_is_authenticated, AuthAction, AuthProvider},
-    client::create_authenticated_client,
     components::{LiveChat, ThemeToggle},
     theme::ThemeProvider,
 };
@@ -47,34 +46,16 @@ fn local_app_content() -> Html {
         })
     };
 
-    // Check if user is admin when authenticated
+    // For now, treat all authenticated users as having admin access
+    // TODO: In the future, check actual permissions from the backend
     {
         let is_admin = is_admin.clone();
-        let auth = auth.clone();
-
-        use_effect_with(
-            (is_authenticated, auth.auth_state.clone()),
-            move |(authenticated, auth_state)| {
-                if *authenticated {
-                    if let Some(token) = auth_state.as_ref().map(|s| &s.token) {
-                        let is_admin = is_admin.clone();
-                        let token = token.clone();
-
-                        wasm_bindgen_futures::spawn_local(async move {
-                            match check_user_role(&token).await {
-                                Ok(role) => {
-                                    is_admin.set(role == "admin");
-                                }
-                                Err(e) => {
-                                    gloo::console::error!("Failed to check user role:", e);
-                                }
-                            }
-                        });
-                    }
-                }
-                || ()
-            },
-        );
+        use_effect_with(is_authenticated, move |authenticated| {
+            if *authenticated {
+                is_admin.set(true);
+            }
+            || ()
+        });
     }
 
     // Show loading state while auth is being restored from sessionStorage
@@ -213,19 +194,4 @@ fn local_app_content() -> Html {
             </div>
         }
     }
-}
-
-// Helper function to check user role
-async fn check_user_role(_token: &str) -> Result<String, String> {
-    let client = create_authenticated_client()
-        .map_err(|e| format!("Failed to create client: {e}"))?
-        .ok_or_else(|| "Not authenticated".to_string())?;
-
-    // Get current user info using typed client method
-    let user_info = client
-        .get_me()
-        .await
-        .map_err(|e| format!("Failed to get user info: {e}"))?;
-
-    Ok(user_info.role)
 }

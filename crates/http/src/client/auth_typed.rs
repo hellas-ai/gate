@@ -34,6 +34,17 @@ impl PublicGateClient {
         self.execute(req).await
     }
 
+    /// Complete WebAuthn registration with bootstrap token (daemon-specific endpoint)
+    pub async fn register_bootstrap(
+        &self,
+        request: RegisterCompleteRequest,
+    ) -> Result<RegisterCompleteResponse, ClientError> {
+        let req = self
+            .request(reqwest::Method::POST, "/auth/webauthn/register/bootstrap")
+            .json(&request);
+        self.execute(req).await
+    }
+
     /// Start WebAuthn authentication (public endpoint)
     pub async fn auth_start(&self) -> Result<AuthStartResponse, ClientError> {
         let req = self.request(reqwest::Method::POST, "/auth/webauthn/authenticate/start");
@@ -68,8 +79,7 @@ impl AuthenticatedGateClient {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserResponse {
     pub id: String,
-    pub name: String,
-    pub role: String,
+    pub name: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

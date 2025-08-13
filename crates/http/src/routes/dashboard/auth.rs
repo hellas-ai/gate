@@ -97,10 +97,6 @@ where
         .complete_registration(request.session_id, request.credential)
         .await?;
 
-    if request.bootstrap_token.is_some() {
-        // TODO: Grant admin permissions if bootstrap token is provided
-    }
-
     let user = User {
         id: credential_id.clone(),
         name: Some(user_name.clone()),
@@ -113,7 +109,7 @@ where
         .complete_registration(user, credential_id.clone(), device_name, passkey)
         .await?;
 
-    info!("User registered: {} ({})", user_name, credential_id);
+    info!("User registered: {} ({})", response.name, response.user_id);
 
     Ok(Json(response))
 }

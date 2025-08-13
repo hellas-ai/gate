@@ -52,10 +52,15 @@ impl Runtime {
     pub fn bootstrap_url(&self) -> Option<String> {
         self.bootstrap_token().map(|token| {
             format!(
-                "http://localhost:{}/?bootstrap_token={}",
+                "http://localhost:{}/bootstrap/{}",
                 self.inner.settings.server.port, token
             )
         })
+    }
+
+    /// Get the count of registered users
+    pub fn user_count(&self) -> usize {
+        self.inner.user_count
     }
 
     /// Check if TLS forward is enabled

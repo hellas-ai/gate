@@ -10,7 +10,7 @@ fn default_host() -> String {
 }
 
 fn default_port() -> u16 {
-    3000
+    31145
 }
 
 fn default_true() -> bool {
@@ -30,7 +30,7 @@ fn default_rp_name() -> String {
 }
 
 fn default_rp_origin() -> String {
-    "http://localhost:3000".to_string()
+    format!("http://localhost:{}", default_port())
 }
 
 fn default_session_timeout() -> u64 {
@@ -399,22 +399,22 @@ impl Settings {
             default_max_tokens: 1024,
         });
 
-        // Configure WebAuthn for private.hellas.ai domain
+        // Set appropriate server defaults for GUI
+        settings.server.host = "127.0.0.1".to_string();
+        settings.server.port = default_port();
+
+        // Configure WebAuthn for localhost (sovereign local identity)
         settings.auth.webauthn = WebAuthnConfig {
             enabled: true,
-            rp_id: "private.hellas.ai".to_string(),
-            rp_name: "Gate Private Node".to_string(),
-            rp_origin: "https://private.hellas.ai".to_string(),
-            allowed_origins: vec!["https://private.hellas.ai".to_string()],
-            allow_subdomains: true,
-            allow_tlsforward_origins: true,
+            rp_id: "localhost".to_string(),
+            rp_name: "Gate Local Node".to_string(),
+            rp_origin: format!("http://localhost:{}", settings.server.port),
+            allowed_origins: vec![format!("http://localhost:{}", settings.server.port)],
+            allow_subdomains: false,
+            allow_tlsforward_origins: false, // Relay passkeys are separate
             require_user_verification: false,
             session_timeout_seconds: 86400, // 24 hours
         };
-
-        // Set appropriate server defaults for GUI
-        settings.server.host = "127.0.0.1".to_string();
-        settings.server.port = 14242;
 
         settings
     }
@@ -428,7 +428,7 @@ impl Settings {
 
         // More permissive server binding for daemon
         settings.server.host = "0.0.0.0".to_string();
-        settings.server.port = 14242;
+        settings.server.port = default_port();
 
         // Enable metrics by default for daemon
         settings.server.metrics_port = Some(9090);
@@ -446,22 +446,6 @@ impl Settings {
                 default_temperature: 0.7,
                 default_max_tokens: 1024,
             });
-        }
-
-        // Ensure WebAuthn is properly configured for TLS forward
-        if self.auth.webauthn.enabled {
-            self.auth.webauthn.allow_tlsforward_origins = true;
-            if !self
-                .auth
-                .webauthn
-                .allowed_origins
-                .contains(&"https://private.hellas.ai".to_string())
-            {
-                self.auth
-                    .webauthn
-                    .allowed_origins
-                    .push("https://private.hellas.ai".to_string());
-            }
         }
 
         // GUI should only bind to localhost

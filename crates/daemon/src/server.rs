@@ -28,6 +28,7 @@ pub struct ServerBuilder {
     state_backend: Arc<dyn StateBackend>,
     webauthn_backend: Arc<dyn WebAuthnBackend>,
     settings_arc: Arc<Settings>,
+    bootstrap_manager: Option<Arc<BootstrapTokenManager>>,
 }
 
 impl ServerBuilder {
@@ -43,7 +44,14 @@ impl ServerBuilder {
             state_backend,
             webauthn_backend,
             settings_arc,
+            bootstrap_manager: None,
         }
+    }
+
+    /// Set the bootstrap manager
+    pub fn with_bootstrap_manager(mut self, bootstrap_manager: Arc<BootstrapTokenManager>) -> Self {
+        self.bootstrap_manager = Some(bootstrap_manager);
+        self
     }
 
     /// Build the JWT service
@@ -155,7 +163,7 @@ impl ServerBuilder {
 
         let state = if self.settings.auth.webauthn.enabled {
             // Use WebAuthn configuration from settings
-            let mut webauthn_config = WebAuthnConfig {
+            let webauthn_config = WebAuthnConfig {
                 rp_id: self.settings.auth.webauthn.rp_id.clone(),
                 rp_name: self.settings.auth.webauthn.rp_name.clone(),
                 rp_origin: self.settings.auth.webauthn.rp_origin.clone(),
@@ -165,33 +173,6 @@ impl ServerBuilder {
                 require_user_verification: self.settings.auth.webauthn.require_user_verification,
                 session_timeout_seconds: self.settings.auth.webauthn.session_timeout_seconds,
             };
-
-            // If relay origins are allowed, configure for relay usage
-            if webauthn_config.allow_tlsforward_origins {
-                // Use parent domain as RP ID for relay compatibility
-                // This allows any *.private.hellas.ai subdomain to work
-                webauthn_config.rp_id = "private.hellas.ai".to_string();
-                webauthn_config.rp_name = "Gate (Hellas Relay)".to_string();
-
-                // Also update RP origin to use a relay domain as primary
-                // This ensures the WebAuthn builder has a valid primary origin
-                webauthn_config.rp_origin = "https://private.hellas.ai".to_string();
-
-                // Add common Hellas relay patterns
-                webauthn_config
-                    .allowed_origins
-                    .push("https://*.private.hellas.ai".to_string());
-                webauthn_config.allow_subdomains = true; // Enable subdomain matching for relay domains
-
-                // Also keep the original origin if it was configured
-                if !self.settings.auth.webauthn.rp_origin.is_empty()
-                    && !self.settings.auth.webauthn.rp_origin.contains("localhost")
-                {
-                    webauthn_config
-                        .allowed_origins
-                        .push(self.settings.auth.webauthn.rp_origin.clone());
-                }
-            }
 
             // Use the WebAuthn backend provided to the builder
             let webauthn_backend = self.webauthn_backend.clone();
@@ -217,8 +198,11 @@ impl ServerBuilder {
                 webauthn_backend.clone(),
             ));
 
-            // Create bootstrap manager
-            let bootstrap_manager = Arc::new(BootstrapTokenManager::new(webauthn_backend.clone()));
+            // Use the bootstrap manager from builder (required)
+            let bootstrap_manager = self
+                .bootstrap_manager
+                .clone()
+                .expect("Bootstrap manager must be provided to ServerBuilder");
 
             // Create permission manager
             let permission_manager =
@@ -263,8 +247,11 @@ impl ServerBuilder {
             //         .map_err(|e| anyhow::anyhow!("Failed to create WebAuthn service: {}", e))?,
             // );
 
-            // Create bootstrap manager
-            let bootstrap_manager = Arc::new(BootstrapTokenManager::new(dummy_webauthn_backend));
+            // Use the bootstrap manager from builder (required)
+            let bootstrap_manager = self
+                .bootstrap_manager
+                .clone()
+                .expect("Bootstrap manager must be provided to ServerBuilder");
 
             // Create permission manager
             let permission_manager =

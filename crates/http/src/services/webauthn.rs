@@ -106,7 +106,18 @@ impl WebAuthnService {
             .read()
             .await
             .finish_passkey_registration(&credential, &reg_state)
-            .map_err(|e| HttpError::BadRequest(format!("Failed to complete registration: {e}")))?;
+            .map_err(|e| {
+                // Provide user-friendly error messages for common WebAuthn errors
+                let error_msg = e.to_string();
+                if error_msg.contains("origin does not match") {
+                    HttpError::BadRequest(
+                        "Security error: The domain you're accessing from doesn't match the expected domain. \
+                        Please ensure you're accessing from the correct URL.".to_string()
+                    )
+                } else {
+                    HttpError::BadRequest(format!("Registration failed: {e}"))
+                }
+            })?;
 
         // Get credential ID
         let credential_id = URL_SAFE_NO_PAD.encode(passkey.cred_id());

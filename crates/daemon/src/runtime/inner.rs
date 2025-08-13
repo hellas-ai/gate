@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use gate_core::{
-    BootstrapTokenValidator,
+    BootstrapTokenValidator, WebAuthnBackend,
     tracing::{metrics, prometheus::export_prometheus},
 };
 use gate_http::{AppState, server::HttpServer};
@@ -29,6 +29,7 @@ pub(super) struct RuntimeInner {
     pub axum_app: axum::Router,
     pub tlsforward_service: Option<Arc<TlsForwardService>>,
     pub bootstrap_token: Option<String>,
+    pub user_count: usize,
 }
 
 impl RuntimeInner {
@@ -46,8 +47,16 @@ impl RuntimeInner {
         let webauthn_backend = Arc::new(SqlxWebAuthnBackend::new(state_backend.pool().clone()));
         debug!("Connected to database");
 
-        // Check bootstrap
+        // Check bootstrap and count users
         let bootstrap_manager = Arc::new(BootstrapTokenManager::new(webauthn_backend.clone()));
+
+        // Count existing users
+        let credentials = webauthn_backend
+            .list_all_credentials()
+            .await
+            .map_err(|e| anyhow!("Failed to list credentials: {}", e))?;
+        let user_count = credentials.len();
+
         let bootstrap_token = if bootstrap_manager
             .needs_bootstrap()
             .await
@@ -83,7 +92,8 @@ impl RuntimeInner {
             state_backend.clone(),
             webauthn_backend,
             settings_arc.clone(),
-        );
+        )
+        .with_bootstrap_manager(bootstrap_manager.clone());
 
         let jwt_service = builder.build_jwt_service();
         let upstream_registry = builder.build_upstream_registry().await?;
@@ -139,17 +149,21 @@ impl RuntimeInner {
                 .await?;
 
             // Setup certificate manager client if Let's Encrypt is enabled
+            // This is done asynchronously to avoid blocking startup
             if settings.letsencrypt.enabled {
-                if let Some(node_id) = p2p_manager
-                    .wait_for_tlsforward_connection(&service, 30)
-                    .await
-                {
-                    if let Some(tls_mgr) = &tls_manager {
-                        tls_mgr
-                            .set_tls_forward_client(p2p_manager.endpoint(), node_id)
-                            .await;
+                let p2p_mgr = p2p_manager.clone();
+                let svc = service.clone();
+                let tls_mgr_opt = tls_manager.clone();
+                tokio::spawn(async move {
+                    if let Some(node_id) = p2p_mgr.wait_for_tlsforward_connection(&svc, 30).await {
+                        if let Some(tls_mgr) = tls_mgr_opt {
+                            tls_mgr
+                                .set_tls_forward_client(p2p_mgr.endpoint(), node_id)
+                                .await;
+                            info!("Certificate manager client configured with TLS forward");
+                        }
                     }
-                }
+                });
             }
 
             (Some(p2p_manager), Some(service))
@@ -210,6 +224,7 @@ impl RuntimeInner {
             axum_app,
             tlsforward_service,
             bootstrap_token,
+            user_count,
         })
     }
 

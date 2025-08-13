@@ -1,10 +1,10 @@
 //! Admin user management routes
 
 use crate::config::Settings;
-use crate::permissions::LocalPermissionManager;
+use crate::permissions::{LocalContext, LocalPermissionManager};
 use axum::{extract::State, response::Json};
 use gate_core::access::{
-    Action, ObjectId, ObjectIdentity, ObjectKind, Permissions, TargetNamespace,
+    Action, ObjectId, ObjectIdentity, ObjectKind, Permissions, SubjectIdentity, TargetNamespace,
 };
 use gate_core::types::User;
 use gate_http::{error::HttpError, services::HttpIdentity, state::AppState};
@@ -109,17 +109,11 @@ where
         id: ObjectId::new("*"),
     };
 
-    let local_ctx = crate::permissions::LocalContext::from_http_identity(
-        &identity,
-        app_state.state_backend.as_ref(),
-    )
-    .await;
+    let local_ctx =
+        LocalContext::from_http_identity(&identity, app_state.state_backend.as_ref()).await;
 
-    let local_identity = gate_core::access::SubjectIdentity::new(
-        identity.id.clone(),
-        identity.source.clone(),
-        local_ctx,
-    );
+    let local_identity =
+        SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
 
     if let Err(_) = permission_manager
         .check(&local_identity, Action::Read, &users_object)
@@ -223,11 +217,8 @@ where
         app_state.state_backend.as_ref(),
     )
     .await;
-    let local_identity = gate_core::access::SubjectIdentity::new(
-        identity.id.clone(),
-        identity.source.clone(),
-        local_ctx,
-    );
+    let local_identity =
+        SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
 
     if let Err(_) = permission_manager
         .check(&local_identity, Action::Read, &user_object)
@@ -406,11 +397,8 @@ where
         app_state.state_backend.as_ref(),
     )
     .await;
-    let local_identity = gate_core::access::SubjectIdentity::new(
-        identity.id.clone(),
-        identity.source.clone(),
-        local_ctx,
-    );
+    let local_identity =
+        SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
 
     if let Err(_) = permission_manager
         .check(&local_identity, Action::Delete, &user_object)

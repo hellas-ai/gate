@@ -28,7 +28,7 @@ NC = \033[0m # No Color
 
 # Phony targets
 .PHONY: help build dev run clean test test-unit test-integration lint fmt fmt-check check audit \
-        frontend-dev frontend-build frontend-clean frontend-daemon-dev frontend-daemon-build \
+        frontend-build-dev frontend-build frontend-clean frontend-daemon-dev frontend-daemon-build \
         frontend-tauri-dev frontend-tauri-build frontend-relay-dev frontend-relay-build \
         gui-dev gui-build gui-build-dev gui-build-dmg \
         docs docs-deps ci pre-commit db-migrate db-reset server p2p tlsforward all-services
@@ -105,14 +105,14 @@ audit: ## Security audit of dependencies
 	@echo "$(YELLOW)Running security audit...$(NC)"
 	$(CARGO) audit
 
-## Frontend
-frontend-dev: ## Run frontend development server (legacy)
-	@echo "$(GREEN)Starting frontend dev server on http://localhost:8081...$(NC)"
-	cd crates/frontend && $(TRUNK) serve
 
-frontend-build: ## Build frontend for production (legacy)
+frontend-build: ## Build frontend for production
 	@echo "$(GREEN)Building frontend for production...$(NC)"
 	cd crates/frontend && $(TRUNK) build --release
+
+frontend-build-dev: ## Build frontend dev
+	@echo "$(GREEN)Building frontend for dev...$(NC)"
+	cd crates/frontend && $(TRUNK) build
 
 frontend-clean: ## Clean frontend build artifacts
 	@echo "$(RED)Cleaning frontend artifacts...$(NC)"

@@ -8,6 +8,7 @@ use tracing::{debug, error, info, warn};
 use crate::{services::TlsForwardService, tls_reload::ReloadableTlsAcceptor};
 
 /// Manages TLS certificates and acceptors
+#[derive(Clone)]
 pub struct TlsManager {
     certificate_manager: Arc<Mutex<CertificateManager>>,
     reloadable_acceptor: Arc<ReloadableTlsAcceptor>,

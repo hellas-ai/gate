@@ -48,13 +48,21 @@ impl AuthApiService {
             session_id,
             credential,
             device_name,
-            bootstrap_token,
+            bootstrap_token: bootstrap_token.clone(),
         };
 
-        client
-            .register_complete(request)
-            .await
-            .map_err(|e| e.to_string())
+        // Use bootstrap endpoint if bootstrap token is present
+        if bootstrap_token.is_some() {
+            client
+                .register_bootstrap(request)
+                .await
+                .map_err(|e| e.to_string())
+        } else {
+            client
+                .register_complete(request)
+                .await
+                .map_err(|e| e.to_string())
+        }
     }
 
     /// Start authentication process

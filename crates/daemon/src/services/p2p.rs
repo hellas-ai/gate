@@ -18,6 +18,7 @@ pub struct P2PConfig {
 }
 
 /// Manages P2P endpoint and routing
+#[derive(Clone)]
 pub struct P2PManager {
     endpoint: Arc<Endpoint>,
     router: Option<Router>,
