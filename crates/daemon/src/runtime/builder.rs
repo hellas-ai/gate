@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::watch;
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::{
     Settings, StateDir,
@@ -61,27 +61,8 @@ impl RuntimeBuilder {
         state_dir.create_directories().await?;
 
         // Get or create settings
-        let mut settings = if let Some(settings) = self.settings {
-            settings
-        } else if self.gui_mode {
-            debug!("Using GUI preset configuration");
-            Settings::gui_preset()
-        } else {
-            // Try to load from default location
-            let config_path = state_dir.config_path();
-            if config_path.exists() {
-                info!("Loading configuration from: {}", config_path.display());
-                Settings::load_from_file(&config_path.to_string_lossy())?
-            } else {
-                debug!("Using daemon preset configuration");
-                Settings::daemon_preset()
-            }
-        };
 
-        // Apply GUI overrides if in GUI mode
-        if self.gui_mode {
-            settings.apply_gui_overrides();
-        }
+        let settings = self.settings.unwrap_or_else(Settings::gui_preset);
 
         // Get database URL
         let database_url = self.database_url.unwrap_or_else(|| {

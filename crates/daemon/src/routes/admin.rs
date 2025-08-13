@@ -115,9 +115,10 @@ where
     let local_identity =
         SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
 
-    if let Err(_) = permission_manager
+    if permission_manager
         .check(&local_identity, Action::Read, &users_object)
         .await
+        .is_err()
     {
         warn!(
             "User {} attempted to list users without permission",
@@ -220,9 +221,10 @@ where
     let local_identity =
         SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
 
-    if let Err(_) = permission_manager
+    if permission_manager
         .check(&local_identity, Action::Read, &user_object)
         .await
+        .is_err()
     {
         warn!(
             "User {} attempted to get user {} without permission",
@@ -249,7 +251,7 @@ where
     Ok(Json(UserInfo::from(target_user)))
 }
 
-/// Update a user's role (admin only)
+// /// Update a user's role (admin only)
 // #[utoipa::path(
 //     put,
 //     path = "/api/admin/users/{user_id}/role",
@@ -400,9 +402,10 @@ where
     let local_identity =
         SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
 
-    if let Err(_) = permission_manager
+    if permission_manager
         .check(&local_identity, Action::Delete, &user_object)
         .await
+        .is_err()
     {
         warn!(
             "User {} attempted to delete user {} without permission",

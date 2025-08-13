@@ -389,18 +389,18 @@ impl Settings {
 
     /// Configuration preset optimized for GUI mode
     pub fn gui_preset() -> Self {
-        let mut settings = Self::default();
-
-        // Enable local inference for GUI
-        settings.local_inference = Some(LocalInferenceConfig {
-            enabled: true,
-            max_concurrent_inferences: 1,
-            default_temperature: 0.7,
-            default_max_tokens: 1024,
-        });
+        let mut settings = Self {
+            local_inference: Some(LocalInferenceConfig {
+                enabled: true,
+                max_concurrent_inferences: 1,
+                default_temperature: 0.7,
+                default_max_tokens: 1024,
+            }),
+            ..Default::default()
+        };
 
         // Set appropriate server defaults for GUI
-        settings.server.host = "127.0.0.1".to_string();
+        settings.server.host = "localhost".to_string();
         settings.server.port = default_port();
 
         // Configure WebAuthn for localhost (sovereign local identity)
@@ -417,38 +417,5 @@ impl Settings {
         };
 
         settings
-    }
-
-    /// Configuration preset for standalone daemon mode
-    pub fn daemon_preset() -> Self {
-        let mut settings = Self::default();
-
-        // Standalone daemon typically doesn't need local inference by default
-        settings.local_inference = None;
-
-        // More permissive server binding for daemon
-        settings.server.host = "0.0.0.0".to_string();
-        settings.server.port = default_port();
-
-        // Enable metrics by default for daemon
-        settings.server.metrics_port = Some(9090);
-
-        settings
-    }
-
-    /// Apply GUI-specific overrides to existing settings
-    pub fn apply_gui_overrides(&mut self) {
-        // Always enable local inference for GUI
-        if self.local_inference.is_none() {
-            self.local_inference = Some(LocalInferenceConfig {
-                enabled: true,
-                max_concurrent_inferences: 1,
-                default_temperature: 0.7,
-                default_max_tokens: 1024,
-            });
-        }
-
-        // GUI should only bind to localhost
-        self.server.host = "127.0.0.1".to_string();
     }
 }

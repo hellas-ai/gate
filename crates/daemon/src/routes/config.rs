@@ -44,9 +44,10 @@ pub async fn get_config(
     let local_identity =
         SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
 
-    if let Err(_) = permission_manager
+    if permission_manager
         .check(&local_identity, Action::Read, &config_object)
         .await
+        .is_err()
     {
         return Err(HttpError::AuthorizationFailed(
             "Permission denied: cannot read configuration".to_string(),
@@ -125,9 +126,10 @@ pub async fn update_config(
     let local_identity =
         SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
 
-    if let Err(_) = permission_manager
+    if permission_manager
         .check(&local_identity, Action::Write, &config_object)
         .await
+        .is_err()
     {
         return Err(HttpError::AuthorizationFailed(
             "Permission denied: cannot update configuration".to_string(),
