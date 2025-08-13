@@ -116,7 +116,6 @@ pub async fn create_p2p_endpoint(
 /// Setup certificate manager and TLS acceptor
 pub async fn setup_certificate_manager(
     data_dir: &Path,
-    letsencrypt_enabled: bool,
     initial_domains: Vec<String>,
 ) -> Result<(Arc<ReloadableTlsAcceptor>, Arc<Mutex<CertificateManager>>)> {
     // Create certificate manager

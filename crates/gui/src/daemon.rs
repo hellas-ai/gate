@@ -680,7 +680,8 @@ async fn run_daemon_server(
     // In GUI crate, we're ALWAYS in a Tauri app - either dev mode or built
     let static_dir = if tauri::is_dev() {
         // Development mode - use the source directory
-        let dev_path = std::env::var("GATE_SERVER__STATIC_DIR").unwrap_or("crates/frontend-daemon/dist".to_string(d));
+        let dev_path = std::env::var("GATE_SERVER__STATIC_DIR")
+            .unwrap_or("crates/frontend-daemon/dist".to_string(d));
         info!(
             "Running in Tauri dev mode, using development path: {}",
             dev_path
@@ -748,7 +749,7 @@ async fn run_daemon_server(
 
         // Setup certificate manager and TLS acceptor
         let (tls_acceptor_inner, cert_manager) =
-            helpers::setup_certificate_manager(&state_dir, settings.letsencrypt.enabled).await?;
+            helpers::setup_certificate_manager(&state_dir).await?;
 
         // Create HTTP server for TLS forward handler with same static file serving
         // Build router the same way as in main.rs

@@ -7,6 +7,7 @@
 use crate::{
     ApiKey, Model, ModelType, Organization, Provider, ProviderType, Result, StateBackend,
     TimeRange, UsageRecord, User,
+    access::{Action, ObjectIdentity},
 };
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
@@ -463,6 +464,36 @@ impl StateBackend for InMemoryBackend {
             .lock()
             .unwrap()
             .insert(org.id.clone(), org.clone());
+        Ok(())
+    }
+
+    async fn has_permission(
+        &self,
+        _subject_id: &str,
+        _action: &Action,
+        _object: &ObjectIdentity,
+    ) -> Result<bool> {
+        // For tests, just return true
+        Ok(true)
+    }
+
+    async fn grant_permission(
+        &self,
+        _subject_id: &str,
+        _action: &Action,
+        _object: &ObjectIdentity,
+    ) -> Result<()> {
+        // For tests, just return Ok
+        Ok(())
+    }
+
+    async fn remove_permission(
+        &self,
+        _subject_id: &str,
+        _action: &Action,
+        _object: &ObjectIdentity,
+    ) -> Result<()> {
+        // For tests, just return Ok
         Ok(())
     }
 }

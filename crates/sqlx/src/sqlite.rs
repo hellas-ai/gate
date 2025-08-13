@@ -136,7 +136,7 @@ impl StateBackend for SqliteStateBackend {
         let config = key
             .config
             .as_ref()
-            .map(|c| serde_json::to_string(c))
+            .map(serde_json::to_string)
             .transpose()
             .map_err(|e| Error::StateError(format!("Failed to serialize config: {e}")))?;
         let created_at = datetime_to_string(key.created_at);
@@ -327,7 +327,7 @@ impl StateBackend for SqliteStateBackend {
     ) -> Result<bool> {
         let action_str = serde_json::to_string(action)
             .map_err(|e| Error::StateError(format!("Failed to serialize action: {e}")))?;
-        let object_str = format!("{}", object);
+        let object_str = format!("{object}");
 
         let result: (i64,) = sqlx::query_as(
             r#"
@@ -354,7 +354,7 @@ impl StateBackend for SqliteStateBackend {
     ) -> Result<()> {
         let action_str = serde_json::to_string(action)
             .map_err(|e| Error::StateError(format!("Failed to serialize action: {e}")))?;
-        let object_str = format!("{}", object);
+        let object_str = format!("{object}");
 
         sqlx::query(
             r#"
@@ -380,7 +380,7 @@ impl StateBackend for SqliteStateBackend {
     ) -> Result<()> {
         let action_str = serde_json::to_string(action)
             .map_err(|e| Error::StateError(format!("Failed to serialize action: {e}")))?;
-        let object_str = format!("{}", object);
+        let object_str = format!("{object}");
 
         sqlx::query(
             r#"

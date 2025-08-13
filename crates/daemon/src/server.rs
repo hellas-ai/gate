@@ -240,13 +240,6 @@ impl ServerBuilder {
                 dummy_webauthn_backend.clone(),
             ));
 
-            // Create minimal WebAuthn service (won't be used but needed for container)
-            // let webauthn_config = WebAuthnConfig::default();
-            // let webauthn_service = Arc::new(
-            //     WebAuthnService::new(webauthn_config, dummy_webauthn_backend.clone())
-            //         .map_err(|e| anyhow::anyhow!("Failed to create WebAuthn service: {}", e))?,
-            // );
-
             // Use the bootstrap manager from builder (required)
             let bootstrap_manager = self
                 .bootstrap_manager
@@ -473,11 +466,16 @@ mod tests {
         ));
 
         let settings_arc = Arc::new(settings.clone());
-        let builder = ServerBuilder::new(settings, state_backend, webauthn_backend, settings_arc);
+        let mut builder =
+            ServerBuilder::new(settings, state_backend, webauthn_backend, settings_arc);
 
         // Build JWT service
         let jwt_service = builder.build_jwt_service();
         // JWT service was created successfully
+
+        let bootstrap_manager =
+            Arc::new(BootstrapTokenManager::new(builder.webauthn_backend.clone()));
+        builder = builder.with_bootstrap_manager(bootstrap_manager);
 
         // Build upstream registry
         let upstream_registry = builder.build_upstream_registry().await.unwrap();

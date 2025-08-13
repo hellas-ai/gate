@@ -12,6 +12,12 @@ pub struct DaemonState {
     pub(crate) config_path: PathBuf,
 }
 
+impl Default for DaemonState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DaemonState {
     pub fn new() -> Self {
         let state_dir = gate_daemon::StateDir::new();

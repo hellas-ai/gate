@@ -46,8 +46,8 @@ impl Display for TargetNamespace {
         match self {
             Self::System => write!(f, "system"),
             Self::Local => write!(f, "local"),
-            Self::Organization(org) => write!(f, "org:{}", org),
-            Self::Node(node) => write!(f, "node:{}", node),
+            Self::Organization(org) => write!(f, "org:{org}"),
+            Self::Node(node) => write!(f, "node:{node}"),
         }
     }
 }
@@ -67,7 +67,7 @@ pub enum ObjectKind {
 
 impl Display for ObjectKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 

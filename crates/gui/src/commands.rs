@@ -1,7 +1,7 @@
 use crate::state::{DaemonState, TlsForwardStatus};
 use gate_daemon::{Settings, runtime::Runtime};
 use tauri::{AppHandle, State};
-use tracing::{error, info};
+use tracing::error;
 
 #[tauri::command]
 pub async fn start_daemon(
@@ -36,7 +36,7 @@ pub async fn start_daemon(
         .with_settings(settings)
         .build()
         .await
-        .map_err(|e| format!("Failed to build runtime: {}", e))?;
+        .map_err(|e| format!("Failed to build runtime: {e}"))?;
 
     let address = runtime.server_address();
 
@@ -47,7 +47,7 @@ pub async fn start_daemon(
     runtime
         .start_metrics()
         .await
-        .map_err(|e| format!("Failed to start metrics: {}", e))?;
+        .map_err(|e| format!("Failed to start metrics: {e}"))?;
 
     // Spawn server task
     let runtime_clone = runtime.clone();
@@ -61,7 +61,7 @@ pub async fn start_daemon(
     state.set_runtime(runtime).await;
     state.set_handle(handle).await;
 
-    Ok(format!("Daemon started at http://{}", address))
+    Ok(format!("Daemon started at http://{address}"))
 }
 
 #[tauri::command]
@@ -83,7 +83,7 @@ pub async fn daemon_status(state: State<'_, DaemonState>) -> Result<bool, String
 pub async fn get_daemon_config(state: State<'_, DaemonState>) -> Result<Settings, String> {
     state
         .load_config()
-        .map_err(|e| format!("Failed to load config: {}", e))
+        .map_err(|e| format!("Failed to load config: {e}"))
 }
 
 #[tauri::command]
@@ -162,9 +162,9 @@ pub async fn configure_tlsforward(
     _server_address: Option<String>,
 ) -> Result<String, String> {
     // Load current config
-    let mut config = state
+    let config = state
         .load_config()
-        .map_err(|e| format!("Failed to load config: {}", e))?;
+        .map_err(|e| format!("Failed to load config: {e}"))?;
 
     // Update TLS forward config
     // Note: This would need to be implemented based on how you want to handle
@@ -174,7 +174,7 @@ pub async fn configure_tlsforward(
     state
         .save_config(&config)
         .await
-        .map_err(|e| format!("Failed to save config: {}", e))?;
+        .map_err(|e| format!("Failed to save config: {e}"))?;
 
     Ok("TLS forward configuration updated".to_string())
 }

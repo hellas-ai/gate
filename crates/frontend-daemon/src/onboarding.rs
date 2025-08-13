@@ -3,7 +3,6 @@ use gate_frontend_common::{
     components::Spinner as LoadingSpinner,
     hooks::{use_webauthn, WebAuthnState},
 };
-use web_sys::Event;
 use yew::prelude::*;
 
 #[derive(Properties, PartialEq)]
@@ -46,7 +45,7 @@ pub fn onboarding_auth(props: &OnboardingAuthProps) -> Html {
         let bootstrap_token = bootstrap_token.clone();
         Callback::from(move |_| {
             let name_value = (*name).clone();
-            web_sys::console::log_1(&format!("on_register called, name: '{}'", name_value).into());
+            web_sys::console::log_1(&format!("on_register called, name: '{name_value}'").into());
             if !name_value.is_empty() {
                 web_sys::console::log_1(&"Calling webauthn.register".into());
                 webauthn.register(name_value, None, Some(bootstrap_token.clone()));
@@ -102,23 +101,28 @@ fn registration_form(
     on_name_input: &Callback<InputEvent>,
     on_register: &Callback<MouseEvent>,
 ) -> Html {
-    let on_submit = {
-        let on_register = on_register.clone();
+    // Simple keyboard handler directly on the div
+    let handle_keydown = {
         let name = name.clone();
-        Callback::from(move |e: web_sys::SubmitEvent| {
-            e.prevent_default();
-            web_sys::console::log_1(&format!("Form submitted, name: '{}'", *name).into());
-            if !name.is_empty() {
-                web_sys::console::log_1(&"Name not empty, triggering register".into());
-                on_register.emit(MouseEvent::new("click").unwrap());
-            } else {
-                web_sys::console::log_1(&"Name is empty, not registering".into());
+        let on_register = on_register.clone();
+        Callback::from(move |e: KeyboardEvent| {
+            web_sys::console::log_1(
+                &format!("Keydown event: key='{}', code='{}'", e.key(), e.code()).into(),
+            );
+            if e.key() == "Enter" && !(*name).is_empty() {
+                web_sys::console::log_1(
+                    &"Enter pressed with non-empty name, triggering register".into(),
+                );
+                e.prevent_default();
+                // Just emit a dummy mouse event to trigger the registration
+                let event = web_sys::MouseEvent::new("click").unwrap();
+                on_register.emit(event);
             }
         })
     };
 
     html! {
-        <form onsubmit={on_submit} class="space-y-4">
+        <div class="space-y-4">
             <div>
                 <label class="block text-white/80 text-sm font-medium mb-2">
                     {"Your Name"}
@@ -129,23 +133,7 @@ fn registration_form(
                     placeholder="Enter your name"
                     value={(**name).clone()}
                     oninput={on_name_input}
-                    onkeypress={
-                        let webauthn = webauthn.clone();
-                        let name = name.clone();
-                        let bootstrap_token = props.bootstrap_token.clone();
-                        Callback::from(move |e: KeyboardEvent| {
-                            web_sys::console::log_1(&format!("Key pressed in onkeypress: {}", e.key()).into());
-                            if e.key() == "Enter" {
-                                e.prevent_default();
-                                let name_value = (*name).clone();
-                                web_sys::console::log_1(&format!("Enter key detected, name: '{}'", name_value).into());
-                                if !name_value.is_empty() {
-                                    web_sys::console::log_1(&"Directly calling webauthn.register from keypress".into());
-                                    webauthn.register(name_value, None, Some(bootstrap_token.clone()));
-                                }
-                            }
-                        })
-                    }
+                    onkeydown={handle_keydown}
                 />
                 <p class="text-white/50 text-xs mt-2">
                     {"This will be displayed when you log in"}
@@ -153,12 +141,12 @@ fn registration_form(
             </div>
 
             <button
-                type="submit"
                 class="w-full px-4 py-3 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white rounded-lg font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                onclick={on_register}
                 disabled={(**name).is_empty()}
             >
                 {"Create Admin Account"}
             </button>
-        </form>
+        </div>
     }
 }
