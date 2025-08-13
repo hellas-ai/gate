@@ -74,7 +74,7 @@ impl Runtime {
             let state = service.subscribe().borrow().clone();
             match state {
                 crate::services::TlsForwardState::Disconnected => TlsForwardStatus::Disconnected,
-                crate::services::TlsForwardState::Connecting { .. } => TlsForwardStatus::Connecting,
+                crate::services::TlsForwardState::Connecting => TlsForwardStatus::Connecting,
                 crate::services::TlsForwardState::Connected {
                     assigned_domain, ..
                 } => TlsForwardStatus::Connected {
@@ -134,8 +134,8 @@ impl std::fmt::Display for TlsForwardStatus {
             Self::Disabled => write!(f, "disabled"),
             Self::Disconnected => write!(f, "disconnected"),
             Self::Connecting => write!(f, "connecting"),
-            Self::Connected { domain } => write!(f, "connected to {}", domain),
-            Self::Error(e) => write!(f, "error: {}", e),
+            Self::Connected { domain } => write!(f, "connected to {domain}"),
+            Self::Error(e) => write!(f, "error: {e}"),
         }
     }
 }

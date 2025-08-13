@@ -84,9 +84,9 @@ async fn main() -> Result<()> {
         println!("\n  URL: http://{}/", runtime.server_address());
         let user_count = runtime.user_count();
         if user_count == 1 {
-            println!("  Users: {} registered user", user_count);
+            println!("  Users: {user_count} registered user");
         } else {
-            println!("  Users: {} registered users", user_count);
+            println!("  Users: {user_count} registered users");
         }
         println!("\n  Login with your passkey to access the admin panel");
         println!("===========================================\n");

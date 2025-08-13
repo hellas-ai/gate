@@ -1,9 +1,9 @@
 //! Server setup and configuration module
 
+use crate::ServerState;
 use crate::bootstrap::BootstrapTokenManager;
 use crate::config::Settings;
 use crate::permissions::LocalPermissionManager;
-use crate::{NativeRequestContext, ServerState};
 use anyhow::Result;
 use axum;
 use gate_core::{StateBackend, WebAuthnBackend};

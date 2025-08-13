@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::{debug, info};
@@ -9,24 +9,13 @@ use crate::{
 };
 
 /// Runtime builder with sensible defaults
+#[derive(Default)]
 pub struct RuntimeBuilder {
     settings: Option<Settings>,
     state_dir: Option<StateDir>,
     database_url: Option<String>,
     static_dir: Option<String>,
     gui_mode: bool,
-}
-
-impl Default for RuntimeBuilder {
-    fn default() -> Self {
-        Self {
-            settings: None,
-            state_dir: None,
-            database_url: None,
-            static_dir: None,
-            gui_mode: false,
-        }
-    }
 }
 
 impl RuntimeBuilder {
@@ -68,7 +57,7 @@ impl RuntimeBuilder {
         );
 
         // Get or create state directory
-        let state_dir = self.state_dir.unwrap_or_else(StateDir::new);
+        let state_dir = self.state_dir.unwrap_or_default();
         state_dir.create_directories().await?;
 
         // Get or create settings

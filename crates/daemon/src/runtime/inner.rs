@@ -7,7 +7,7 @@ use gate_http::{AppState, server::HttpServer};
 use gate_sqlx::{SqliteStateBackend, SqlxWebAuthnBackend};
 use std::sync::Arc;
 use tokio::{net::TcpListener, sync::watch, task::JoinHandle};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::{
     Settings, StateDir,
@@ -155,13 +155,13 @@ impl RuntimeInner {
                 let svc = service.clone();
                 let tls_mgr_opt = tls_manager.clone();
                 tokio::spawn(async move {
-                    if let Some(node_id) = p2p_mgr.wait_for_tlsforward_connection(&svc, 30).await {
-                        if let Some(tls_mgr) = tls_mgr_opt {
-                            tls_mgr
-                                .set_tls_forward_client(p2p_mgr.endpoint(), node_id)
-                                .await;
-                            info!("Certificate manager client configured with TLS forward");
-                        }
+                    if let Some(node_id) = p2p_mgr.wait_for_tlsforward_connection(&svc, 30).await
+                        && let Some(tls_mgr) = tls_mgr_opt
+                    {
+                        tls_mgr
+                            .set_tls_forward_client(p2p_mgr.endpoint(), node_id)
+                            .await;
+                        info!("Certificate manager client configured with TLS forward");
                     }
                 });
             }
@@ -173,12 +173,12 @@ impl RuntimeInner {
 
         // Setup monitoring for TLS forward and WebAuthn
         if let (Some(service), Some(tls_mgr)) = (&tlsforward_service, &tls_manager) {
-            if settings.auth.webauthn.enabled && settings.auth.webauthn.allow_tlsforward_origins {
-                if let Some(webauthn_service) =
+            if settings.auth.webauthn.enabled
+                && settings.auth.webauthn.allow_tlsforward_origins
+                && let Some(webauthn_service) =
                     ServerBuilder::get_webauthn_service(&app_state).into()
-                {
-                    spawn_webauthn_monitor(service.clone(), webauthn_service).await;
-                }
+            {
+                spawn_webauthn_monitor(service.clone(), webauthn_service).await;
             }
 
             if settings.letsencrypt.enabled {
@@ -202,14 +202,13 @@ impl RuntimeInner {
                 if let crate::services::TlsForwardState::Connected {
                     assigned_domain, ..
                 } = state
+                    && !domains.contains(&assigned_domain)
                 {
-                    if !domains.contains(&assigned_domain) {
-                        info!(
-                            "Adding TLS forward-assigned domain to Let's Encrypt: {}",
-                            assigned_domain
-                        );
-                        domains.push(assigned_domain);
-                    }
+                    info!(
+                        "Adding TLS forward-assigned domain to Let's Encrypt: {}",
+                        assigned_domain
+                    );
+                    domains.push(assigned_domain);
                 }
             }
 
@@ -254,16 +253,13 @@ impl RuntimeInner {
         monitoring.monitor_database_pool(self.app_state.state_backend.clone());
 
         // Monitor WebAuthn + TLS forward
-        if let Some(service) = &self.tlsforward_service {
-            if self.settings.auth.webauthn.enabled
-                && self.settings.auth.webauthn.allow_tlsforward_origins
-            {
-                if let Some(webauthn_service) =
-                    ServerBuilder::get_webauthn_service(&self.app_state).into()
-                {
-                    monitoring.monitor_webauthn_tlsforward(service.clone(), webauthn_service);
-                }
-            }
+        if let Some(service) = &self.tlsforward_service
+            && self.settings.auth.webauthn.enabled
+            && self.settings.auth.webauthn.allow_tlsforward_origins
+            && let Some(webauthn_service) =
+                ServerBuilder::get_webauthn_service(&self.app_state).into()
+        {
+            monitoring.monitor_webauthn_tlsforward(service.clone(), webauthn_service);
         }
 
         vec![] // Return task handles if needed

@@ -102,7 +102,7 @@ impl Permissions<LocalContext> for LocalPermissionManager {
         {
             Ok(true) => Ok(()),
             Ok(false) => Err(PermissionDenied::NotAuthorized),
-            Err(e) => Err(PermissionDenied::Custom(format!("Database error: {}", e))),
+            Err(e) => Err(PermissionDenied::Custom(format!("Database error: {e}"))),
         }
     }
 }
@@ -137,7 +137,7 @@ impl PermissionManager<LocalContext> for LocalPermissionManager {
             .await
         {
             Ok(_) => Ok(()),
-            Err(e) => Err(PermissionDenied::Custom(format!("Failed to revoke: {}", e))),
+            Err(e) => Err(PermissionDenied::Custom(format!("Failed to revoke: {e}"))),
         }
     }
 
@@ -153,7 +153,7 @@ impl PermissionManager<LocalContext> for LocalPermissionManager {
             .await
         {
             Ok(_) => Ok(()),
-            Err(e) => Err(PermissionDenied::Custom(format!("Failed to store: {}", e))),
+            Err(e) => Err(PermissionDenied::Custom(format!("Failed to store: {e}"))),
         }
     }
 }

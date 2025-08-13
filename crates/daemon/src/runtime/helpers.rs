@@ -155,27 +155,26 @@ pub async fn spawn_webauthn_monitor(
             if let crate::services::TlsForwardState::Connected {
                 assigned_domain, ..
             } = &state
+                && last_domain.as_ref() != Some(assigned_domain)
             {
-                if last_domain.as_ref() != Some(assigned_domain) {
-                    info!(
-                        "TLS forward connected with domain: {}, updating WebAuthn allowed origins",
-                        assigned_domain
+                info!(
+                    "TLS forward connected with domain: {}, updating WebAuthn allowed origins",
+                    assigned_domain
+                );
+
+                let tlsforward_origin = format!("https://{assigned_domain}");
+
+                if let Err(e) = webauthn_service
+                    .add_allowed_origin(tlsforward_origin.clone())
+                    .await
+                {
+                    error!("Failed to add TLS forward origin to WebAuthn: {}", e);
+                } else {
+                    debug!(
+                        "Successfully added {} to WebAuthn allowed origins",
+                        tlsforward_origin
                     );
-
-                    let tlsforward_origin = format!("https://{assigned_domain}");
-
-                    if let Err(e) = webauthn_service
-                        .add_allowed_origin(tlsforward_origin.clone())
-                        .await
-                    {
-                        error!("Failed to add TLS forward origin to WebAuthn: {}", e);
-                    } else {
-                        debug!(
-                            "Successfully added {} to WebAuthn allowed origins",
-                            tlsforward_origin
-                        );
-                        last_domain = Some(assigned_domain.clone());
-                    }
+                    last_domain = Some(assigned_domain.clone());
                 }
             }
         }

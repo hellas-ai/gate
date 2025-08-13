@@ -1,7 +1,6 @@
-use gate_core::{StateBackend, tracing::metrics};
+use gate_core::StateBackend;
 use gate_http::services::WebAuthnService;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 
