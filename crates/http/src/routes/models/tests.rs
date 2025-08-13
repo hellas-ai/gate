@@ -3,6 +3,7 @@ use crate::forwarding::{ForwardingConfig, UpstreamProvider, UpstreamRegistry};
 use crate::state::AppState;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
+use gate_core::tests::state::InMemoryBackend;
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -42,8 +43,9 @@ async fn test_models_endpoint() {
         )
         .await;
 
-    // Create test app state
-    let app_state = AppState::<()>::default().with_upstream_registry(registry);
+    // Create test app state with in-memory backend
+    let state_backend = Arc::new(InMemoryBackend::default());
+    let app_state = AppState::<()>::new(state_backend, ()).with_upstream_registry(registry);
 
     // Create router with models endpoint
     let app = axum::Router::new()

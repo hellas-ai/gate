@@ -132,7 +132,7 @@ impl StateBackend for SqliteStateBackend {
         Ok(row.map(ApiKey::from))
     }
 
-    async fn create_api_key(&self, key: &ApiKey, raw_key: &str) -> Result<()> {
+    async fn create_api_key(&self, key: &ApiKey, _raw_key: &str) -> Result<()> {
         let config = key
             .config
             .as_ref()
@@ -143,8 +143,8 @@ impl StateBackend for SqliteStateBackend {
         let last_used_at = key.last_used_at.map(datetime_to_string);
 
         sqlx::query(
-            "INSERT INTO api_keys (key_hash, name, org_id, config, created_at, last_used_at, raw_key) 
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO api_keys (key_hash, name, org_id, config, created_at, last_used_at) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )
         .bind(&key.key_hash)
         .bind(&key.name)
@@ -152,7 +152,6 @@ impl StateBackend for SqliteStateBackend {
         .bind(config)
         .bind(&created_at)
         .bind(last_used_at)
-        .bind(raw_key)
         .execute(&self.pool)
         .await
         .map_err(|e| Error::StateError(format!("Failed to create API key: {e}")))?;

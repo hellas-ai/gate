@@ -15,7 +15,7 @@ pub async fn start_daemon(
     }
 
     // Load or use provided config
-    let mut settings = if let Some(cfg) = config {
+    let settings = if let Some(cfg) = config {
         // Save the new config
         if let Err(e) = state.save_config(&cfg).await {
             error!("Failed to save GUI config: {}", e);
@@ -26,9 +26,6 @@ pub async fn start_daemon(
             .load_config()
             .unwrap_or_else(|_| Settings::gui_preset())
     };
-
-    // Apply GUI overrides
-    settings.apply_gui_overrides();
 
     // Build runtime
     let runtime = Runtime::builder()
