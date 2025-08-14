@@ -1,7 +1,7 @@
 use crate::state::{DaemonState, TlsForwardStatus};
 use gate_daemon::{Settings, runtime::Runtime};
 use tauri::{AppHandle, Manager, State};
-use tracing::{error, info, debug};
+use tracing::{debug, error, info};
 
 #[tauri::command]
 pub async fn start_daemon(
@@ -14,7 +14,10 @@ pub async fn start_daemon(
         return Err("Daemon is already running".to_string());
     }
 
-    info!("Starting GUI daemon from working directory: {:?}", std::env::current_dir().unwrap_or_default());
+    info!(
+        "Starting GUI daemon from working directory: {:?}",
+        std::env::current_dir().unwrap_or_default()
+    );
 
     // Load or use provided config
     let settings = if let Some(cfg) = config {
@@ -34,30 +37,43 @@ pub async fn start_daemon(
         // Development mode - try to find the project root and use absolute path
         let current_dir = std::env::current_dir().unwrap_or_default();
         let mut project_root = current_dir.clone();
-        
+
         // Try to find the project root by looking for Cargo.toml with workspace
-        while !project_root.join("Cargo.toml").exists() || 
-              !std::fs::read_to_string(project_root.join("Cargo.toml"))
-                  .unwrap_or_default()
-                  .contains("[workspace]") {
+        while !project_root.join("Cargo.toml").exists()
+            || !std::fs::read_to_string(project_root.join("Cargo.toml"))
+                .unwrap_or_default()
+                .contains("[workspace]")
+        {
             if let Some(parent) = project_root.parent() {
                 project_root = parent.to_path_buf();
             } else {
                 break;
             }
         }
-        
-        let dir = project_root.join("crates/frontend-daemon/dist").to_string_lossy().to_string();
-        info!("GUI daemon starting in debug mode, using static dir: {}", dir);
+
+        let dir = project_root
+            .join("crates/frontend-daemon/dist")
+            .to_string_lossy()
+            .to_string();
+        info!(
+            "GUI daemon starting in debug mode, using static dir: {}",
+            dir
+        );
         dir
     } else {
         // Production mode - use bundled resources
-        match app.path().resolve("frontend-daemon", tauri::path::BaseDirectory::Resource) {
+        match app
+            .path()
+            .resolve("frontend-daemon", tauri::path::BaseDirectory::Resource)
+        {
             Ok(path) => {
                 let dir = path.to_string_lossy().to_string();
-                info!("GUI daemon starting in release mode, using static dir: {}", dir);
+                info!(
+                    "GUI daemon starting in release mode, using static dir: {}",
+                    dir
+                );
                 dir
-            },
+            }
             Err(e) => {
                 error!("Failed to resolve resource directory: {}", e);
                 // Fallback to relative path if resource resolution fails
