@@ -37,8 +37,7 @@
     },
     "macOS": {
       "entitlements": "./entitlements.plist",
-      "hardenedRuntime": true,
-      "signingIdentity": "-"
+      "hardenedRuntime": true
     }
   },
   "plugins": {}
