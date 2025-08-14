@@ -259,6 +259,7 @@ pub fn build_daemon_router() -> utoipa_axum::router::OpenApiRouter<AppState<crat
     router = crate::routes::config::add_routes(router);
     router = crate::routes::auth::add_routes(router);
     router = crate::routes::admin::add_routes(router);
+    router = crate::routes::status::add_routes(router);
 
     router
 }

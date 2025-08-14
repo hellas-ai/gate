@@ -28,7 +28,7 @@ impl UseWebAuthnHandle {
     pub fn register(
         &self,
         name: String,
-        device_name: Option<String>,
+        key_name: Option<String>,
         bootstrap_token: Option<String>,
     ) {
         let auth_api = self.auth_api.clone();
@@ -65,7 +65,7 @@ impl UseWebAuthnHandle {
                                 .complete_registration(
                                     start_response.session_id,
                                     credential,
-                                    device_name,
+                                    key_name,
                                     bootstrap_token,
                                 )
                                 .await
