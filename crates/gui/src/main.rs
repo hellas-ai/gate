@@ -20,11 +20,15 @@ fn main() {
     {
         if std::env::var("RUST_LOG").is_ok() || cfg!(debug_assertions) {
             unsafe {
-                use winapi::um::wincon::AllocConsole;
-                use winapi::um::wincon::FreeConsole;
+                use winapi::um::consoleapi::AllocConsole;
+                use winapi::um::winbase::ATTACH_PARENT_PROCESS;
+                use winapi::um::wincon::AttachConsole;
 
-                // Try to allocate a console - this may fail if one already exists
-                let _ = AllocConsole();
+                // Try to attach to parent console first, then allocate if needed
+                if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+                    // If attach fails, try to allocate a new console
+                    let _ = AllocConsole();
+                }
             }
         }
     }

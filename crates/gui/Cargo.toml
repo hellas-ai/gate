@@ -26,7 +26,7 @@ rand = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["wincon"] }
+winapi = { version = "0.3", features = ["wincon", "consoleapi", "winbase"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
