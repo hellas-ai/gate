@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "identifier": "ai.hellas.gate",
   "build": {
-    "frontendDist": "../frontend-tauri/dist",
-    "devUrl": "http://localhost:8082",
-    "beforeDevCommand": "sh -c 'cd frontend-tauri && trunk serve'",
-    "beforeBuildCommand": "cd frontend-daemon && trunk build --release && cd ../frontend-tauri && trunk build --release"
+    "frontendDist": "../frontend-daemon/dist",
+    "devUrl": "http://localhost:8081",
+    "beforeDevCommand": "sh -c 'cd frontend-daemon && trunk serve'",
+    "beforeBuildCommand": "cd frontend-daemon && trunk build --release"
   },
   "app": {
     "windows": [
@@ -33,7 +33,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/frontend-daemon/": "frontend-daemon/"
+      "../frontend-daemon/dist/": "frontend-daemon/"
     },
     "macOS": {
       "entitlements": "./entitlements.plist",
