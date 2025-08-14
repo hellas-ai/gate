@@ -133,7 +133,7 @@ jobs:
         esac
         
         echo "Installing $BINARY to $DEST"
-        curl -sL "https://github.com/tailwindlabs/tailwindcss/releases/download/v4.1.11/${BINARY}" -o "$DEST"
+        curl -sL "https://github.com/tailwindlabs/tailwindcss/releases/download/v3.4.15/${BINARY}" -o "$DEST"
         chmod +x "$DEST"
     
     # Linux-specific dependencies
