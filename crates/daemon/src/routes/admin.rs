@@ -34,10 +34,11 @@ pub struct UserInfo {
 
 impl From<User> for UserInfo {
     fn from(user: User) -> Self {
+        let enabled = user.is_enabled();
         UserInfo {
             id: user.id,
             name: user.name,
-            enabled: user.enabled,
+            enabled,
             created_at: user.created_at,
             updated_at: user.updated_at,
             disabled_at: user.disabled_at,
@@ -549,7 +550,6 @@ where
         .map_err(|e| HttpError::InternalServerError(format!("Failed to get user: {e}")))?
         .ok_or_else(|| HttpError::NotFound(format!("User {user_id} not found")))?;
 
-    user.enabled = request.enabled;
     user.updated_at = chrono::Utc::now();
     user.disabled_at = if request.enabled {
         None

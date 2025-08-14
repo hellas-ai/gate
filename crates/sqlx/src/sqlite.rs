@@ -49,7 +49,7 @@ impl StateBackend for SqliteStateBackend {
     // User management
     async fn get_user(&self, user_id: &str) -> Result<Option<User>> {
         let row = sqlx::query_as::<_, UserRow>(
-            "SELECT id, email, name, enabled, created_at, updated_at, disabled_at FROM users WHERE id = ?1",
+            "SELECT id, email, name, created_at, updated_at, disabled_at FROM users WHERE id = ?1",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -69,12 +69,11 @@ impl StateBackend for SqliteStateBackend {
         let updated_at = datetime_to_string(user.updated_at);
 
         sqlx::query(
-            "INSERT INTO users (id, email, name, enabled, created_at, updated_at, disabled_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO users (id, email, name, created_at, updated_at, disabled_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )
         .bind(&user.id)
         .bind(email)
         .bind(&user.name)
-        .bind(user.enabled as i32)
         .bind(&created_at)
         .bind(&updated_at)
         .bind(user.disabled_at.map(datetime_to_string))
@@ -89,11 +88,10 @@ impl StateBackend for SqliteStateBackend {
         let email = user.metadata.get("email").map(|s| s.as_str());
         let updated_at = datetime_to_string(user.updated_at);
 
-        sqlx::query("UPDATE users SET email = ?2, name = ?3, enabled = ?4, updated_at = ?5, disabled_at = ?6 WHERE id = ?1")
+        sqlx::query("UPDATE users SET email = ?2, name = ?3, updated_at = ?4, disabled_at = ?5 WHERE id = ?1")
             .bind(&user.id)
             .bind(email)
             .bind(&user.name)
-            .bind(user.enabled as i32)
             .bind(&updated_at)
             .bind(user.disabled_at.map(datetime_to_string))
             .execute(&self.pool)
@@ -115,7 +113,7 @@ impl StateBackend for SqliteStateBackend {
 
     async fn list_users(&self) -> Result<Vec<User>> {
         let rows = sqlx::query_as::<_, UserRow>(
-            "SELECT id, email, name, enabled, created_at, updated_at, disabled_at FROM users ORDER BY created_at DESC",
+            "SELECT id, email, name, created_at, updated_at, disabled_at FROM users ORDER BY created_at DESC",
         )
         .fetch_all(&self.pool)
         .await

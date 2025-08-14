@@ -45,7 +45,6 @@ impl<B: StateBackend> StateBackendTestSuite<B> {
         let user = User {
             id: format!("test-user-{}", uuid::Uuid::new_v4()),
             name: Some("Test User".to_string()),
-            enabled: true,
             created_at: Utc::now(),
             updated_at: Utc::now(),
             disabled_at: None,
@@ -261,7 +260,6 @@ pub mod fixtures {
         User {
             id: id.unwrap_or_else(|| format!("user-{}", uuid::Uuid::new_v4())),
             name: Some("Test User".to_string()),
-            enabled: true,
             created_at: Utc::now(),
             updated_at: Utc::now(),
             disabled_at: None,
