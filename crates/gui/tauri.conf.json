@@ -6,7 +6,7 @@
     "frontendDist": "../frontend-tauri/dist",
     "devUrl": "http://localhost:8082",
     "beforeDevCommand": "sh -c 'cd frontend-tauri && trunk serve'",
-    "beforeBuildCommand": "(cd frontend-daemon && trunk build --release) && (cd frontend-tauri && trunk build --release)"
+    "beforeBuildCommand": "cd frontend-daemon && trunk build --release && cd ../frontend-tauri && trunk build --release"
   },
   "app": {
     "windows": [

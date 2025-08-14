@@ -63,6 +63,17 @@ pub async fn load_or_create_jwt_secret(path: &Path) -> Result<String> {
                 .with_context(|| "Failed to set permissions on JWT secret file")?;
         }
 
+        // On Windows, set file as read-only for current user
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            let mut permissions = fs::metadata(path).await?.permissions();
+            permissions.set_readonly(true);
+            fs::set_permissions(path, permissions)
+                .await
+                .with_context(|| "Failed to set permissions on JWT secret file")?;
+        }
+
         info!("JWT secret generated and saved successfully");
         Ok(secret)
     }

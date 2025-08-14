@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-#[cfg(feature = "otlp")]
+#[cfg(all(feature = "otlp", not(target_arch = "wasm32")))]
 use gate_core::tracing::prometheus::prometheus_format;
 use serde_json::json;
 use tracing::instrument;

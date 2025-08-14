@@ -10,7 +10,7 @@ categories.workspace = true
 
 [features]
 default = ["server"]
-otlp = ["gate-core/tracing-otlp"]
+otlp = ["gate-core/tracing-otlp", "gate-core/tracing-prometheus"]
 server = [
     "dep:anyhow",
     "dep:async-trait",
