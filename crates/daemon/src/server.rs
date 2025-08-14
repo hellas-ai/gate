@@ -316,9 +316,12 @@ impl ServerBuilder {
                 debug!("Index file path: {}", index_path.display());
                 debug!("Index file exists: {}", index_path.exists());
 
-                // Create a custom service that logs requests
-                let serve_dir =
-                    ServeDir::new(&static_dir).not_found_service(if index_path.exists() {
+                // Create a custom service that logs requests with proper MIME types
+                let serve_dir = ServeDir::new(&static_dir)
+                    .append_index_html_on_directories(true)
+                    .precompressed_gzip()
+                    .precompressed_br()
+                    .not_found_service(if index_path.exists() {
                         tower_http::services::ServeFile::new(index_path)
                     } else {
                         // If index doesn't exist, just return 404
@@ -327,6 +330,39 @@ impl ServerBuilder {
 
                 // Clone static_dir for use in closure
                 let static_dir_for_logging = static_dir.clone();
+
+                // Create middleware to fix MIME types
+                let content_type_layer = axum::middleware::from_fn(
+                    |req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next| async move {
+                        let path = req.uri().path().to_lowercase();
+                        let mut response = next.run(req).await;
+
+                        // Override Content-Type for common file extensions that might be wrong on Windows
+                        let content_type = if path.ends_with(".css") {
+                            Some("text/css; charset=utf-8")
+                        } else if path.ends_with(".js") {
+                            Some("application/javascript; charset=utf-8")
+                        } else if path.ends_with(".wasm") {
+                            Some("application/wasm")
+                        } else if path.ends_with(".html") {
+                            Some("text/html; charset=utf-8")
+                        } else if path.ends_with(".json") {
+                            Some("application/json; charset=utf-8")
+                        } else {
+                            None
+                        };
+
+                        if let Some(ct) = content_type {
+                            response.headers_mut().insert(
+                                axum::http::header::CONTENT_TYPE,
+                                axum::http::HeaderValue::from_static(ct),
+                            );
+                            debug!("Set Content-Type for {}: {}", path, ct);
+                        }
+
+                        response
+                    },
+                );
 
                 // Wrap with logging middleware
                 let logged_serve = ServiceBuilder::new()
@@ -351,6 +387,7 @@ impl ServerBuilder {
 
                         req
                     })
+                    .layer(content_type_layer)
                     .service(serve_dir);
 
                 router = router.fallback_service(logged_serve);
