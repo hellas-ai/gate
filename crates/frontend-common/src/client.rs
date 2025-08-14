@@ -1,15 +1,15 @@
 //! Client configuration and initialization
 
-use gate_http::client::{
-    error::ClientError, AuthenticatedGateClient, PublicGateClient, TypedClientBuilder,
-};
+use crate::client_wrapper::WrappedAuthClient;
+pub use gate_http::client::error::ClientError;
+use gate_http::client::{PublicGateClient, TypedClientBuilder};
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 use web_sys::window;
 
 /// Global client instances
 static PUBLIC_CLIENT: Lazy<Mutex<Option<PublicGateClient>>> = Lazy::new(|| Mutex::new(None));
-static AUTH_CLIENT: Lazy<Mutex<Option<AuthenticatedGateClient>>> = Lazy::new(|| Mutex::new(None));
+static AUTH_CLIENT: Lazy<Mutex<Option<WrappedAuthClient>>> = Lazy::new(|| Mutex::new(None));
 
 /// Get the base URL for API calls
 fn get_base_url() -> String {
@@ -45,7 +45,7 @@ pub fn create_public_client() -> Result<PublicGateClient, ClientError> {
 }
 
 /// Get the authenticated client instance (returns None if not authenticated)
-pub fn create_authenticated_client() -> Result<Option<AuthenticatedGateClient>, ClientError> {
+pub fn create_authenticated_client() -> Result<Option<WrappedAuthClient>, ClientError> {
     let client_lock = AUTH_CLIENT
         .lock()
         .expect("Failed to acquire auth client lock");
@@ -59,11 +59,11 @@ pub fn set_auth_token(token: Option<&str>) -> Result<(), ClientError> {
         .expect("Failed to acquire auth client lock");
 
     if let Some(token) = token {
-        // Create authenticated client
+        // Create authenticated client and wrap it
         let auth_client = TypedClientBuilder::new()
             .base_url(get_base_url())
             .build_authenticated(token)?;
-        *auth_lock = Some(auth_client);
+        *auth_lock = Some(WrappedAuthClient::new(auth_client));
     } else {
         // Clear authenticated client
         *auth_lock = None;

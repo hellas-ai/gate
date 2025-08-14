@@ -17,10 +17,7 @@ fn main() {
 
     // Initialize tracing for the GUI app
     tracing_subscriber::fmt()
-        .with_env_filter(
-            std::env::var("RUST_LOG")
-                .unwrap_or_else(|_| "gate_gui=debug,gate_daemon=debug".to_string()),
-        )
+        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "".to_string()))
         .init();
 
     tauri::Builder::default()

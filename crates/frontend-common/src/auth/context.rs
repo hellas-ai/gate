@@ -1,6 +1,7 @@
 //! Global authentication context and provider
 
 use crate::client::set_auth_token;
+use crate::components::ReauthModal;
 use crate::config::AuthConfig;
 use gloo::timers::callback::Timeout;
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,8 @@ pub struct AuthContextData {
     pub auth_state: Option<AuthState>,
     pub is_loading: bool,
     pub error: Option<String>,
+    pub show_reauth_modal: bool,
+    pub auth_expired: bool,
 }
 
 /// Authentication context actions
@@ -32,6 +35,8 @@ pub enum AuthAction {
     Logout,
     SetLoading(bool),
     ValidateToken,
+    ShowReauthModal,
+    HideReauthModal,
 }
 
 /// Authentication context
@@ -43,6 +48,8 @@ impl Default for AuthContextData {
             auth_state: None,
             is_loading: true, // Start with loading to check sessionStorage
             error: None,
+            show_reauth_modal: false,
+            auth_expired: false,
         }
     }
 }
@@ -67,6 +74,8 @@ impl Reducible for AuthContextData {
                     auth_state: Some(auth_state),
                     is_loading: false,
                     error: None,
+                    show_reauth_modal: false,
+                    auth_expired: false, // Reset on new login
                 })
             }
             AuthAction::Logout => {
@@ -82,6 +91,8 @@ impl Reducible for AuthContextData {
                     auth_state: None,
                     is_loading: false,
                     error: None,
+                    show_reauth_modal: false,
+                    auth_expired: false,
                 })
             }
             AuthAction::SetLoading(is_loading) => Rc::new(Self {
@@ -99,15 +110,36 @@ impl Reducible for AuthContextData {
                                 let _ = storage.remove_item(AuthConfig::AUTH_STATE_KEY);
                             }
                             return Rc::new(Self {
-                                auth_state: None,
+                                auth_state: self.auth_state.clone(),
                                 is_loading: false,
                                 error: Some("Session expired. Please login again.".to_string()),
+                                show_reauth_modal: true,
+                                auth_expired: true,
                             });
                         }
                     }
                 }
                 Rc::new(self.as_ref().clone())
             }
+            AuthAction::ShowReauthModal => {
+                // Clear the token but keep auth state to maintain UI
+                let _ = set_auth_token(None);
+
+                Rc::new(Self {
+                    auth_state: self.auth_state.clone(), // Keep the auth state
+                    is_loading: false,
+                    error: Some(
+                        "Your session has expired. Please re-authenticate to continue.".to_string(),
+                    ),
+                    show_reauth_modal: true,
+                    auth_expired: true,
+                })
+            }
+            AuthAction::HideReauthModal => Rc::new(Self {
+                show_reauth_modal: false,
+                auth_expired: false,
+                ..(*self).clone()
+            }),
         }
     }
 }
@@ -127,6 +159,22 @@ pub struct AuthProviderProps {
 #[function_component(AuthProvider)]
 pub fn auth_provider(props: &AuthProviderProps) -> Html {
     let auth_state = use_reducer(AuthContextData::default);
+
+    // Set up global auth error handler
+    {
+        let auth_state = auth_state.clone();
+        use_effect_with((), move |_| {
+            let auth_state = auth_state.clone();
+            super::error_handler::set_auth_error_callback(Rc::new(move || {
+                auth_state.dispatch(AuthAction::ShowReauthModal);
+            }));
+
+            // Cleanup on unmount
+            move || {
+                super::error_handler::clear_auth_error_callback();
+            }
+        });
+    }
 
     // Load auth state from sessionStorage on mount
     {
@@ -186,6 +234,7 @@ pub fn auth_provider(props: &AuthProviderProps) -> Html {
 
     html! {
         <ContextProvider<AuthContext> context={auth_state}>
+            <ReauthModal />
             {props.children.clone()}
         </ContextProvider<AuthContext>>
     }

@@ -84,21 +84,20 @@ impl UseWebAuthnHandle {
                                     state.set(WebAuthnState::Idle);
                                 }
                                 Err(e) => {
-                                    gloo::console::error!("Registration failed:", &e);
+                                    gloo::console::error!("Registration failed:", &e.to_string());
                                     state.set(WebAuthnState::Error(get_user_friendly_error(&e)));
                                 }
                             }
                         }
                         Err(e) => {
-                            gloo::console::error!("Credential creation failed:", e.to_string());
-                            state.set(WebAuthnState::Error(get_user_friendly_error(
-                                &e.to_string(),
-                            )));
+                            gloo::console::error!("Credential creation failed:", &e.to_string());
+                            // e is a WebAuthnBrowserError, not ClientError
+                            state.set(WebAuthnState::Error(e.to_string()));
                         }
                     }
                 }
                 Err(e) => {
-                    gloo::console::error!("Registration start failed:", &e);
+                    gloo::console::error!("Registration start failed:", &e.to_string());
                     state.set(WebAuthnState::Error(get_user_friendly_error(&e)));
                 }
             }
@@ -157,21 +156,20 @@ impl UseWebAuthnHandle {
                                     state.set(WebAuthnState::Idle);
                                 }
                                 Err(e) => {
-                                    gloo::console::error!("Authentication failed:", &e);
+                                    gloo::console::error!("Authentication failed:", &e.to_string());
                                     state.set(WebAuthnState::Error(get_user_friendly_error(&e)));
                                 }
                             }
                         }
                         Err(e) => {
-                            gloo::console::error!("Credential get failed:", e.to_string());
-                            state.set(WebAuthnState::Error(get_user_friendly_error(
-                                &e.to_string(),
-                            )));
+                            gloo::console::error!("Credential get failed:", &e.to_string());
+                            // e is a WebAuthnBrowserError, not ClientError
+                            state.set(WebAuthnState::Error(e.to_string()));
                         }
                     }
                 }
                 Err(e) => {
-                    gloo::console::error!("Authentication start failed:", &e);
+                    gloo::console::error!("Authentication start failed:", &e.to_string());
                     state.set(WebAuthnState::Error(get_user_friendly_error(&e)));
                 }
             }

@@ -1,6 +1,6 @@
 //! Authentication API service
 
-use crate::client::create_public_client;
+use crate::client::{create_public_client, ClientError};
 use gate_http::types::{
     AuthCompleteRequest, AuthCompleteResponse, AuthStartResponse, RegisterCompleteRequest,
     RegisterCompleteResponse, RegisterStartResponse,
@@ -24,14 +24,13 @@ impl Default for AuthApiService {
 
 impl AuthApiService {
     /// Start registration process
-    pub async fn start_registration(&self, name: String) -> Result<RegisterStartResponse, String> {
-        let client = create_public_client().map_err(|e| format!("Failed to get client: {e}"))?;
-
+    pub async fn start_registration(
+        &self,
+        name: String,
+    ) -> Result<RegisterStartResponse, ClientError> {
+        let client = create_public_client()?;
         let request = gate_http::types::RegisterStartRequest { name };
-        client
-            .register_start(request)
-            .await
-            .map_err(|e| e.to_string())
+        client.register_start(request).await
     }
 
     /// Complete registration with the credential
@@ -41,8 +40,8 @@ impl AuthApiService {
         credential: serde_json::Value,
         device_name: Option<String>,
         bootstrap_token: Option<String>,
-    ) -> Result<RegisterCompleteResponse, String> {
-        let client = create_public_client().map_err(|e| format!("Failed to get client: {e}"))?;
+    ) -> Result<RegisterCompleteResponse, ClientError> {
+        let client = create_public_client()?;
 
         let request = RegisterCompleteRequest {
             session_id,
@@ -53,23 +52,16 @@ impl AuthApiService {
 
         // Use bootstrap endpoint if bootstrap token is present
         if bootstrap_token.is_some() {
-            client
-                .register_bootstrap(request)
-                .await
-                .map_err(|e| e.to_string())
+            client.register_bootstrap(request).await
         } else {
-            client
-                .register_complete(request)
-                .await
-                .map_err(|e| e.to_string())
+            client.register_complete(request).await
         }
     }
 
     /// Start authentication process
-    pub async fn start_authentication(&self) -> Result<AuthStartResponse, String> {
-        let client = create_public_client().map_err(|e| format!("Failed to get client: {e}"))?;
-
-        client.auth_start().await.map_err(|e| e.to_string())
+    pub async fn start_authentication(&self) -> Result<AuthStartResponse, ClientError> {
+        let client = create_public_client()?;
+        client.auth_start().await
     }
 
     /// Complete authentication with the credential
@@ -77,17 +69,14 @@ impl AuthApiService {
         &self,
         session_id: String,
         credential: serde_json::Value,
-    ) -> Result<AuthCompleteResponse, String> {
-        let client = create_public_client().map_err(|e| format!("Failed to get client: {e}"))?;
+    ) -> Result<AuthCompleteResponse, ClientError> {
+        let client = create_public_client()?;
 
         let request = AuthCompleteRequest {
             session_id,
             credential,
         };
 
-        client
-            .auth_complete(request)
-            .await
-            .map_err(|e| e.to_string())
+        client.auth_complete(request).await
     }
 }

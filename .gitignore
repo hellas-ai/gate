@@ -72,9 +72,13 @@ yarn-error.log*
 # Frontend build artifacts
 crates/gui/gen/
 crates/gui/resources/
-crates/frontend/dist/
-crates/frontend/dist
-crates/frontend/assets/tailwind.output.css
+# Frontend build artifacts
+crates/frontend-daemon/dist/
+crates/frontend-daemon/assets/tailwind.output.css
+crates/frontend-tauri/dist/
+crates/frontend-tauri/assets/tailwind.output.css
+crates/frontend-relay/dist/
+crates/frontend-relay/assets/tailwind.output.css
 
 # Test files (temporary)
 crates/chat-ui/test_*.rs

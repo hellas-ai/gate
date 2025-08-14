@@ -1,6 +1,6 @@
 # gate-chat-ui
 
-Reusable chat interface component for Yew applications. Used by gate-frontend to provide the chat testing interface.
+Reusable chat interface component for Yew applications. Used by gate-frontend-daemon and other frontends to provide the chat testing interface.
 
 ## Responsibilities
 

@@ -28,7 +28,8 @@ NC = \033[0m # No Color
 
 # Phony targets
 .PHONY: help build dev run clean test test-unit test-integration lint fmt fmt-check check audit \
-        frontend-build-dev frontend-build frontend-clean frontend-daemon-dev frontend-daemon-build \
+        frontend-build-dev frontend-build frontend-clean frontend-dev \
+        frontend-daemon-dev frontend-daemon-build \
         frontend-tauri-dev frontend-tauri-build frontend-relay-dev frontend-relay-build \
         gui-dev gui-build gui-build-dev gui-build-dmg \
         docs docs-deps ci pre-commit db-migrate db-reset server p2p tlsforward all-services
@@ -106,18 +107,19 @@ audit: ## Security audit of dependencies
 	$(CARGO) audit
 
 
-frontend-build: ## Build frontend for production
-	@echo "$(GREEN)Building frontend for production...$(NC)"
-	cd crates/frontend && $(TRUNK) build --release
+## Frontend (alias for frontend-daemon)
+frontend-dev: frontend-daemon-dev ## Run frontend development server (alias for frontend-daemon-dev)
 
-frontend-build-dev: ## Build frontend dev
-	@echo "$(GREEN)Building frontend for dev...$(NC)"
-	cd crates/frontend && $(TRUNK) build
+frontend-build: frontend-daemon-build ## Build frontend for production (alias for frontend-daemon-build)
+
+frontend-build-dev: ## Build frontend for development
+	@echo "$(GREEN)Building frontend for development...$(NC)"
+	cd crates/frontend-daemon && $(TRUNK) build
 
 frontend-clean: ## Clean frontend build artifacts
 	@echo "$(RED)Cleaning frontend artifacts...$(NC)"
-	rm -rf crates/frontend/dist
-	rm -f crates/frontend/assets/tailwind.output.css
+	rm -rf crates/frontend-daemon/dist
+	rm -f crates/frontend-daemon/assets/tailwind.output.css
 
 ## Frontend - Daemon
 frontend-daemon-dev: ## Run daemon frontend development server

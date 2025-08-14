@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod client;
+pub mod client_wrapper;
 pub mod components;
 pub mod config;
 pub mod hooks;

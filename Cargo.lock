@@ -2625,27 +2625,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gate-frontend"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "gate-chat-ui",
- "gate-fixtures",
- "gate-http",
- "gloo",
- "js-sys",
- "once_cell",
- "reqwest",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "wasm-logger",
- "web-sys",
- "yew",
-]
-
-[[package]]
 name = "gate-frontend-common"
 version = "0.1.0"
 dependencies = [
@@ -2676,6 +2655,7 @@ dependencies = [
 name = "gate-frontend-daemon"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "gate-chat-ui",
  "gate-frontend-common",
  "getrandom 0.3.3",

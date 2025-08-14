@@ -25,7 +25,10 @@ pub fn config_editor() -> Html {
                         Ok(json) => config_json.set(json),
                         Err(e) => error_message.set(Some(format!("Failed to format config: {e}"))),
                     },
-                    Err(e) => error_message.set(Some(format!("Failed to load config: {e}"))),
+                    Err(e) => {
+                        // Auth errors are handled automatically by the client wrapper
+                        error_message.set(Some(format!("Failed to load config: {e}")));
+                    }
                 }
                 is_loading.set(false);
             });

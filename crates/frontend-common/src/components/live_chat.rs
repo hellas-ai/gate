@@ -73,6 +73,7 @@ pub fn live_chat() -> Html {
                         available_models.set(models);
                     }
                     Err(e) => {
+                        // Auth errors are handled automatically by the client wrapper
                         web_sys::console::error_1(&format!("Failed to fetch models: {e}").into());
                         error.set(Some(format!("Failed to fetch models: {e}")));
                     }
@@ -172,6 +173,7 @@ pub fn live_chat() -> Html {
                         }
                     }
                     Err(e) => {
+                        // Auth errors are handled automatically by the client wrapper
                         error.set(Some(format!("API Error: {e}")));
                         web_sys::console::error_1(&format!("API Error: {e}").into());
                         // Remove the user message if the API call failed
