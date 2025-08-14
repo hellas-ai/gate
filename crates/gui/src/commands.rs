@@ -1,18 +1,20 @@
 use crate::state::{DaemonState, TlsForwardStatus};
 use gate_daemon::{Settings, runtime::Runtime};
 use tauri::{AppHandle, State};
-use tracing::error;
+use tracing::{error, info, debug};
 
 #[tauri::command]
 pub async fn start_daemon(
     state: State<'_, DaemonState>,
-    _app: AppHandle,
+    app: AppHandle,
     config: Option<Settings>,
 ) -> Result<String, String> {
     // Check if already running
     if state.is_running().await {
         return Err("Daemon is already running".to_string());
     }
+
+    info!("Starting GUI daemon from working directory: {:?}", std::env::current_dir().unwrap_or_default());
 
     // Load or use provided config
     let settings = if let Some(cfg) = config {
@@ -27,10 +29,55 @@ pub async fn start_daemon(
             .unwrap_or_else(|_| Settings::gui_preset())
     };
 
+    // Determine static directory path for frontend assets
+    let static_dir = if cfg!(debug_assertions) {
+        // Development mode - try to find the project root and use absolute path
+        let current_dir = std::env::current_dir().unwrap_or_default();
+        let mut project_root = current_dir.clone();
+        
+        // Try to find the project root by looking for Cargo.toml with workspace
+        while !project_root.join("Cargo.toml").exists() || 
+              !std::fs::read_to_string(project_root.join("Cargo.toml"))
+                  .unwrap_or_default()
+                  .contains("[workspace]") {
+            if let Some(parent) = project_root.parent() {
+                project_root = parent.to_path_buf();
+            } else {
+                break;
+            }
+        }
+        
+        let dir = project_root.join("crates/frontend-daemon/dist").to_string_lossy().to_string();
+        info!("GUI daemon starting in debug mode, using static dir: {}", dir);
+        dir
+    } else {
+        // Production mode - use bundled resources
+        match app.path().resolve("resources/frontend-daemon", tauri::path::BaseDirectory::Resource) {
+            Ok(path) => {
+                let dir = path.to_string_lossy().to_string();
+                info!("GUI daemon starting in release mode, using static dir: {}", dir);
+                dir
+            },
+            Err(e) => {
+                error!("Failed to resolve resource directory: {}", e);
+                // Fallback to relative path if resource resolution fails
+                let dir = "crates/frontend-daemon/dist".to_string();
+                info!("Using fallback static dir: {}", dir);
+                dir
+            }
+        }
+    };
+
+    debug!("Checking if static directory exists: {}", static_dir);
+    if !std::path::Path::new(&static_dir).exists() {
+        return Err(format!("Static directory not found: {}", static_dir));
+    }
+
     // Build runtime
     let runtime = Runtime::builder()
         .gui_mode()
         .with_settings(settings)
+        .with_static_dir(static_dir)
         .build()
         .await
         .map_err(|e| format!("Failed to build runtime: {e}"))?;
