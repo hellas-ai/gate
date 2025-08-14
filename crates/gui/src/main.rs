@@ -21,7 +21,7 @@ fn main() {
         if std::env::var("RUST_LOG").is_ok() || cfg!(debug_assertions) {
             unsafe {
                 use winapi::um::consoleapi::AllocConsole;
-                use winapi::um::wincon::{AttachConsole, ATTACH_PARENT_PROCESS};
+                use winapi::um::wincon::{ATTACH_PARENT_PROCESS, AttachConsole};
 
                 // Try to attach to parent console first, then allocate if needed
                 if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
