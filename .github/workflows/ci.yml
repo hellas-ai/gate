@@ -129,8 +129,14 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev clang xdg-utils
     
-    # Build frontends and GUI
+    # Build frontends and GUI (without signing for PRs)
     - name: Build GUI
+      if: github.event_name == 'pull_request'
+      run: cd crates/gui && cargo tauri build
+    
+    # Build frontends and GUI with signing (for pushes to master)
+    - name: Build GUI and Sign
+      if: github.event_name != 'pull_request'
       env:
         APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         APPLE_ID: ${{ secrets.APPLE_ID }}
