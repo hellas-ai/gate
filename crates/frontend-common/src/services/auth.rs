@@ -38,7 +38,7 @@ impl AuthApiService {
         &self,
         session_id: String,
         credential: serde_json::Value,
-        device_name: Option<String>,
+        key_name: Option<String>,
         bootstrap_token: Option<String>,
     ) -> Result<RegisterCompleteResponse, ClientError> {
         let client = create_public_client()?;
@@ -46,7 +46,8 @@ impl AuthApiService {
         let request = RegisterCompleteRequest {
             session_id,
             credential,
-            device_name,
+            device_name: None, // Device name is now handled separately
+            key_name,
             bootstrap_token: bootstrap_token.clone(),
         };
 

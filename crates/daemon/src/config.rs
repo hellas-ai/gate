@@ -143,6 +143,9 @@ pub struct ServerConfig {
     /// Prometheus metrics endpoint port (if enabled)
     #[serde(default)]
     pub metrics_port: Option<u16>,
+    /// Device name for this Gate instance
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_name: Option<String>,
 }
 
 impl Default for ServerConfig {

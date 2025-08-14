@@ -12,6 +12,7 @@ use gate_http::{
     services::HttpIdentity,
     types::{ConfigResponse, ConfigUpdateRequest},
 };
+use serde::{Deserialize, Serialize};
 use tracing::info;
 
 /// Get the full configuration
@@ -196,9 +197,97 @@ pub async fn update_config(
     }))
 }
 
+/// Device name update request
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DeviceNameUpdateRequest {
+    pub device_name: String,
+}
+
+/// Update device name
+#[utoipa::path(
+    patch,
+    path = "/api/config/device",
+    request_body = DeviceNameUpdateRequest,
+    responses(
+        (status = 200, description = "Device name updated"),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer" = [])
+    ),
+    tag = "config"
+)]
+pub async fn update_device_name(
+    identity: HttpIdentity,
+    extract::State(state): extract::State<AppState<ServerState>>,
+    extract::Json(request): extract::Json<DeviceNameUpdateRequest>,
+) -> Result<response::Json<serde_json::Value>, HttpError> {
+    // Check permission to write configuration
+    let permission_manager = &state.data.permission_manager;
+    let config_object = ObjectIdentity {
+        namespace: TargetNamespace::System,
+        kind: ObjectKind::Config,
+        id: ObjectId::new("device"),
+    };
+
+    let local_ctx = LocalContext::from_http_identity(&identity, state.state_backend.as_ref()).await;
+    let local_identity =
+        SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
+
+    if permission_manager
+        .check(&local_identity, Action::Write, &config_object)
+        .await
+        .is_err()
+    {
+        return Err(HttpError::AuthorizationFailed(
+            "Permission denied: cannot update device configuration".to_string(),
+        ));
+    }
+
+    // Get current configuration
+    let mut current_config = (*state.data.settings).clone();
+
+    // Update device name
+    current_config.server.device_name = Some(request.device_name.clone());
+
+    // Write to runtime config file
+    let state_dir = StateDir::new();
+    let config_path = state_dir.config_path();
+
+    // Ensure parent directory exists
+    if let Some(parent) = config_path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            HttpError::InternalServerError(format!("Failed to create config directory: {e}"))
+        })?;
+    }
+
+    // Write the configuration as JSON
+    let config_string = serde_json::to_string_pretty(&current_config)
+        .map_err(|e| HttpError::InternalServerError(format!("Failed to serialize config: {e}")))?;
+
+    tokio::fs::write(&config_path, config_string)
+        .await
+        .map_err(|e| HttpError::InternalServerError(format!("Failed to write config file: {e}")))?;
+
+    info!(
+        "Updated device name to '{}' in config at {}",
+        request.device_name,
+        config_path.display()
+    );
+
+    Ok(response::Json(serde_json::json!({
+        "success": true,
+        "device_name": request.device_name
+    })))
+}
+
 /// Create the configuration routes
 pub fn router() -> axum::Router<AppState<ServerState>> {
-    axum::Router::new().route("/api/config", routing::get(get_config).put(update_config))
+    axum::Router::new()
+        .route("/api/config", routing::get(get_config).put(update_config))
+        .route("/api/config/device", routing::patch(update_device_name))
     // Note: auth middleware is applied when converting to the final router
 }
 
@@ -208,7 +297,8 @@ pub fn add_routes(
 ) -> utoipa_axum::router::OpenApiRouter<AppState<ServerState>> {
     router = router
         .routes(utoipa_axum::routes!(get_config))
-        .routes(utoipa_axum::routes!(update_config));
+        .routes(utoipa_axum::routes!(update_config))
+        .routes(utoipa_axum::routes!(update_device_name));
 
     router
 }

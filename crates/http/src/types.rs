@@ -65,6 +65,9 @@ pub struct RegisterCompleteRequest {
     /// Optional device name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_name: Option<String>,
+    /// Optional key name for the credential
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_name: Option<String>,
     /// Optional bootstrap token (required for first user)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bootstrap_token: Option<String>,
