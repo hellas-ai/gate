@@ -162,7 +162,7 @@ fn local_app_content() -> Html {
                 </div>
 
                 // Tab content
-                <div class="flex-1 overflow-hidden">
+                <div class="flex-1 overflow-y-auto">
                     {match *active_tab {
                         Tab::Chat => html! { <LiveChat /> },
                         Tab::Config => html! { <ConfigEditor /> },
