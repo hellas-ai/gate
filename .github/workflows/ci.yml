@@ -40,6 +40,7 @@ jobs:
   
   gui-build:
     name: GUI Build
+    needs: test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
