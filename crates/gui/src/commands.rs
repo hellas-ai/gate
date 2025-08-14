@@ -76,17 +76,72 @@ pub async fn start_daemon(
             }
             Err(e) => {
                 error!("Failed to resolve resource directory: {}", e);
-                // Fallback to relative path if resource resolution fails
-                let dir = "crates/frontend-daemon/dist".to_string();
-                info!("Using fallback static dir: {}", dir);
-                dir
+
+                // Better fallback strategy for production builds
+                let exe_dir = std::env::current_exe()
+                    .ok()
+                    .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+                // Try different possible locations for the frontend assets
+                let possible_dirs = vec![
+                    exe_dir.join("frontend-daemon"),
+                    exe_dir.join("dist"),
+                    exe_dir.join("static"),
+                    exe_dir.join("resources").join("frontend-daemon"),
+                    std::env::current_dir()
+                        .unwrap_or_default()
+                        .join("frontend-daemon"),
+                ];
+
+                let mut found_dir = None;
+                for dir in possible_dirs {
+                    if dir.exists() {
+                        let dir_str = dir.to_string_lossy().to_string();
+                        info!("Found fallback static dir: {}", dir_str);
+                        found_dir = Some(dir_str);
+                        break;
+                    }
+                }
+
+                found_dir.unwrap_or_else(|| {
+                    // Final fallback
+                    let dir = exe_dir
+                        .join("frontend-daemon")
+                        .to_string_lossy()
+                        .to_string();
+                    info!("Using final fallback static dir: {}", dir);
+                    dir
+                })
             }
         }
     };
 
     debug!("Checking if static directory exists: {}", static_dir);
     if !std::path::Path::new(&static_dir).exists() {
-        return Err(format!("Static directory not found: {}", static_dir));
+        // Provide detailed diagnostic information
+        let current_dir = std::env::current_dir().unwrap_or_default();
+        let exe_path = std::env::current_exe().unwrap_or_default();
+
+        let diagnostic = format!(
+            "Static directory not found: {}\n\nDiagnostic Information:\n\
+            - Current working directory: {:?}\n\
+            - Executable path: {:?}\n\
+            - Debug mode: {}\n\
+            - Platform: {}\n\n\
+            Possible solutions:\n\
+            1. Ensure frontend-daemon assets are properly bundled with the application\n\
+            2. Check that the installation directory contains the required static files\n\
+            3. Verify Tauri resource bundling configuration in tauri.conf.json",
+            static_dir,
+            current_dir,
+            exe_path,
+            cfg!(debug_assertions),
+            std::env::consts::OS
+        );
+
+        error!("{}", diagnostic);
+        return Err(diagnostic);
     }
 
     // Build runtime

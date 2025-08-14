@@ -15,10 +15,30 @@ fn main() {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
+    // On Windows, allocate a console for logging if RUST_LOG is set or if running in debug mode
+    #[cfg(target_os = "windows")]
+    {
+        if std::env::var("RUST_LOG").is_ok() || cfg!(debug_assertions) {
+            unsafe {
+                use winapi::um::wincon::AllocConsole;
+                use winapi::um::wincon::FreeConsole;
+
+                // Try to allocate a console - this may fail if one already exists
+                let _ = AllocConsole();
+            }
+        }
+    }
+
     // Initialize tracing for the GUI app
-    tracing_subscriber::fmt()
-        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "".to_string()))
-        .init();
+    let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| {
+        if cfg!(debug_assertions) {
+            "debug".to_string()
+        } else {
+            "info".to_string()
+        }
+    });
+
+    tracing_subscriber::fmt().with_env_filter(log_level).init();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
