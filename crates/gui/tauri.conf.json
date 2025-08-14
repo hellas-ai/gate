@@ -34,6 +34,11 @@
     ],
     "resources": {
       "resources/frontend-daemon/": "frontend-daemon/"
+    },
+    "macOS": {
+      "entitlements": "./entitlements.plist",
+      "hardenedRuntime": true,
+      "signingIdentity": "-"
     }
   },
   "plugins": {}
