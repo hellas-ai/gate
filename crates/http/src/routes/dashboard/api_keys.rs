@@ -290,9 +290,9 @@ where
 
 /// Generate a new API key
 fn generate_api_key() -> String {
-    use rand::{Rng, distributions::Alphanumeric};
+    use rand::{thread_rng, distributions::Alphanumeric, Rng};
 
-    let key: String = rand::thread_rng()
+    let key: String = thread_rng()
         .sample_iter(&Alphanumeric)
         .take(32)
         .map(char::from)
