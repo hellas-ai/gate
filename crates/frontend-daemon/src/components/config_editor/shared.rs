@@ -15,13 +15,11 @@ pub fn config_section(props: &ConfigSectionProps) -> Html {
     let is_enabled = props.enabled.unwrap_or(true);
     let expanded = use_state(|| is_enabled);
 
-    // Auto-collapse when disabled
+    // Auto-collapse when disabled, auto-expand when enabled
     {
         let expanded = expanded.clone();
         use_effect_with(is_enabled, move |enabled| {
-            if !enabled {
-                expanded.set(false);
-            }
+            expanded.set(*enabled);
             || ()
         });
     }
@@ -77,49 +75,53 @@ pub fn config_section(props: &ConfigSectionProps) -> Html {
                 <div class="flex items-center gap-3">
                     {if props.on_toggle.is_some() {
                         html! {
-                            <button
-                                type="button"
-                                role="switch"
-                                aria-checked={is_enabled.to_string()}
-                                onclick={on_toggle_enabled}
-                                class={classes!(
-                                    "relative", "inline-flex", "h-5", "w-9", "items-center", "rounded-full",
-                                    "transition-colors", "focus:outline-none", "focus:ring-2",
-                                    "focus:ring-blue-500", "focus:ring-offset-1",
-                                    if is_enabled {
-                                        "bg-blue-600"
-                                    } else {
-                                        "bg-gray-300 dark:bg-gray-600"
-                                    }
-                                )}
-                            >
-                                <span
+                            <div class="flex items-center gap-2">
+                                <span class="text-sm text-gray-600 dark:text-gray-400">{"Enable"}</span>
+                                <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={is_enabled.to_string()}
+                                    onclick={on_toggle_enabled}
                                     class={classes!(
-                                        "inline-block", "h-3.5", "w-3.5", "rounded-full", "bg-white",
-                                        "transition-transform", "duration-200",
+                                        "relative", "inline-flex", "h-5", "w-9", "items-center", "rounded-full",
+                                        "transition-colors", "focus:outline-none", "focus:ring-2",
+                                        "focus:ring-blue-500", "focus:ring-offset-1",
                                         if is_enabled {
-                                            "translate-x-5"
+                                            "bg-blue-600"
                                         } else {
-                                            "translate-x-1"
+                                            "bg-gray-300 dark:bg-gray-600"
                                         }
                                     )}
-                                />
-                            </button>
+                                >
+                                    <span
+                                        class={classes!(
+                                            "inline-block", "h-3.5", "w-3.5", "rounded-full", "bg-white",
+                                            "transition-transform", "duration-200",
+                                            if is_enabled {
+                                                "translate-x-5"
+                                            } else {
+                                                "translate-x-1"
+                                            }
+                                        )}
+                                    />
+                                </button>
+                            </div>
                         }
                     } else {
-                        html! {}
+                        html! {
+                            <svg
+                                class={classes!(
+                                    "w-4", "h-4", "text-gray-500", "transition-transform", "duration-200",
+                                    if *expanded { "rotate-180" } else { "" }
+                                )}
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                            </svg>
+                        }
                     }}
-                    <svg
-                        class={classes!(
-                            "w-4", "h-4", "text-gray-500", "transition-transform", "duration-200",
-                            if *expanded { "rotate-180" } else { "" }
-                        )}
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                    >
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                    </svg>
                 </div>
             </div>
             <div

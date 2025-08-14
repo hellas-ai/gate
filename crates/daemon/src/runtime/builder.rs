@@ -61,8 +61,19 @@ impl RuntimeBuilder {
         state_dir.create_directories().await?;
 
         // Get or create settings
-
-        let settings = self.settings.unwrap_or_else(Settings::gui_preset);
+        // First check if a config file exists, if so load from it
+        let settings = if let Some(settings) = self.settings {
+            settings
+        } else {
+            let config_path = state_dir.config_path();
+            if config_path.exists() {
+                info!("Loading configuration from: {}", config_path.display());
+                Settings::load_from_file(&config_path.to_string_lossy())?
+            } else {
+                info!("No config file found, using default settings");
+                Settings::gui_preset()
+            }
+        };
 
         // Get database URL
         let database_url = self.database_url.unwrap_or_else(|| {

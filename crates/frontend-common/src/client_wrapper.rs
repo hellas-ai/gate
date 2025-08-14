@@ -1,7 +1,13 @@
 //! Wrapped client that handles auth errors automatically
 
-use gate_http::client::{error::ClientError, AuthenticatedGateClient};
-use std::ops::Deref;
+use gate_http::client::{
+    error::ClientError,
+    inference_typed::{
+        ChatCompletionRequest, ChatCompletionResponse, MessageRequest, MessageResponse,
+        ModelsResponse,
+    },
+    AuthenticatedGateClient,
+};
 
 /// Wrapper around AuthenticatedGateClient that handles auth errors
 #[derive(Clone)]
@@ -33,17 +39,41 @@ impl WrappedAuthClient {
         }
     }
 
-    /// Get a reference to the inner client
-    pub fn inner(&self) -> &AuthenticatedGateClient {
-        &self.inner
+    /// Create a request builder with authentication
+    pub fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+        self.inner.request(method, path)
     }
-}
 
-// Allow the wrapper to be used like the inner client for method calls
-impl Deref for WrappedAuthClient {
-    type Target = AuthenticatedGateClient;
+    /// List available models (requires authentication)
+    pub async fn list_models(&self) -> Result<ModelsResponse, ClientError> {
+        let request = self.request(reqwest::Method::GET, "/v1/models");
+        self.execute(request).await
+    }
 
-    fn deref(&self) -> &Self::Target {
+    /// Create a chat completion (requires authentication)
+    pub async fn create_chat_completion(
+        &self,
+        req: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse, ClientError> {
+        let request = self
+            .request(reqwest::Method::POST, "/v1/chat/completions")
+            .json(&req);
+        self.execute(request).await
+    }
+
+    /// Create a message (Anthropic format, requires authentication)
+    pub async fn create_message(
+        &self,
+        req: MessageRequest,
+    ) -> Result<MessageResponse, ClientError> {
+        let request = self
+            .request(reqwest::Method::POST, "/v1/messages")
+            .json(&req);
+        self.execute(request).await
+    }
+
+    /// Get a reference to the inner client (use sparingly - prefer wrapped methods)
+    pub fn inner(&self) -> &AuthenticatedGateClient {
         &self.inner
     }
 }

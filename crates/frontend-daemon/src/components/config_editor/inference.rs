@@ -1,7 +1,7 @@
 use yew::prelude::*;
 
 use super::container::LocalInferenceConfig;
-use super::shared::{ConfigField, ConfigInput, ConfigSection, ConfigToggle};
+use super::shared::{ConfigField, ConfigInput, ConfigSection};
 
 #[derive(Properties, PartialEq)]
 pub struct InferenceConfigSectionProps {
@@ -23,16 +23,6 @@ pub fn inference_config_section(props: &InferenceConfigSectionProps) -> Html {
             } else {
                 on_change.emit(None);
             }
-        })
-    };
-
-    let on_inference_enabled_change = {
-        let config = config.clone();
-        let on_change = props.on_change.clone();
-        Callback::from(move |value: bool| {
-            let mut new_config = config.clone();
-            new_config.enabled = value;
-            on_change.emit(Some(new_config));
         })
     };
 
@@ -75,18 +65,11 @@ pub fn inference_config_section(props: &InferenceConfigSectionProps) -> Html {
     };
 
     html! {
-        <ConfigSection 
+        <ConfigSection
             title="Local Inference Configuration"
             enabled={enabled}
             on_toggle={on_enabled_toggle}
         >
-            <ConfigToggle
-                label="Inference Active"
-                checked={config.enabled}
-                on_change={on_inference_enabled_change}
-                help_text="Process inference requests when local inference is configured"
-            />
-
             <ConfigField
                 label="Maximum Concurrent Inferences"
                 help_text="Number of inference requests that can be processed simultaneously"

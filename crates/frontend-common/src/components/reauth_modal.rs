@@ -41,12 +41,16 @@ pub fn reauth_modal() -> Html {
         });
     }
 
-    // Auto-hide modal when authenticated
+    // Auto-hide modal and reload page when authenticated
     {
         let auth = auth.clone();
         use_effect_with(auth.auth_state.clone(), move |auth_state| {
             if auth_state.is_some() && auth.show_reauth_modal {
                 auth.dispatch(AuthAction::HideReauthModal);
+                // Reload the page to refresh all UI elements
+                if let Some(window) = web_sys::window() {
+                    let _ = window.location().reload();
+                }
             }
         });
     }

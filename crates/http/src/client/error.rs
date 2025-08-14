@@ -56,11 +56,7 @@ impl ClientError {
     /// Check if this is an authentication error that requires re-authentication
     pub fn is_auth_expired(&self) -> bool {
         match self {
-            Self::AuthenticationFailed(msg) => {
-                msg.contains("InvalidSignature")
-                    || msg.contains("Token validation failed")
-                    || msg.contains("Token has expired")
-            }
+            Self::AuthenticationFailed(_) => true, // All 401 errors should trigger re-auth
             _ => false,
         }
     }

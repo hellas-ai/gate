@@ -64,11 +64,9 @@ run: ## Run the Gate server
 clean: ## Clean all build artifacts
 	@echo "$(RED)Cleaning build artifacts...$(NC)"
 	$(CARGO) clean
-	rm -rf crates/frontend/dist
-	rm -rf crates/frontend-daemon/dist
-	rm -rf crates/frontend-tauri/dist
-	rm -rf crates/frontend-relay/dist
-	rm -f crates/frontend/assets/tailwind.output.css
+	rm -rf crates/frontend-daemon/dist/*
+	rm -rf crates/frontend-tauri/dist/*
+	rm -rf crates/frontend-relay/dist/*
 	rm -f crates/frontend-daemon/assets/tailwind.output.css
 	rm -f crates/frontend-tauri/assets/tailwind.output.css
 	rm -f crates/frontend-relay/assets/tailwind.output.css
@@ -118,7 +116,7 @@ frontend-build-dev: ## Build frontend for development
 
 frontend-clean: ## Clean frontend build artifacts
 	@echo "$(RED)Cleaning frontend artifacts...$(NC)"
-	rm -rf crates/frontend-daemon/dist
+	rm -rf crates/frontend-daemon/dist/*
 	rm -f crates/frontend-daemon/assets/tailwind.output.css
 
 ## Frontend - Daemon

@@ -155,8 +155,10 @@ where
     let user = User {
         id: credential_id.clone(),
         name: Some(user_name.clone()),
+        enabled: true,
         created_at: Utc::now(),
         updated_at: Utc::now(),
+        disabled_at: None,
         metadata: std::collections::HashMap::new(),
     };
 

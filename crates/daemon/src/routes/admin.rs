@@ -4,7 +4,8 @@ use crate::config::Settings;
 use crate::permissions::{LocalContext, LocalPermissionManager};
 use axum::{extract::State, response::Json};
 use gate_core::access::{
-    Action, ObjectId, ObjectIdentity, ObjectKind, Permissions, SubjectIdentity, TargetNamespace,
+    Action, ObjectId, ObjectIdentity, ObjectKind, PermissionManager, Permissions, SubjectIdentity,
+    TargetNamespace,
 };
 use gate_core::types::User;
 use gate_http::{error::HttpError, services::HttpIdentity, state::AppState};
@@ -25,8 +26,10 @@ pub struct UserListResponse {
 pub struct UserInfo {
     pub id: String,
     pub name: Option<String>,
+    pub enabled: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub disabled_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<User> for UserInfo {
@@ -34,8 +37,10 @@ impl From<User> for UserInfo {
         UserInfo {
             id: user.id,
             name: user.name,
+            enabled: user.enabled,
             created_at: user.created_at,
             updated_at: user.updated_at,
+            disabled_at: user.disabled_at,
         }
     }
 }
@@ -58,13 +63,31 @@ fn default_page_size() -> usize {
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct UpdateUserRoleRequest {
-    pub role: String,
+pub struct UpdateUserStatusRequest {
+    pub enabled: bool,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct UpdateUserRoleResponse {
+pub struct UpdateUserStatusResponse {
     pub user: UserInfo,
+}
+
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct UserPermission {
+    pub action: String,
+    pub object: String,
+    pub granted_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct UserPermissionsResponse {
+    pub permissions: Vec<UserPermission>,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct GrantPermissionRequest {
+    pub action: String,
+    pub object: String,
 }
 
 /// List all users (admin only)
@@ -452,6 +475,338 @@ where
         .unwrap())
 }
 
+/// Update user status (enable/disable)
+#[utoipa::path(
+    patch,
+    path = "/api/admin/users/{user_id}/status",
+    params(
+        ("user_id" = String, Path, description = "User ID")
+    ),
+    request_body = UpdateUserStatusRequest,
+    responses(
+        (status = 200, description = "User status updated", body = UpdateUserStatusResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden - admin access required"),
+        (status = 404, description = "User not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("bearer" = [])
+    ),
+    tag = "admin"
+)]
+#[instrument(name = "update_user_status", skip(app_state))]
+pub async fn update_user_status<T>(
+    identity: HttpIdentity,
+    State(app_state): State<AppState<T>>,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+    Json(request): Json<UpdateUserStatusRequest>,
+) -> Result<Json<UpdateUserStatusResponse>, HttpError>
+where
+    T: Clone + Send + Sync + 'static + AsRef<Arc<Settings>> + AsRef<Arc<LocalPermissionManager>>,
+{
+    let permission_manager: &Arc<LocalPermissionManager> = app_state.data.as_ref().as_ref();
+
+    // Check permission to manage user
+    let user_object = ObjectIdentity {
+        namespace: TargetNamespace::System,
+        kind: ObjectKind::User,
+        id: ObjectId::new(user_id.clone()),
+    };
+
+    let local_ctx =
+        LocalContext::from_http_identity(&identity, app_state.state_backend.as_ref()).await;
+    let local_identity =
+        SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
+
+    if permission_manager
+        .check(&local_identity, Action::Manage, &user_object)
+        .await
+        .is_err()
+    {
+        warn!(
+            "User {} attempted to update status for user {} without permission",
+            identity.id, user_id
+        );
+        return Err(HttpError::AuthorizationFailed(
+            "Permission denied: cannot manage user".to_string(),
+        ));
+    }
+
+    // Prevent self-disable
+    if identity.id == user_id && !request.enabled {
+        warn!("User {} attempted to disable themselves", identity.id);
+        return Err(HttpError::BadRequest(
+            "Cannot disable your own account".to_string(),
+        ));
+    }
+
+    // Get and update user
+    let mut user = app_state
+        .state_backend
+        .get_user(&user_id)
+        .await
+        .map_err(|e| HttpError::InternalServerError(format!("Failed to get user: {e}")))?
+        .ok_or_else(|| HttpError::NotFound(format!("User {user_id} not found")))?;
+
+    user.enabled = request.enabled;
+    user.updated_at = chrono::Utc::now();
+    user.disabled_at = if request.enabled {
+        None
+    } else {
+        Some(chrono::Utc::now())
+    };
+
+    app_state
+        .state_backend
+        .update_user(&user)
+        .await
+        .map_err(|e| HttpError::InternalServerError(format!("Failed to update user: {e}")))?;
+
+    info!(
+        "User {} {} user {}",
+        identity.id,
+        if request.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        user_id
+    );
+
+    Ok(Json(UpdateUserStatusResponse {
+        user: UserInfo::from(user),
+    }))
+}
+
+/// Get user permissions
+#[utoipa::path(
+    get,
+    path = "/api/admin/users/{user_id}/permissions",
+    params(
+        ("user_id" = String, Path, description = "User ID")
+    ),
+    responses(
+        (status = 200, description = "User permissions", body = UserPermissionsResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "User not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("bearer" = [])
+    ),
+    tag = "admin"
+)]
+#[instrument(name = "get_user_permissions", skip(app_state))]
+pub async fn get_user_permissions<T>(
+    identity: HttpIdentity,
+    State(app_state): State<AppState<T>>,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+) -> Result<Json<UserPermissionsResponse>, HttpError>
+where
+    T: Clone + Send + Sync + 'static + AsRef<Arc<Settings>> + AsRef<Arc<LocalPermissionManager>>,
+{
+    let permission_manager: &Arc<LocalPermissionManager> = app_state.data.as_ref().as_ref();
+
+    // Check permission to view permissions
+    let user_object = ObjectIdentity {
+        namespace: TargetNamespace::System,
+        kind: ObjectKind::User,
+        id: ObjectId::new(user_id.clone()),
+    };
+
+    let local_ctx =
+        LocalContext::from_http_identity(&identity, app_state.state_backend.as_ref()).await;
+    let local_identity =
+        SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
+
+    if permission_manager
+        .check(&local_identity, Action::ViewPermissions, &user_object)
+        .await
+        .is_err()
+    {
+        // If can't view permissions, check if viewing own permissions
+        if identity.id != user_id {
+            return Err(HttpError::AuthorizationFailed(
+                "Permission denied: cannot view user permissions".to_string(),
+            ));
+        }
+    }
+
+    // Get permissions from database
+    let permissions = app_state
+        .state_backend
+        .list_user_permissions(&user_id)
+        .await
+        .map_err(|e| HttpError::InternalServerError(format!("Failed to get permissions: {e}")))?;
+
+    let user_permissions: Vec<UserPermission> = permissions
+        .into_iter()
+        .map(|(action, object, granted_at)| UserPermission {
+            action,
+            object,
+            granted_at,
+        })
+        .collect();
+
+    Ok(Json(UserPermissionsResponse {
+        permissions: user_permissions,
+    }))
+}
+
+/// Grant permission to user
+#[utoipa::path(
+    post,
+    path = "/api/admin/users/{user_id}/permissions",
+    params(
+        ("user_id" = String, Path, description = "User ID")
+    ),
+    request_body = GrantPermissionRequest,
+    responses(
+        (status = 204, description = "Permission granted"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "User not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("bearer" = [])
+    ),
+    tag = "admin"
+)]
+#[instrument(name = "grant_user_permission", skip(app_state))]
+pub async fn grant_user_permission<T>(
+    identity: HttpIdentity,
+    State(app_state): State<AppState<T>>,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+    Json(request): Json<GrantPermissionRequest>,
+) -> Result<axum::response::Response, HttpError>
+where
+    T: Clone + Send + Sync + 'static + AsRef<Arc<Settings>> + AsRef<Arc<LocalPermissionManager>>,
+{
+    let permission_manager: &Arc<LocalPermissionManager> = app_state.data.as_ref().as_ref();
+
+    // Parse the action
+    let action = serde_json::from_str::<Action>(&format!("\"{}\"", request.action))
+        .map_err(|_| HttpError::BadRequest(format!("Invalid action: {}", request.action)))?;
+
+    // Parse the object identity
+    let object = ObjectIdentity::from_string(&request.object)
+        .map_err(|e| HttpError::BadRequest(format!("Invalid object: {e}")))?;
+
+    // Check if granter has permission to grant
+    let local_ctx =
+        LocalContext::from_http_identity(&identity, app_state.state_backend.as_ref()).await;
+    let granter = SubjectIdentity::new(
+        identity.id.clone(),
+        identity.source.clone(),
+        local_ctx.clone(),
+    );
+
+    // Get grantee context
+    let grantee_ctx = LocalContext {
+        is_owner: false,
+        node_id: local_ctx.node_id.clone(),
+    };
+    let grantee = SubjectIdentity::new(user_id.clone(), identity.source.clone(), grantee_ctx);
+
+    permission_manager
+        .grant(&granter, &grantee, action.clone(), &object)
+        .await
+        .map_err(|e| HttpError::AuthorizationFailed(format!("Failed to grant permission: {e}")))?;
+
+    info!(
+        "User {} granted permission {:?} on {:?} to user {}",
+        identity.id, action, object, user_id
+    );
+
+    Ok(axum::response::Response::builder()
+        .status(204)
+        .body(axum::body::Body::empty())
+        .unwrap())
+}
+
+/// Revoke permission from user
+#[utoipa::path(
+    delete,
+    path = "/api/admin/users/{user_id}/permissions",
+    params(
+        ("user_id" = String, Path, description = "User ID"),
+        ("action" = String, Query, description = "Action to revoke"),
+        ("object" = String, Query, description = "Object to revoke permission for")
+    ),
+    responses(
+        (status = 204, description = "Permission revoked"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "User not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("bearer" = [])
+    ),
+    tag = "admin"
+)]
+#[instrument(name = "revoke_user_permission", skip(app_state))]
+pub async fn revoke_user_permission<T>(
+    identity: HttpIdentity,
+    State(app_state): State<AppState<T>>,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<axum::response::Response, HttpError>
+where
+    T: Clone + Send + Sync + 'static + AsRef<Arc<Settings>> + AsRef<Arc<LocalPermissionManager>>,
+{
+    let permission_manager: &Arc<LocalPermissionManager> = app_state.data.as_ref().as_ref();
+
+    let action_str = params
+        .get("action")
+        .ok_or_else(|| HttpError::BadRequest("Missing action parameter".to_string()))?;
+    let object_str = params
+        .get("object")
+        .ok_or_else(|| HttpError::BadRequest("Missing object parameter".to_string()))?;
+
+    // Parse the action
+    let action = serde_json::from_str::<Action>(&format!("\"{action_str}\""))
+        .map_err(|_| HttpError::BadRequest(format!("Invalid action: {action_str}")))?;
+
+    // Parse the object identity
+    let object = ObjectIdentity::from_string(object_str)
+        .map_err(|e| HttpError::BadRequest(format!("Invalid object: {e}")))?;
+
+    // Check if revoker has permission to revoke
+    let local_ctx =
+        LocalContext::from_http_identity(&identity, app_state.state_backend.as_ref()).await;
+    let revoker = SubjectIdentity::new(
+        identity.id.clone(),
+        identity.source.clone(),
+        local_ctx.clone(),
+    );
+
+    // Get subject context
+    let subject_ctx = LocalContext {
+        is_owner: false,
+        node_id: local_ctx.node_id.clone(),
+    };
+    let subject = SubjectIdentity::new(user_id.clone(), identity.source.clone(), subject_ctx);
+
+    permission_manager
+        .revoke(&revoker, &subject, action.clone(), &object)
+        .await
+        .map_err(|e| HttpError::AuthorizationFailed(format!("Failed to revoke permission: {e}")))?;
+
+    info!(
+        "User {} revoked permission {:?} on {:?} from user {}",
+        identity.id, action, object, user_id
+    );
+
+    Ok(axum::response::Response::builder()
+        .status(204)
+        .body(axum::body::Body::empty())
+        .unwrap())
+}
+
 /// Add admin routes
 pub fn add_routes<T>(router: OpenApiRouter<AppState<T>>) -> OpenApiRouter<AppState<T>>
 where
@@ -460,6 +815,9 @@ where
     router
         .routes(routes!(list_users))
         .routes(routes!(get_user))
-        // .routes(routes!(update_user_role))
+        .routes(routes!(update_user_status))
+        .routes(routes!(get_user_permissions))
+        .routes(routes!(grant_user_permission))
+        .routes(routes!(revoke_user_permission))
         .routes(routes!(delete_user))
 }

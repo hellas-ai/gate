@@ -57,4 +57,9 @@ pub trait StateBackend: Send + Sync {
         action: &Action,
         object: &ObjectIdentity,
     ) -> Result<()>;
+
+    async fn list_user_permissions(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<(String, String, chrono::DateTime<chrono::Utc>)>>;
 }

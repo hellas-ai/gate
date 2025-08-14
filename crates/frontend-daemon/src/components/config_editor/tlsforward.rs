@@ -54,11 +54,7 @@ pub fn tlsforward_config_section(props: &TlsForwardConfigSectionProps) -> Html {
         let on_change = props.on_change.clone();
         Callback::from(move |value: String| {
             let mut new_config = config.clone();
-            new_config.secret_key_path = if value.is_empty() {
-                None
-            } else {
-                Some(value)
-            };
+            new_config.secret_key_path = if value.is_empty() { None } else { Some(value) };
             on_change.emit(new_config);
         })
     };
@@ -76,7 +72,7 @@ pub fn tlsforward_config_section(props: &TlsForwardConfigSectionProps) -> Html {
     };
 
     html! {
-        <ConfigSection 
+        <ConfigSection
             title="TLS Forward Configuration"
             enabled={props.config.enabled}
             on_toggle={on_enabled_change}

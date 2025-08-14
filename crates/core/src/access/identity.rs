@@ -155,6 +155,46 @@ impl ObjectIdentity {
             id: ObjectId::new("*"),
         }
     }
+
+    /// Parse an object identity from a string format "namespace/kind/id"
+    pub fn from_string(s: &str) -> Result<Self, String> {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() != 3 {
+            return Err(format!(
+                "Invalid object format: expected namespace/kind/id, got {s}"
+            ));
+        }
+
+        let namespace = match parts[0] {
+            "system" => TargetNamespace::System,
+            "local" => TargetNamespace::Local,
+            ns if ns.starts_with("org:") => {
+                TargetNamespace::Organization(ns.strip_prefix("org:").unwrap().to_string())
+            }
+            ns if ns.starts_with("node:") => {
+                TargetNamespace::Node(ns.strip_prefix("node:").unwrap().to_string())
+            }
+            _ => return Err(format!("Invalid namespace: {}", parts[0])),
+        };
+
+        let kind = match parts[1] {
+            "Model" => ObjectKind::Model,
+            "Provider" => ObjectKind::Provider,
+            "User" => ObjectKind::User,
+            "Users" => ObjectKind::Users,
+            "Config" => ObjectKind::Config,
+            "Billing" => ObjectKind::Billing,
+            "System" => ObjectKind::System,
+            "Quota" => ObjectKind::Quota,
+            _ => return Err(format!("Invalid object kind: {}", parts[1])),
+        };
+
+        Ok(Self {
+            namespace,
+            kind,
+            id: ObjectId::new(parts[2]),
+        })
+    }
 }
 
 impl Display for ObjectIdentity {

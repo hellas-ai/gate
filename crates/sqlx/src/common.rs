@@ -25,8 +25,10 @@ pub struct UserRow {
     pub id: String,
     pub email: Option<String>,
     pub name: Option<String>,
-    pub created_at: String, // ISO8601 format
-    pub updated_at: String, // ISO8601 format
+    pub enabled: i32,                // SQLite uses INTEGER for boolean
+    pub created_at: String,          // ISO8601 format
+    pub updated_at: String,          // ISO8601 format
+    pub disabled_at: Option<String>, // ISO8601 format
 }
 
 #[derive(FromRow)]
@@ -96,8 +98,10 @@ impl From<UserRow> for User {
         User {
             id: row.id,
             name: row.name,
+            enabled: row.enabled != 0,
             created_at: string_to_datetime(&row.created_at).unwrap_or_else(|_| Utc::now()),
             updated_at: string_to_datetime(&row.updated_at).unwrap_or_else(|_| Utc::now()),
+            disabled_at: row.disabled_at.and_then(|s| string_to_datetime(&s).ok()),
             metadata,
         }
     }

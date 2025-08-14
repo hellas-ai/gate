@@ -112,7 +112,7 @@ pub fn auth_config_section(props: &AuthConfigSectionProps) -> Html {
     html! {
         <ConfigSection title="Authentication Configuration">
             <div class="space-y-6">
-                <ConfigSection 
+                <ConfigSection
                     title="WebAuthn Settings"
                     enabled={props.config.webauthn.enabled}
                     on_toggle={on_webauthn_enabled_change}
