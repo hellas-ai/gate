@@ -1,6 +1,6 @@
 use crate::state::{DaemonState, TlsForwardStatus};
 use gate_daemon::{Settings, runtime::Runtime};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tracing::{error, info, debug};
 
 #[tauri::command]
@@ -52,7 +52,7 @@ pub async fn start_daemon(
         dir
     } else {
         // Production mode - use bundled resources
-        match app.path().resolve("resources/frontend-daemon", tauri::path::BaseDirectory::Resource) {
+        match app.path().resolve("frontend-daemon", tauri::path::BaseDirectory::Resource) {
             Ok(path) => {
                 let dir = path.to_string_lossy().to_string();
                 info!("GUI daemon starting in release mode, using static dir: {}", dir);
