@@ -15,29 +15,35 @@ fn main() {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
-    // On Windows, allocate a console for logging if RUST_LOG is set or if running in debug mode
+    // On Windows, always allocate a console for logging
     #[cfg(target_os = "windows")]
     {
-        if std::env::var("RUST_LOG").is_ok() || cfg!(debug_assertions) {
-            unsafe {
-                use winapi::um::consoleapi::AllocConsole;
-                use winapi::um::wincon::{ATTACH_PARENT_PROCESS, AttachConsole};
+        unsafe {
+            use winapi::um::consoleapi::AllocConsole;
+            use winapi::um::wincon::{ATTACH_PARENT_PROCESS, AttachConsole};
 
-                // Try to attach to parent console first, then allocate if needed
-                if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
-                    // If attach fails, try to allocate a new console
-                    let _ = AllocConsole();
-                }
+            // Try to attach to parent console first, then allocate if needed
+            if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+                // If attach fails, try to allocate a new console
+                let _ = AllocConsole();
             }
         }
     }
 
     // Initialize tracing for the GUI app
     let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| {
-        if cfg!(debug_assertions) {
-            "debug".to_string()
-        } else {
+        #[cfg(target_os = "windows")]
+        {
+            // Default to info level on Windows for better visibility
             "info".to_string()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            if cfg!(debug_assertions) {
+                "debug".to_string()
+            } else {
+                "info".to_string()
+            }
         }
     });
 
