@@ -1,12 +1,13 @@
 use crate::state::{DaemonState, TlsForwardStatus};
 use gate_daemon::{Settings, runtime::Runtime};
-use tauri::{AppHandle, State};
-use tracing::error;
+use tauri::path::BaseDirectory;
+use tauri::{AppHandle, Manager, State};
+use tracing::{error, info};
 
 #[tauri::command]
 pub async fn start_daemon(
     state: State<'_, DaemonState>,
-    _app: AppHandle,
+    app: AppHandle,
     config: Option<Settings>,
 ) -> Result<String, String> {
     // Check if already running
@@ -27,9 +28,27 @@ pub async fn start_daemon(
             .unwrap_or_else(|_| Settings::gui_preset())
     };
 
+    // Resolve static directory path for frontend files
+    let static_dir = if tauri::is_dev() {
+        // Development mode - use source directory
+        let dir = "crates/frontend-daemon/dist".to_string();
+        info!("Running in Tauri dev mode, using static directory: {}", dir);
+        dir
+    } else {
+        // Production mode - resolve Tauri resources
+        let path = app
+            .path()
+            .resolve("frontend-daemon", BaseDirectory::Resource)
+            .map_err(|e| format!("Failed to resolve frontend resources: {e}"))?;
+        let dir = path.to_string_lossy().to_string();
+        info!("Running in Tauri production mode, resolved static directory: {dir}");
+        dir
+    };
+
     // Build runtime
     let runtime = Runtime::builder()
         .gui_mode()
+        .with_static_dir(static_dir)
         .with_settings(settings)
         .build()
         .await
