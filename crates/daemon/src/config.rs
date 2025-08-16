@@ -272,7 +272,7 @@ impl Default for RegistrationConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TlsForwardConfig {
     /// Enable TLS forward functionality
-    #[serde(default = "default_true")]
+    #[serde(default = "default_false")]
     pub enabled: bool,
     /// List of TLS forward server addresses (NodeAddr format)
     #[serde(default = "default_tlsforward_addresses")]
@@ -342,7 +342,7 @@ fn default_max_tokens() -> u32 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LetsEncryptConfig {
     /// Enable Let's Encrypt certificate management
-    #[serde(default = "default_true")]
+    #[serde(default = "default_false")]
     pub enabled: bool,
     /// Email address for ACME account
     #[serde(skip_serializing_if = "Option::is_none")]

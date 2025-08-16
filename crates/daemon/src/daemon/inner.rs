@@ -4,10 +4,10 @@ use crate::error::Result;
 use crate::permissions::{LocalIdentity, LocalPermissionManager};
 use crate::services::{AuthService, TlsForwardService, WebAuthnService};
 use crate::types::{DaemonStatus, TlsForwardStatus};
-use gate_core::StateBackend;
 use gate_core::access::{
     Action, ObjectId, ObjectIdentity, ObjectKind, Permissions, TargetNamespace,
 };
+use gate_core::{InferenceBackend, StateBackend};
 use gate_http::UpstreamRegistry;
 use gate_http::services::JwtService;
 use std::sync::Arc;
@@ -23,6 +23,7 @@ pub struct DaemonInner {
     webauthn_service: Option<Arc<WebAuthnService>>,
     tlsforward_service: Option<Arc<TlsForwardService>>,
     upstream_registry: Arc<UpstreamRegistry>,
+    inference_backend: Option<Arc<dyn InferenceBackend>>,
     user_count: usize,
 }
 
@@ -37,6 +38,7 @@ impl DaemonInner {
         webauthn_service: Option<Arc<WebAuthnService>>,
         tlsforward_service: Option<Arc<TlsForwardService>>,
         upstream_registry: Arc<UpstreamRegistry>,
+        inference_backend: Option<Arc<dyn InferenceBackend>>,
         user_count: usize,
     ) -> Self {
         let permission_manager = Arc::new(LocalPermissionManager::new(state_backend.clone()));
@@ -51,6 +53,7 @@ impl DaemonInner {
             webauthn_service,
             tlsforward_service,
             upstream_registry,
+            inference_backend,
             user_count,
         }
     }
@@ -157,6 +160,10 @@ impl DaemonInner {
 
     pub fn get_upstream_registry(&self) -> Arc<UpstreamRegistry> {
         self.upstream_registry.clone()
+    }
+
+    pub fn get_inference_backend(&self) -> Option<Arc<dyn InferenceBackend>> {
+        self.inference_backend.clone()
     }
 
     pub async fn get_settings(&self) -> Settings {

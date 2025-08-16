@@ -196,6 +196,16 @@ impl Daemon {
         Ok(rx.await?)
     }
 
+    pub async fn get_inference_backend(
+        &self,
+    ) -> Result<Option<Arc<dyn gate_core::InferenceBackend>>> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(DaemonRequest::GetInferenceBackend { reply })
+            .await?;
+        Ok(rx.await?)
+    }
+
     pub async fn get_config(&self) -> Result<serde_json::Value> {
         let identity = self
             .identity
@@ -215,6 +225,7 @@ impl Daemon {
         let auth_service = self.get_auth_service().await?;
         let state_backend = self.get_state_backend().await?;
         let upstream_registry = self.get_upstream_registry().await?;
+        let inference_backend = self.get_inference_backend().await?;
 
         // Build router with MinimalState containing daemon handle
         let router = OpenApiRouter::new();
@@ -222,11 +233,21 @@ impl Daemon {
         let router = crate::routes::config::add_routes(router);
         let router = crate::routes::admin::add_routes(router);
 
+        // Add inference-related routes from gate_http
+        let router = gate_http::routes::models::add_routes(router);
+        let router = gate_http::routes::inference::add_routes(router);
+        let router = gate_http::routes::observability::add_routes(router);
+
         let minimal_state = crate::MinimalState::new(auth_service.clone(), self.clone());
 
         // Wrap MinimalState in AppState for middleware compatibility
-        let app_state = gate_http::AppState::new(state_backend, minimal_state)
+        let mut app_state = gate_http::AppState::new(state_backend, minimal_state)
             .with_upstream_registry(upstream_registry);
+
+        // Add inference backend if available
+        if let Some(backend) = inference_backend {
+            app_state = app_state.with_inference_backend(backend);
+        }
 
         // Build the full axum app with middleware
         let mut app = router

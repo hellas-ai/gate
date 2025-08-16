@@ -220,6 +220,23 @@ impl DaemonBuilder {
         // TODO: Setup TLS forward service if enabled
         let tlsforward_service = None;
 
+        // Setup local inference service if configured
+        let inference_backend: Option<Arc<dyn gate_core::InferenceBackend>> =
+            if let Some(ref inference_config) = settings.local_inference {
+                match crate::services::LocalInferenceService::new(inference_config.clone()) {
+                    Ok(service) => {
+                        info!("Local inference service initialized");
+                        Some(Arc::new(service) as Arc<dyn gate_core::InferenceBackend>)
+                    }
+                    Err(e) => {
+                        warn!("Failed to initialize local inference service: {}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
         // Create DaemonInner
         let daemon_inner = DaemonInner::new(
             settings,
@@ -230,6 +247,7 @@ impl DaemonBuilder {
             webauthn_service,
             tlsforward_service,
             upstream_registry,
+            inference_backend,
             user_count,
         )
         .await;
