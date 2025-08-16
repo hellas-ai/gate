@@ -1,17 +1,40 @@
 use gate_daemon::types::DaemonRuntimeConfigResponse;
-use gate_daemon::{Daemon, DaemonStatus, Settings};
+use gate_daemon::{Daemon, DaemonStatus, Settings, StateDir};
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
-pub async fn start_daemon(
-    daemon: State<'_, Daemon>,
-    app: AppHandle,
-    config: Option<Settings>,
-) -> Result<String, String> {
-    // Check if already running
-    if daemon.status().await.map(|s| s.running).unwrap_or(false) {
-        return Err("Daemon is already running".to_string());
+pub async fn start_daemon(app: AppHandle) -> Result<String, String> {
+    // Build daemon
+    let state_dir = StateDir::new()
+        .await
+        .map_err(|e| format!("Failed to create state directory: {e}"))?;
+    let default_config_path = state_dir.config_path();
+    let mut builder = Daemon::builder().with_state_dir(state_dir);
+
+    // Load configuration if specified
+    if default_config_path.exists() {
+        info!(
+            "Loading configuration from default path: {}",
+            default_config_path.display()
+        );
+        builder = builder.with_settings(
+            Settings::load_from_file(&default_config_path)
+                .map_err(|e| format!("Failed to load settings: {e}"))?,
+        );
+    } else {
+        info!("No configuration found, creating one using default settings");
+        let settings = Settings::default();
+        settings
+            .save_to_file(&default_config_path)
+            .await
+            .map_err(|e| {
+                format!(
+                    "Failed to save default settings to {}: {e}",
+                    default_config_path.display()
+                )
+            })?;
+        builder = builder.with_settings(settings);
     }
 
     // Resolve static directory path for frontend files
@@ -30,26 +53,20 @@ pub async fn start_daemon(
         info!("Running in Tauri production mode, resolved static directory: {dir}");
         dir
     };
+    builder = builder.with_static_dir(static_dir);
 
-    // Build new daemon with config
-    let mut builder = Daemon::builder().with_static_dir(static_dir);
-
-    if let Some(cfg) = config {
-        builder = builder.with_settings(cfg);
-    }
-
-    let new_daemon = builder
+    let daemon = builder
         .build()
         .await
         .map_err(|e| format!("Failed to build daemon: {e}"))?;
 
-    let address = new_daemon
+    let address = daemon
         .server_address()
         .await
         .map_err(|e| format!("Failed to get server address: {e}"))?;
 
     // Spawn server task
-    let daemon_clone = new_daemon.clone();
+    let daemon_clone = daemon.clone();
     tokio::spawn(async move {
         if let Err(e) = daemon_clone.serve().await {
             error!("Server error: {}", e);
@@ -57,17 +74,14 @@ pub async fn start_daemon(
     });
 
     // Update the managed state with the new daemon
-    app.manage(new_daemon);
+    app.manage(daemon);
 
     Ok(format!("Daemon started at http://{address}"))
 }
 
 #[tauri::command]
-pub async fn stop_daemon(daemon: State<'_, Daemon>) -> Result<String, String> {
-    if !daemon.status().await.map(|s| s.running).unwrap_or(false) {
-        return Err("Daemon is not running".to_string());
-    }
-
+pub async fn stop_daemon(daemon: State<'_, Option<Daemon>>) -> Result<String, String> {
+    let daemon = daemon.as_ref().ok_or("Daemon not running")?;
     daemon
         .system_identity()
         .shutdown()
@@ -78,7 +92,8 @@ pub async fn stop_daemon(daemon: State<'_, Daemon>) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn daemon_status(daemon: State<'_, Daemon>) -> Result<bool, String> {
+pub async fn daemon_status(daemon: State<'_, Option<Daemon>>) -> Result<bool, String> {
+    let daemon = daemon.as_ref().ok_or("Daemon not running")?;
     Ok(daemon.status().await.map(|s| s.running).unwrap_or(false))
 }
 
@@ -92,19 +107,15 @@ pub async fn get_daemon_config(daemon: State<'_, Daemon>) -> Result<Settings, St
 
 #[tauri::command]
 pub async fn restart_daemon(
-    daemon: State<'_, Daemon>,
+    daemon: State<'_, Option<Daemon>>,
     app: AppHandle,
-    config: Option<Settings>,
 ) -> Result<String, String> {
     // Stop if running
-    if daemon.status().await.map(|s| s.running).unwrap_or(false) {
-        let _ = stop_daemon(daemon.clone()).await;
-        // Wait a bit for cleanup
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    }
+    let _ = stop_daemon(daemon).await;
+    app.manage(None::<Daemon>);
 
     // Start with new config
-    start_daemon(daemon, app, config).await
+    start_daemon(app).await
 }
 
 #[tauri::command]

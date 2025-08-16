@@ -57,8 +57,6 @@ pub struct AuthConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WebAuthnConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
     #[serde(default = "default_rp_id")]
     pub rp_id: String,
     #[serde(default = "default_rp_name")]
@@ -72,7 +70,6 @@ pub struct WebAuthnConfig {
 impl Default for WebAuthnConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
             rp_id: default_rp_id(),
             rp_name: default_rp_name(),
             rp_origin: default_rp_origin(),

@@ -13,16 +13,6 @@ pub struct AuthConfigSectionProps {
 pub fn auth_config_section(props: &AuthConfigSectionProps) -> Html {
     let config = props.config.clone();
 
-    let on_webauthn_enabled_change = {
-        let config = config.clone();
-        let on_change = props.on_change.clone();
-        Callback::from(move |value: bool| {
-            let mut new_config = config.clone();
-            new_config.webauthn.enabled = value;
-            on_change.emit(new_config);
-        })
-    };
-
     let on_rp_id_change = {
         let config = config.clone();
         let on_change = props.on_change.clone();
@@ -114,8 +104,6 @@ pub fn auth_config_section(props: &AuthConfigSectionProps) -> Html {
             <div class="space-y-6">
                 <ConfigSection
                     title="WebAuthn Settings"
-                    enabled={props.config.webauthn.enabled}
-                    on_toggle={on_webauthn_enabled_change}
                 >
                     <ConfigField
                         label="Relying Party ID"

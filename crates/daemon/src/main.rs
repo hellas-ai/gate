@@ -48,8 +48,6 @@ async fn main() -> Result<()> {
 
     // Build daemon
     let mut builder = Daemon::builder();
-
-    // Find state dirs
     let state_dir = StateDir::new().await?;
     let default_config_path = state_dir.config_path();
 

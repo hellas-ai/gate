@@ -8,6 +8,10 @@ extern crate tracing;
 
 mod commands;
 
+use gate_core::tracing::{
+    config::{InstrumentationConfig, OtlpConfig},
+    init::init_tracing,
+};
 use gate_daemon::Daemon;
 use tauri::Manager;
 
@@ -17,17 +21,23 @@ fn main() {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
-    // Initialize tracing for the GUI app
-    tracing_subscriber::fmt()
-        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "".to_string()))
-        .init();
-
-    // Create a placeholder daemon handle - will be replaced when daemon starts
-    // let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    // Initialize instrumentation
+    let instrumentation_config = InstrumentationConfig {
+        service_name: "gate-gui".to_string(),
+        service_version: env!("CARGO_PKG_VERSION").to_string(),
+        log_level: std::env::var("RUST_LOG")
+            .unwrap_or_else(|_| "gate=debug,tower_http=debug".to_string()),
+        otlp: std::env::var("OTLP_ENDPOINT")
+            .ok()
+            .map(|endpoint| OtlpConfig {
+                endpoint,
+                headers: None,
+            }),
+    };
+    init_tracing(&instrumentation_config).expect("Failed to initialize tracing");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        // .manage(placeholder_daemon)
         .invoke_handler(tauri::generate_handler![
             commands::start_daemon,
             commands::stop_daemon,
@@ -47,8 +57,13 @@ fn main() {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 // Get the app handle from the window
                 let app = window.app_handle();
-                if let Some(daemon) = app.try_state::<Daemon>() {
-                    let _ = tauri::async_runtime::block_on(commands::stop_daemon(daemon));
+                if let Some(daemon) = app.try_state::<Option<Daemon>>() {
+                    if daemon.is_some() {
+                        tracing::info!("Stopping daemon on window close");
+                        let _ = tauri::async_runtime::block_on(commands::stop_daemon(daemon));
+                    } else {
+                        tracing::warn!("No daemon instance found on window close");
+                    }
                 }
             }
         })
@@ -57,14 +72,9 @@ fn main() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 // // Wait a moment for the app to fully initialize
-                // tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-                if let Some(daemon) = handle.try_state::<Daemon>() {
-                    // Auto-start daemon with default config
-                    match commands::start_daemon(daemon, handle.clone(), None).await {
-                        Ok(msg) => tracing::info!("{}", msg),
-                        Err(e) => tracing::error!("Failed to auto-start daemon: {}", e),
-                    }
+                match commands::start_daemon(handle.clone()).await {
+                    Ok(msg) => tracing::info!("{}", msg),
+                    Err(e) => tracing::error!("Failed to auto-start daemon: {}", e),
                 }
             });
             Ok(())
