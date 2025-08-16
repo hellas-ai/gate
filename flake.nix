@@ -148,7 +148,7 @@
             cargo-depgraph
             cargo-bloat
 
-            # Python for testing llm-streams
+            # Python for testing llm-streams and icon conversion
             (python3.withPackages (ps:
               with ps; [
                 pytest
@@ -162,6 +162,9 @@
                 openai
                 anthropic
                 pydantic
+                # Icon conversion tools
+                cairosvg
+                pillow
               ]))
 
             # Wasm tools
@@ -177,6 +180,10 @@
             # github
             act
             gh
+            
+            # Image conversion tools
+            librsvg  # provides rsvg-convert
+            imagemagick
           ]
           ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
             # Linux-specific GUI dependencies
