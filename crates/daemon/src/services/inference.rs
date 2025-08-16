@@ -313,6 +313,15 @@ impl InferenceBackend for LocalInferenceService {
                 supports_chat: true,
                 supports_completion: true,
             },
+            LocalModel {
+                id: "huihui-ai/Huihui-Qwen3-14B-abliterated-v2".to_string(),
+                name: "Huihui Qwen3-14B Abliterated V2".to_string(),
+                provider: "local".to_string(),
+                path: None,
+                context_length: 8096,
+                supports_chat: true,
+                supports_completion: true,
+            },
             // Gemma3 models (Gemma3ForCausalLM)
             // LocalModel {
             //     id: "google/gemma-3-1b-it".to_string(),
