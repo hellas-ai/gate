@@ -155,12 +155,15 @@ jobs:
     # Build frontends and GUI (without signing for PRs)
     - name: Build GUI
       if: github.event_name == 'pull_request'
+      env:
+        OPENSSL_STATIC: 1
       run: cd crates/gui && cargo tauri build
     
     # Build frontends and GUI with signing (for pushes to master)
     - name: Build GUI and Sign
       if: github.event_name != 'pull_request'
       env:
+        OPENSSL_STATIC: 1
         APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         APPLE_ID: ${{ secrets.APPLE_ID }}
         APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
