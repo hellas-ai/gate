@@ -23,12 +23,11 @@ fn main() {
         .init();
 
     // Create a placeholder daemon handle - will be replaced when daemon starts
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    let placeholder_daemon = Daemon::new(tx);
+    // let (tx, _rx) = tokio::sync::mpsc::channel(1);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(placeholder_daemon)
+        // .manage(placeholder_daemon)
         .invoke_handler(tauri::generate_handler![
             commands::start_daemon,
             commands::stop_daemon,
@@ -57,8 +56,8 @@ fn main() {
             // Optionally start the daemon automatically on app launch
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                // Wait a moment for the app to fully initialize
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                // // Wait a moment for the app to fully initialize
+                // tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
                 if let Some(daemon) = handle.try_state::<Daemon>() {
                     // Auto-start daemon with default config

@@ -1,6 +1,5 @@
 //! Platform-specific state directory management
 use crate::DaemonError;
-use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use std::path::PathBuf;
 
@@ -9,10 +8,30 @@ pub struct StateDir(ProjectDirs);
 
 impl StateDir {
     /// Create a new StateDir instance
-    pub fn new() -> Result<Self, DaemonError> {
+    pub async fn new() -> Result<Self, DaemonError> {
         let dirs = ProjectDirs::from("com.hellas", "Gate", "Gate")
             .ok_or(DaemonError::PlatformDirsNotFound)?;
-        Ok(Self(dirs))
+        let me = Self(dirs);
+        me.create_directories().await?;
+        Ok(me)
+    }
+
+    /// Create all required directories
+    pub async fn create_directories(&self) -> Result<(), DaemonError> {
+        let config_dir = self.0.config_local_dir();
+        let data_dir = self.0.data_local_dir();
+
+        let dirs_to_create = vec![config_dir, data_dir];
+        for dir in &dirs_to_create {
+            tokio::fs::create_dir_all(&dir).await?;
+            debug!("Ensured directory exists: {}", dir.display());
+        }
+
+        debug!("Using state directories:");
+        debug!("  Config: {}", config_dir.display());
+        debug!("  Data: {}", data_dir.display());
+
+        Ok(())
     }
 
     /// Get the configuration directory
@@ -38,22 +57,5 @@ impl StateDir {
     /// Get the path for the Iroh secret key
     pub fn iroh_secret_key_path(&self) -> PathBuf {
         self.config_dir().join("iroh_secret.key")
-    }
-
-    /// Create all required directories
-    pub async fn create_directories(&self) -> Result<()> {
-        let dirs = vec![self.config_dir(), self.data_dir()];
-        for dir in dirs {
-            tokio::fs::create_dir_all(&dir)
-                .await
-                .with_context(|| format!("Failed to create directory: {}", dir.display()))?;
-            debug!("Ensured directory exists: {}", dir.display());
-        }
-
-        debug!("Using state directories:");
-        debug!("  Config: {}", self.config_dir().display());
-        debug!("  Data: {}", self.data_dir().display());
-
-        Ok(())
     }
 }

@@ -1,16 +1,14 @@
 //! Admin user management routes
 
-use crate::config::Settings;
-use crate::permissions::{LocalContext, LocalPermissionManager};
+use crate::permissions::LocalContext;
 use axum::{extract::State, response::Json};
 use gate_core::access::{
     Action, ObjectId, ObjectIdentity, ObjectKind, PermissionManager, Permissions, SubjectIdentity,
     TargetNamespace,
 };
 use gate_core::types::User;
-use gate_http::{error::HttpError, services::HttpIdentity, state::AppState};
+use gate_http::{AppState, error::HttpError, services::HttpIdentity};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
@@ -115,15 +113,24 @@ pub struct GrantPermissionRequest {
         search = ?query.search
     )
 )]
-pub async fn list_users<T>(
+pub async fn list_users(
     identity: HttpIdentity,
-    State(app_state): State<AppState<T>>,
+    State(app_state): State<AppState<crate::MinimalState>>,
     axum::extract::Query(query): axum::extract::Query<ListUsersQuery>,
-) -> Result<Json<UserListResponse>, HttpError>
-where
-    T: Clone + Send + Sync + 'static + AsRef<Arc<Settings>> + AsRef<Arc<LocalPermissionManager>>,
-{
-    let permission_manager: &Arc<LocalPermissionManager> = app_state.data.as_ref().as_ref();
+) -> Result<Json<UserListResponse>, HttpError> {
+    let permission_manager = app_state
+        .data
+        .daemon
+        .get_permission_manager()
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
+
+    let state_backend = app_state
+        .data
+        .daemon
+        .get_state_backend()
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
 
     // Check permission to read users
     let users_object = ObjectIdentity {
@@ -132,8 +139,7 @@ where
         id: ObjectId::new("*"),
     };
 
-    let local_ctx =
-        LocalContext::from_http_identity(&identity, app_state.state_backend.as_ref()).await;
+    let local_ctx = LocalContext::from_http_identity(&identity, state_backend.as_ref()).await;
 
     let local_identity =
         SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
@@ -156,8 +162,7 @@ where
     let offset = (query.page.saturating_sub(1)) * query.page_size;
 
     // Get users from state backend
-    let mut all_users = app_state
-        .state_backend
+    let mut all_users = state_backend
         .list_users()
         .await
         .map_err(|e| HttpError::InternalServerError(format!("Failed to list users: {e}")))?;
@@ -219,15 +224,24 @@ where
     tag = "admin"
 )]
 #[instrument(name = "get_user", skip(app_state), fields(target_user_id = %user_id))]
-pub async fn get_user<T>(
+pub async fn get_user(
     identity: HttpIdentity,
-    State(app_state): State<AppState<T>>,
+    State(app_state): State<AppState<crate::MinimalState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
-) -> Result<Json<UserInfo>, HttpError>
-where
-    T: Clone + Send + Sync + 'static + AsRef<Arc<Settings>> + AsRef<Arc<LocalPermissionManager>>,
-{
-    let permission_manager: &Arc<LocalPermissionManager> = app_state.data.as_ref().as_ref();
+) -> Result<Json<UserInfo>, HttpError> {
+    let permission_manager = app_state
+        .data
+        .daemon
+        .get_permission_manager()
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
+
+    let state_backend = app_state
+        .data
+        .daemon
+        .get_state_backend()
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
 
     // Check permission to read specific user
     let user_object = ObjectIdentity {
@@ -236,11 +250,9 @@ where
         id: ObjectId::new(user_id.clone()),
     };
 
-    let local_ctx = crate::permissions::LocalContext::from_http_identity(
-        &identity,
-        app_state.state_backend.as_ref(),
-    )
-    .await;
+    let local_ctx =
+        crate::permissions::LocalContext::from_http_identity(&identity, state_backend.as_ref())
+            .await;
     let local_identity =
         SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
 
@@ -259,8 +271,7 @@ where
     }
 
     // Get user from state backend
-    let target_user = app_state
-        .state_backend
+    let target_user = state_backend
         .get_user(&user_id)
         .await
         .map_err(|e| HttpError::InternalServerError(format!("Failed to get user: {e}")))?
@@ -400,15 +411,24 @@ where
     tag = "admin"
 )]
 #[instrument(name = "delete_user", skip(app_state), fields(target_user_id = %user_id))]
-pub async fn delete_user<T>(
+pub async fn delete_user(
     identity: HttpIdentity,
-    State(app_state): State<AppState<T>>,
+    State(app_state): State<AppState<crate::MinimalState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
-) -> Result<axum::response::Response, HttpError>
-where
-    T: Clone + Send + Sync + 'static + AsRef<Arc<Settings>> + AsRef<Arc<LocalPermissionManager>>,
-{
-    let permission_manager: &Arc<LocalPermissionManager> = app_state.data.as_ref().as_ref();
+) -> Result<axum::response::Response, HttpError> {
+    let permission_manager = app_state
+        .data
+        .daemon
+        .get_permission_manager()
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
+
+    let state_backend = app_state
+        .data
+        .daemon
+        .get_state_backend()
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
 
     // Check permission to delete user
     let user_object = ObjectIdentity {
@@ -417,11 +437,9 @@ where
         id: ObjectId::new(user_id.clone()),
     };
 
-    let local_ctx = crate::permissions::LocalContext::from_http_identity(
-        &identity,
-        app_state.state_backend.as_ref(),
-    )
-    .await;
+    let local_ctx =
+        crate::permissions::LocalContext::from_http_identity(&identity, state_backend.as_ref())
+            .await;
     let local_identity =
         SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
 
@@ -448,16 +466,14 @@ where
     }
 
     // Check if user exists
-    let target_user = app_state
-        .state_backend
+    let target_user = state_backend
         .get_user(&user_id)
         .await
         .map_err(|e| HttpError::InternalServerError(format!("Failed to get user: {e}")))?
         .ok_or_else(|| HttpError::NotFound(format!("User {user_id} not found")))?;
 
     // Delete the user
-    app_state
-        .state_backend
+    state_backend
         .delete_user(&user_id)
         .await
         .map_err(|e| HttpError::InternalServerError(format!("Failed to delete user: {e}")))?;
@@ -496,16 +512,25 @@ where
     tag = "admin"
 )]
 #[instrument(name = "update_user_status", skip(app_state))]
-pub async fn update_user_status<T>(
+pub async fn update_user_status(
     identity: HttpIdentity,
-    State(app_state): State<AppState<T>>,
+    State(app_state): State<AppState<crate::MinimalState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
     Json(request): Json<UpdateUserStatusRequest>,
-) -> Result<Json<UpdateUserStatusResponse>, HttpError>
-where
-    T: Clone + Send + Sync + 'static + AsRef<Arc<Settings>> + AsRef<Arc<LocalPermissionManager>>,
-{
-    let permission_manager: &Arc<LocalPermissionManager> = app_state.data.as_ref().as_ref();
+) -> Result<Json<UpdateUserStatusResponse>, HttpError> {
+    let permission_manager = app_state
+        .data
+        .daemon
+        .get_permission_manager()
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
+
+    let state_backend = app_state
+        .data
+        .daemon
+        .get_state_backend()
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
 
     // Check permission to manage user
     let user_object = ObjectIdentity {
@@ -514,8 +539,7 @@ where
         id: ObjectId::new(user_id.clone()),
     };
 
-    let local_ctx =
-        LocalContext::from_http_identity(&identity, app_state.state_backend.as_ref()).await;
+    let local_ctx = LocalContext::from_http_identity(&identity, state_backend.as_ref()).await;
     let local_identity =
         SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
 
@@ -542,8 +566,7 @@ where
     }
 
     // Get and update user
-    let mut user = app_state
-        .state_backend
+    let mut user = state_backend
         .get_user(&user_id)
         .await
         .map_err(|e| HttpError::InternalServerError(format!("Failed to get user: {e}")))?
@@ -556,8 +579,7 @@ where
         Some(chrono::Utc::now())
     };
 
-    app_state
-        .state_backend
+    state_backend
         .update_user(&user)
         .await
         .map_err(|e| HttpError::InternalServerError(format!("Failed to update user: {e}")))?;
@@ -598,15 +620,24 @@ where
     tag = "admin"
 )]
 #[instrument(name = "get_user_permissions", skip(app_state))]
-pub async fn get_user_permissions<T>(
+pub async fn get_user_permissions(
     identity: HttpIdentity,
-    State(app_state): State<AppState<T>>,
+    State(app_state): State<AppState<crate::MinimalState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
-) -> Result<Json<UserPermissionsResponse>, HttpError>
-where
-    T: Clone + Send + Sync + 'static + AsRef<Arc<Settings>> + AsRef<Arc<LocalPermissionManager>>,
-{
-    let permission_manager: &Arc<LocalPermissionManager> = app_state.data.as_ref().as_ref();
+) -> Result<Json<UserPermissionsResponse>, HttpError> {
+    let permission_manager = app_state
+        .data
+        .daemon
+        .get_permission_manager()
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
+
+    let state_backend = app_state
+        .data
+        .daemon
+        .get_state_backend()
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
 
     // Check permission to view permissions
     let user_object = ObjectIdentity {
@@ -615,8 +646,7 @@ where
         id: ObjectId::new(user_id.clone()),
     };
 
-    let local_ctx =
-        LocalContext::from_http_identity(&identity, app_state.state_backend.as_ref()).await;
+    let local_ctx = LocalContext::from_http_identity(&identity, state_backend.as_ref()).await;
     let local_identity =
         SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
 
@@ -634,8 +664,7 @@ where
     }
 
     // Get permissions from database
-    let permissions = app_state
-        .state_backend
+    let permissions = state_backend
         .list_user_permissions(&user_id)
         .await
         .map_err(|e| HttpError::InternalServerError(format!("Failed to get permissions: {e}")))?;
@@ -675,16 +704,25 @@ where
     tag = "admin"
 )]
 #[instrument(name = "grant_user_permission", skip(app_state))]
-pub async fn grant_user_permission<T>(
+pub async fn grant_user_permission(
     identity: HttpIdentity,
-    State(app_state): State<AppState<T>>,
+    State(app_state): State<AppState<crate::MinimalState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
     Json(request): Json<GrantPermissionRequest>,
-) -> Result<axum::response::Response, HttpError>
-where
-    T: Clone + Send + Sync + 'static + AsRef<Arc<Settings>> + AsRef<Arc<LocalPermissionManager>>,
-{
-    let permission_manager: &Arc<LocalPermissionManager> = app_state.data.as_ref().as_ref();
+) -> Result<axum::response::Response, HttpError> {
+    let permission_manager = app_state
+        .data
+        .daemon
+        .get_permission_manager()
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
+
+    let state_backend = app_state
+        .data
+        .daemon
+        .get_state_backend()
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
 
     // Parse the action
     let action = serde_json::from_str::<Action>(&format!("\"{}\"", request.action))
@@ -695,8 +733,7 @@ where
         .map_err(|e| HttpError::BadRequest(format!("Invalid object: {e}")))?;
 
     // Check if granter has permission to grant
-    let local_ctx =
-        LocalContext::from_http_identity(&identity, app_state.state_backend.as_ref()).await;
+    let local_ctx = LocalContext::from_http_identity(&identity, state_backend.as_ref()).await;
     let granter = SubjectIdentity::new(
         identity.id.clone(),
         identity.source.clone(),
@@ -748,16 +785,25 @@ where
     tag = "admin"
 )]
 #[instrument(name = "revoke_user_permission", skip(app_state))]
-pub async fn revoke_user_permission<T>(
+pub async fn revoke_user_permission(
     identity: HttpIdentity,
-    State(app_state): State<AppState<T>>,
+    State(app_state): State<AppState<crate::MinimalState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Result<axum::response::Response, HttpError>
-where
-    T: Clone + Send + Sync + 'static + AsRef<Arc<Settings>> + AsRef<Arc<LocalPermissionManager>>,
-{
-    let permission_manager: &Arc<LocalPermissionManager> = app_state.data.as_ref().as_ref();
+) -> Result<axum::response::Response, HttpError> {
+    let permission_manager = app_state
+        .data
+        .daemon
+        .get_permission_manager()
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
+
+    let state_backend = app_state
+        .data
+        .daemon
+        .get_state_backend()
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
 
     let action_str = params
         .get("action")
@@ -775,8 +821,7 @@ where
         .map_err(|e| HttpError::BadRequest(format!("Invalid object: {e}")))?;
 
     // Check if revoker has permission to revoke
-    let local_ctx =
-        LocalContext::from_http_identity(&identity, app_state.state_backend.as_ref()).await;
+    let local_ctx = LocalContext::from_http_identity(&identity, state_backend.as_ref()).await;
     let revoker = SubjectIdentity::new(
         identity.id.clone(),
         identity.source.clone(),
@@ -807,10 +852,9 @@ where
 }
 
 /// Add admin routes
-pub fn add_routes<T>(router: OpenApiRouter<AppState<T>>) -> OpenApiRouter<AppState<T>>
-where
-    T: Clone + Send + Sync + 'static + AsRef<Arc<Settings>> + AsRef<Arc<LocalPermissionManager>>,
-{
+pub fn add_routes(
+    router: OpenApiRouter<AppState<crate::MinimalState>>,
+) -> OpenApiRouter<AppState<crate::MinimalState>> {
     router
         .routes(routes!(list_users))
         .routes(routes!(get_user))

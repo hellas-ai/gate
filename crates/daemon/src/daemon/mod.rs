@@ -259,8 +259,11 @@ impl Daemon {
             if std::path::Path::new(static_dir).exists() {
                 info!("Serving static files from: {}", static_dir);
 
-                // Create static file service
-                let serve_dir = tower_http::services::ServeDir::new(static_dir);
+                // Create static file service with SPA fallback
+                // This serves files normally, but falls back to index.html for client-side routing
+                let index_path = format!("{static_dir}/index.html");
+                let serve_dir = tower_http::services::ServeDir::new(static_dir)
+                    .fallback(tower_http::services::ServeFile::new(index_path));
 
                 // Add catch-all route for static files and SPA
                 app = app.fallback_service(serve_dir);

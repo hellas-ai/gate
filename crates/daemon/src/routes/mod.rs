@@ -1,3 +1,3 @@
-// pub mod admin; // TODO: Migrate to use MinimalState
+pub mod admin;
 pub mod auth;
 pub mod config;

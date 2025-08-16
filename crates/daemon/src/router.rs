@@ -17,10 +17,8 @@ pub fn build_router() -> OpenApiRouter<AppState<MinimalState>> {
     // Add config routes
     let router = crate::routes::config::add_routes(router);
 
-    // Add admin routes - TODO: Migrate to use MinimalState
-    // let router = crate::routes::admin::add_routes(router);
-
-    router
+    // Add admin routes
+    crate::routes::admin::add_routes(router)
 }
 
 /// Build a router for testing with only specific route groups
@@ -41,8 +39,7 @@ pub fn build_test_router(
     }
 
     if include_admin {
-        // TODO: Migrate to use MinimalState
-        // router = crate::routes::admin::add_routes(router);
+        router = crate::routes::admin::add_routes(router);
     }
 
     router

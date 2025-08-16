@@ -2,7 +2,7 @@ use crate::bootstrap::BootstrapTokenManager;
 use crate::daemon::{Daemon, actor::DaemonActor, inner::DaemonInner};
 use crate::error::Result;
 use crate::{Settings, StateDir};
-use gate_core::{BootstrapTokenValidator, WebAuthnBackend};
+use gate_core::WebAuthnBackend;
 use gate_http::{
     UpstreamRegistry,
     forwarding::ForwardingConfig,
@@ -119,11 +119,6 @@ impl DaemonBuilder {
                 "State directory not set".to_string(),
             ))?;
 
-        state_dir
-            .create_directories()
-            .await
-            .map_err(|e| crate::error::DaemonError::ConfigError(e.to_string()))?;
-
         // Get or create settings
         let settings = if let Some(settings) = self.settings {
             settings
@@ -183,7 +178,7 @@ impl DaemonBuilder {
             .map_err(|e| crate::error::DaemonError::ConfigError(e.to_string()))?;
 
         // Build auth and webauthn services
-        let (auth_service, webauthn_service) = if settings.auth.webauthn.enabled {
+        let (auth_service, webauthn_service) = {
             // Create WebAuthn configuration and service
             let webauthn_config = WebAuthnConfig {
                 rp_id: settings.auth.webauthn.rp_id.clone(),
@@ -220,16 +215,6 @@ impl DaemonBuilder {
             ));
 
             (auth_service, Some(webauthn_service))
-        } else {
-            info!("WebAuthn is disabled, using JWT authentication only");
-
-            let auth_service = Arc::new(AuthService::new(
-                jwt_service.clone(),
-                state_backend.clone(),
-                webauthn_backend.clone(),
-            ));
-
-            (auth_service, None)
         };
 
         // TODO: Setup TLS forward service if enabled

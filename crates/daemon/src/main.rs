@@ -50,9 +50,8 @@ async fn main() -> Result<()> {
     let mut builder = Daemon::builder();
 
     // Find state dirs
-    let state_dir = StateDir::new()?;
+    let state_dir = StateDir::new().await?;
     let default_config_path = state_dir.config_path();
-    builder = builder.with_state_dir(state_dir);
 
     // Load configuration if specified
     if let Some(config_path) = cli.config {
@@ -69,12 +68,17 @@ async fn main() -> Result<()> {
                 "Loading configuration from default path: {}",
                 default_config_path.display()
             );
-            builder = builder.with_settings(Settings::load_from_file(default_config_path)?);
+            builder = builder.with_settings(Settings::load_from_file(&default_config_path)?);
         } else {
-            info!("No configuration found, using default settings");
-            builder = builder.with_settings(Settings::default());
+            info!("No configuration found, creating one using default settings");
+            let settings = Settings::default();
+            settings.save_to_file(&default_config_path).await?;
+            builder = builder.with_settings(settings);
         }
     }
+
+    // Pass state_dir to builder
+    builder = builder.with_state_dir(state_dir);
 
     // Set static directory if specified
     if let Ok(static_dir) = std::env::var("GATE_SERVER__STATIC_DIR") {

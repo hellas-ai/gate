@@ -1,14 +1,12 @@
 pub mod access;
-pub mod bootstrap;
 pub mod context;
 pub mod errors;
 pub mod inference;
-pub mod prelude;
 pub mod state;
 pub mod types;
-pub mod validation;
 pub mod webauthn;
 
+#[cfg(feature = "tracing")]
 #[macro_use]
 extern crate tracing as tracing_crate;
 
@@ -19,12 +17,10 @@ pub mod tracing;
 #[cfg(any(test, feature = "tests"))]
 pub mod tests;
 
-pub use bootstrap::BootstrapTokenValidator;
 pub use context::RequestContext;
 pub use errors::{Error, Result};
 pub use inference::InferenceBackend;
 pub use state::StateBackend;
-pub use validation::{ValidateConfig, validators};
 pub use webauthn::{StoredCredential, WebAuthnBackend};
 
 // Re-export types for convenience

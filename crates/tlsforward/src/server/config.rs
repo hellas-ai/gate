@@ -1,7 +1,6 @@
 //! TLS forward server configuration
 
 use config::{Config, ConfigError, Environment, File};
-use gate_core::{ValidateConfig, validators};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::Path;
@@ -270,69 +269,4 @@ fn default_dns_operation_timeout() -> Duration {
 
 fn default_idle_timeout() -> Duration {
     Duration::from_secs(600) // 10 minutes
-}
-
-impl ValidateConfig for TlsForwardConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        // Server validation
-        let valid_log_levels = ["trace", "debug", "info", "warn", "error"];
-        if !valid_log_levels.contains(&self.server.log_level.as_str()) {
-            return Err(ConfigError::Message(format!(
-                "server.log_level must be one of: {valid_log_levels:?}"
-            )));
-        }
-
-        // HTTPS proxy validation
-        validators::validate_not_empty(
-            &self.https_proxy.domain_suffix,
-            "https_proxy.domain_suffix",
-        )?;
-        validators::validate_range(
-            self.https_proxy.max_connections,
-            1,
-            100000,
-            "https_proxy.max_connections",
-        )?;
-        validators::validate_range(
-            self.https_proxy.connection_timeout_secs,
-            1,
-            300,
-            "https_proxy.connection_timeout_secs",
-        )?;
-
-        // Validate bind address port
-        if self.https_proxy.bind_addr.port() == 0 {
-            return Err(ConfigError::Message(
-                "https_proxy.bind_addr port cannot be 0".to_string(),
-            ));
-        }
-
-        // DNS validation
-        if self.dns.enabled {
-            match &self.dns.provider {
-                DnsProvider::None => {
-                    return Err(ConfigError::Message(
-                        "dns.provider must be set when DNS is enabled".to_string(),
-                    ));
-                }
-                DnsProvider::Cloudflare => {
-                    // Validate Cloudflare config
-                    if self.dns.cloudflare.zone_id.is_none() {
-                        return Err(ConfigError::Message(
-                            "dns.cloudflare.zone_id is required when using Cloudflare provider"
-                                .to_string(),
-                        ));
-                    }
-                    if self.dns.cloudflare.api_token.is_none() {
-                        return Err(ConfigError::Message(
-                            "dns.cloudflare.api_token is required when using Cloudflare provider"
-                                .to_string(),
-                        ));
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
 }

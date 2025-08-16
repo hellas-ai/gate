@@ -1,6 +1,5 @@
 use anyhow::Result;
-use async_trait::async_trait;
-use gate_core::{BootstrapTokenValidator, WebAuthnBackend};
+use gate_core::WebAuthnBackend;
 use rand::{Rng, distributions::Alphanumeric};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -95,26 +94,9 @@ impl BootstrapTokenManager {
             None
         }
     }
-}
 
-#[async_trait]
-impl BootstrapTokenValidator for BootstrapTokenManager {
-    async fn validate_token(
-        &self,
-        token: &str,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(self.validate_token(token).await?)
-    }
-
-    async fn mark_token_as_used(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        Ok(self.mark_as_used().await?)
-    }
-
-    async fn is_bootstrap_complete(&self) -> bool {
-        self.is_bootstrap_complete().await
-    }
-
-    async fn needs_bootstrap(&self) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    /// Checks if bootstrap is needed (no credentials exist)
+    pub async fn needs_bootstrap(&self) -> Result<bool> {
         let credentials = self.webauthn_backend.list_all_credentials().await?;
         Ok(credentials.is_empty())
     }

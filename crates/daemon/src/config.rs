@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 fn default_host() -> String {
-    "127.0.0.1".to_string()
+    "localhost".to_string()
 }
 
 fn default_port() -> u16 {
@@ -24,7 +24,7 @@ fn default_false() -> bool {
 }
 
 fn default_rp_id() -> String {
-    "localhost".to_string()
+    default_host()
 }
 
 fn default_rp_name() -> String {
@@ -32,7 +32,7 @@ fn default_rp_name() -> String {
 }
 
 fn default_rp_origin() -> String {
-    format!("http://localhost:{}", default_port())
+    format!("http://{}:{}", default_host(), default_port())
 }
 
 fn default_session_timeout() -> u64 {
@@ -202,9 +202,6 @@ impl Default for UpstreamConfig {
 /// WebAuthn configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebAuthnConfig {
-    /// Enable WebAuthn authentication
-    #[serde(default = "default_true")]
-    pub enabled: bool,
     /// Relying Party ID (usually domain name)
     #[serde(default = "default_rp_id")]
     pub rp_id: String,
@@ -389,41 +386,9 @@ impl Settings {
         config.try_deserialize()
     }
 
-    pub async fn save_to_file(&self, path: &str) -> Result<(), std::io::Error> {
+    pub async fn save_to_file(&self, path: impl Into<PathBuf>) -> Result<(), std::io::Error> {
         let config_str = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, config_str)?;
+        std::fs::write(path.into(), config_str)?;
         Ok(())
     }
-
-    // /// Configuration preset optimized for GUI mode
-    // pub fn gui_preset() -> Self {
-    //     let mut settings = Self {
-    //         local_inference: Some(LocalInferenceConfig {
-    //             enabled: true,
-    //             max_concurrent_inferences: 1,
-    //             default_temperature: 0.7,
-    //             default_max_tokens: 1024,
-    //         }),
-    //         ..Default::default()
-    //     };
-
-    //     // Set appropriate server defaults for GUI
-    //     settings.server.host = "localhost".to_string();
-    //     settings.server.port = default_port();
-
-    //     // Configure WebAuthn for localhost (sovereign local identity)
-    //     settings.auth.webauthn = WebAuthnConfig {
-    //         enabled: true,
-    //         rp_id: "localhost".to_string(),
-    //         rp_name: "Gate Local Node".to_string(),
-    //         rp_origin: format!("http://localhost:{}", settings.server.port),
-    //         allowed_origins: vec![format!("http://localhost:{}", settings.server.port)],
-    //         allow_subdomains: false,
-    //         allow_tlsforward_origins: false, // Relay passkeys are separate
-    //         require_user_verification: false,
-    //         session_timeout_seconds: 86400, // 24 hours
-    //     };
-
-    //     settings
-    // }
 }

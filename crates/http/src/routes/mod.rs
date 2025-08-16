@@ -2,7 +2,6 @@
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 
-pub mod dashboard;
 pub mod health;
 pub mod inference;
 pub mod models;
