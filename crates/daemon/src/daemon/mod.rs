@@ -4,6 +4,7 @@ pub mod inner;
 pub mod rpc;
 
 pub use builder::DaemonBuilder;
+use utoipa_axum::router::OpenApiRouter;
 
 use self::rpc::DaemonRequest;
 use crate::Settings;
@@ -216,7 +217,11 @@ impl Daemon {
         let upstream_registry = self.get_upstream_registry().await?;
 
         // Build router with MinimalState containing daemon handle
-        let router = crate::router::build_router();
+        let router = OpenApiRouter::new();
+        let router = crate::routes::auth::add_routes(router);
+        let router = crate::routes::config::add_routes(router);
+        let router = crate::routes::admin::add_routes(router);
+
         let minimal_state = crate::MinimalState::new(auth_service.clone(), self.clone());
 
         // Wrap MinimalState in AppState for middleware compatibility

@@ -8,7 +8,6 @@ pub mod daemon;
 pub mod error;
 pub mod minimal_state;
 pub mod permissions;
-pub mod router;
 pub mod routes;
 pub mod services;
 pub mod state_dir;
