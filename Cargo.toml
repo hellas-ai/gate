@@ -28,6 +28,7 @@ keywords = ["ai", "gateway", "inference", "llm", "api"]
 categories = ["network-programming", "web-programming"]
 
 [workspace.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
 anyhow = "1.0"
 arc-swap = "1.7"
 async-trait = "0.1"
