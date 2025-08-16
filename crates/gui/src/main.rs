@@ -3,10 +3,12 @@
     windows_subsystem = "windows"
 )]
 
-mod commands;
-mod state;
+#[macro_use]
+extern crate tracing;
 
-use state::DaemonState;
+mod commands;
+
+use gate_daemon::Daemon;
 use tauri::Manager;
 
 fn main() {
@@ -20,9 +22,13 @@ fn main() {
         .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "".to_string()))
         .init();
 
+    // Create a placeholder daemon handle - will be replaced when daemon starts
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let placeholder_daemon = Daemon::new(tx);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(DaemonState::new())
+        .manage(placeholder_daemon)
         .invoke_handler(tauri::generate_handler![
             commands::start_daemon,
             commands::stop_daemon,
@@ -42,8 +48,8 @@ fn main() {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 // Get the app handle from the window
                 let app = window.app_handle();
-                if let Some(state) = app.try_state::<DaemonState>() {
-                    let _ = tauri::async_runtime::block_on(commands::stop_daemon(state));
+                if let Some(daemon) = app.try_state::<Daemon>() {
+                    let _ = tauri::async_runtime::block_on(commands::stop_daemon(daemon));
                 }
             }
         })
@@ -54,9 +60,9 @@ fn main() {
                 // Wait a moment for the app to fully initialize
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                if let Some(state) = handle.try_state::<DaemonState>() {
+                if let Some(daemon) = handle.try_state::<Daemon>() {
                     // Auto-start daemon with default config
-                    match commands::start_daemon(state, handle.clone(), None).await {
+                    match commands::start_daemon(daemon, handle.clone(), None).await {
                         Ok(msg) => tracing::info!("{}", msg),
                         Err(e) => tracing::error!("Failed to auto-start daemon: {}", e),
                     }

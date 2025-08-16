@@ -1,5 +1,7 @@
 //! Server configuration
 
+use std::path::PathBuf;
+
 use config::{Config, ConfigError, Environment, File};
 use gate_http::forwarding::UpstreamProvider;
 use serde::{Deserialize, Serialize};
@@ -367,14 +369,14 @@ impl Default for LetsEncryptConfig {
 
 impl Settings {
     /// Load settings from a specific config file
-    pub fn load_from_file(path: &str) -> Result<Self, ConfigError> {
+    pub fn load_from_file(path: impl Into<PathBuf>) -> Result<Self, ConfigError> {
         let mut builder = Config::builder();
 
         // Start with defaults
         builder = builder.add_source(Config::try_from(&Settings::default())?);
 
         // Add the specific config file
-        builder = builder.add_source(File::with_name(path));
+        builder = builder.add_source(File::from(path.into()).required(true));
 
         // Add environment variables with GATE_ prefix (can override file settings)
         builder = builder.add_source(
@@ -387,35 +389,41 @@ impl Settings {
         config.try_deserialize()
     }
 
-    /// Configuration preset optimized for GUI mode
-    pub fn gui_preset() -> Self {
-        let mut settings = Self {
-            local_inference: Some(LocalInferenceConfig {
-                enabled: true,
-                max_concurrent_inferences: 1,
-                default_temperature: 0.7,
-                default_max_tokens: 1024,
-            }),
-            ..Default::default()
-        };
-
-        // Set appropriate server defaults for GUI
-        settings.server.host = "localhost".to_string();
-        settings.server.port = default_port();
-
-        // Configure WebAuthn for localhost (sovereign local identity)
-        settings.auth.webauthn = WebAuthnConfig {
-            enabled: true,
-            rp_id: "localhost".to_string(),
-            rp_name: "Gate Local Node".to_string(),
-            rp_origin: format!("http://localhost:{}", settings.server.port),
-            allowed_origins: vec![format!("http://localhost:{}", settings.server.port)],
-            allow_subdomains: false,
-            allow_tlsforward_origins: false, // Relay passkeys are separate
-            require_user_verification: false,
-            session_timeout_seconds: 86400, // 24 hours
-        };
-
-        settings
+    pub async fn save_to_file(&self, path: &str) -> Result<(), std::io::Error> {
+        let config_str = serde_json::to_string_pretty(self)?;
+        std::fs::write(path, config_str)?;
+        Ok(())
     }
+
+    // /// Configuration preset optimized for GUI mode
+    // pub fn gui_preset() -> Self {
+    //     let mut settings = Self {
+    //         local_inference: Some(LocalInferenceConfig {
+    //             enabled: true,
+    //             max_concurrent_inferences: 1,
+    //             default_temperature: 0.7,
+    //             default_max_tokens: 1024,
+    //         }),
+    //         ..Default::default()
+    //     };
+
+    //     // Set appropriate server defaults for GUI
+    //     settings.server.host = "localhost".to_string();
+    //     settings.server.port = default_port();
+
+    //     // Configure WebAuthn for localhost (sovereign local identity)
+    //     settings.auth.webauthn = WebAuthnConfig {
+    //         enabled: true,
+    //         rp_id: "localhost".to_string(),
+    //         rp_name: "Gate Local Node".to_string(),
+    //         rp_origin: format!("http://localhost:{}", settings.server.port),
+    //         allowed_origins: vec![format!("http://localhost:{}", settings.server.port)],
+    //         allow_subdomains: false,
+    //         allow_tlsforward_origins: false, // Relay passkeys are separate
+    //         require_user_verification: false,
+    //         session_timeout_seconds: 86400, // 24 hours
+    //     };
+
+    //     settings
+    // }
 }

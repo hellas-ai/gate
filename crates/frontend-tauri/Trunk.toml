@@ -1,14 +1,6 @@
 [[proxy]]
-rewrite = "/auth/"
-backend = "http://localhost:3000/auth/"
-
-[[proxy]]
-rewrite = "/health"
-backend = "http://localhost:3000/health"
-
-[[proxy]]
-rewrite = "/v1/"
-backend = "http://localhost:3000/v1/"
+rewrite = "/api/"
+backend = "http://localhost:31145/"
 
 [build]
 target = "index.html"

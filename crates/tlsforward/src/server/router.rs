@@ -10,7 +10,6 @@ use axum::{
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, error, info, instrument};
 
 use super::dns_challenge::{DnsChallenge, DnsChallengeManager};
 use super::registry::ProxyRegistry;

@@ -3,6 +3,10 @@
 //! This module provides a flexible HTTP routing system with OpenAPI documentation support
 //! and extensible middleware framework for building API servers.
 
+#[cfg(feature = "server")]
+#[macro_use]
+extern crate tracing;
+
 pub mod error;
 pub mod types;
 

@@ -1,5 +1,4 @@
 //! TLS forwarding handler for receiving traffic from relay
-
 use gate_core::tracing::metrics::{counter, gauge, histogram};
 use gate_http::server::HttpServer;
 use gate_p2p::stream::CombinedStream;
@@ -15,7 +14,6 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tokio_rustls::TlsAcceptor;
-use tracing::{debug, error, info, instrument, warn};
 
 /// Trait for providing TLS acceptors
 pub trait TlsAcceptorProvider: Send + Sync + Clone + 'static {

@@ -59,7 +59,7 @@ pub fn export_prometheus(metrics: &Metrics) -> String {
 
 /// Export global metrics in Prometheus format
 pub fn prometheus_format() -> String {
-    export_prometheus(&crate::tracing::metrics::GLOBAL_METRICS)
+    export_prometheus(crate::tracing::metrics::global())
 }
 
 /// Alias for export_prometheus

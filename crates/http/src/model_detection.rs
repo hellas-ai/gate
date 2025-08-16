@@ -4,7 +4,6 @@ use crate::forwarding::ForwardingConfig;
 use serde::{Deserialize, Serialize};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
-use tracing::{info, warn};
 
 /// OpenAI models response format
 #[derive(Debug, Clone, Serialize, Deserialize)]

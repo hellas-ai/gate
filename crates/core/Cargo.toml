@@ -12,7 +12,7 @@ categories.workspace = true
 default = []
 cloudflare = ["dep:worker", "dep:sqlx-d1"]
 tests = ["dep:uuid"]
-tracing = ["dep:tracing", "dep:base64", "dep:hex", "dep:getrandom", "dep:lazy_static"]
+tracing = ["dep:tracing", "dep:hex", "dep:getrandom"]
 tracing-otlp = ["tracing", "dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry", "dep:tracing-subscriber"]
 tracing-prometheus = ["tracing"]
 
@@ -37,9 +37,7 @@ worker = { version = "0.6", optional = true }
 
 # Optional dependencies for tracing feature
 tracing = { workspace = true, optional = true }
-base64 = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
-lazy_static = { version = "1.4", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { workspace = true, features = ["wasm_js"], optional = true }

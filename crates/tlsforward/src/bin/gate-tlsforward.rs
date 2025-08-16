@@ -1,4 +1,6 @@
 //! Gate TLS forward server binary
+#[macro_use]
+extern crate tracing;
 
 use anyhow::Result;
 use axum::{Router as AxumRouter, routing::get};
@@ -20,7 +22,6 @@ use gate_tlsforward::server::{
 };
 use iroh::{Endpoint, Watcher, protocol::Router};
 use std::sync::Arc;
-use tracing::{error, info};
 
 /// Gate TLS forward server - P2P TLS forwarding for secure HTTPS tunneling
 #[derive(Parser, Debug)]

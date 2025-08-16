@@ -1,11 +1,13 @@
+#[macro_use]
+extern crate tracing;
+
 use anyhow::Result;
 use clap::Parser;
 use gate_core::tracing::{
     config::{InstrumentationConfig, OtlpConfig},
     init::init_tracing,
 };
-use gate_daemon::{Settings, runtime::Runtime};
-use tracing::info;
+use gate_daemon::{Daemon, Settings, StateDir};
 
 /// Gate daemon - High-performance AI gateway
 #[derive(Parser, Debug)]
@@ -44,33 +46,58 @@ async fn main() -> Result<()> {
     };
     init_tracing(&instrumentation_config)?;
 
-    // Build runtime
-    let mut builder = Runtime::builder();
+    // Build daemon
+    let mut builder = Daemon::builder();
+
+    // Find state dirs
+    let state_dir = StateDir::new()?;
+    let default_config_path = state_dir.config_path();
+    builder = builder.with_state_dir(state_dir);
 
     // Load configuration if specified
     if let Some(config_path) = cli.config {
         info!("Loading configuration from: {}", config_path);
         let settings = Settings::load_from_file(&config_path)?;
         builder = builder.with_settings(settings);
+    } else {
+        info!(
+            "No configuration path specified, using default at {}",
+            default_config_path.display()
+        );
+        if default_config_path.exists() {
+            info!(
+                "Loading configuration from default path: {}",
+                default_config_path.display()
+            );
+            builder = builder.with_settings(Settings::load_from_file(default_config_path)?);
+        } else {
+            info!("No configuration found, using default settings");
+            builder = builder.with_settings(Settings::default());
+        }
     }
 
     // Set static directory if specified
     if let Ok(static_dir) = std::env::var("GATE_SERVER__STATIC_DIR") {
+        info!("Using static directory from environment: {}", static_dir);
         builder = builder.with_static_dir(static_dir);
+    } else {
+        builder = builder.with_static_dir("crates/frontend-daemon/dist".to_string());
     }
 
-    // Build the runtime
-    let runtime = builder.build().await?;
+    // Build the daemon
+    let daemon = builder.build().await?;
 
     // Print startup information
-    if let Some(token) = runtime.bootstrap_token() {
+    let bootstrap_manager = daemon.get_bootstrap_manager().await?;
+    if let Some(token) = bootstrap_manager.get_token().await {
         println!("\n===========================================");
         println!("First-time setup required!");
         println!("Please visit the following URL to create your admin account:");
         println!(
             "\n  http://localhost:{}/bootstrap/{}",
-            runtime
+            daemon
                 .server_address()
+                .await?
                 .split(':')
                 .nth(1)
                 .unwrap_or("31145"),
@@ -81,8 +108,8 @@ async fn main() -> Result<()> {
     } else {
         println!("\n===========================================");
         println!("Gate daemon is running");
-        println!("\n  URL: http://{}/", runtime.server_address());
-        let user_count = runtime.user_count();
+        println!("\n  URL: http://{}/", daemon.server_address().await?);
+        let user_count = daemon.user_count().await?;
         if user_count == 1 {
             println!("  Users: {user_count} registered user");
         } else {
@@ -92,16 +119,10 @@ async fn main() -> Result<()> {
         println!("===========================================\n");
     }
 
-    // Start monitoring tasks
-    runtime.start_monitoring().await;
-
-    // Start metrics server
-    let metrics_handle = runtime.start_metrics().await?;
-
     // Spawn server task
-    let runtime_clone = runtime.clone();
-    let server_handle = tokio::spawn(async move {
-        if let Err(e) = runtime_clone.serve().await {
+    let daemon_clone = daemon.clone();
+    let _server_handle = tokio::spawn(async move {
+        if let Err(e) = daemon_clone.serve().await {
             tracing::error!("Server error: {}", e);
         }
     });
@@ -111,15 +132,7 @@ async fn main() -> Result<()> {
     info!("Received shutdown signal");
 
     // Graceful shutdown
-    runtime.shutdown().await;
-
-    // Wait for server to stop
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server_handle).await;
-
-    // Stop metrics server
-    if let Some(handle) = metrics_handle {
-        handle.abort();
-    }
+    daemon.system_identity().shutdown().await?;
 
     Ok(())
 }

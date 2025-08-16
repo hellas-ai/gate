@@ -5,9 +5,8 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, Instant};
-use tracing::{debug, info};
 
 /// A counter metric that can only increase
 #[derive(Clone)]
@@ -346,33 +345,36 @@ impl Default for Metrics {
 }
 
 // Global metrics instance
-lazy_static::lazy_static! {
-    pub(crate) static ref GLOBAL_METRICS: Metrics = Metrics::new();
+static GLOBAL_METRICS: OnceLock<Metrics> = OnceLock::new();
+
+/// Get the global metrics instance, initializing if needed
+fn global_metrics() -> &'static Metrics {
+    GLOBAL_METRICS.get_or_init(Metrics::new)
 }
 
 /// Get or create a global counter
 pub fn counter(name: &str) -> Counter {
-    GLOBAL_METRICS.counter(name)
+    global_metrics().counter(name)
 }
 
 /// Get or create a global gauge
 pub fn gauge(name: &str) -> Gauge {
-    GLOBAL_METRICS.gauge(name)
+    global_metrics().gauge(name)
 }
 
 /// Get or create a global histogram
 pub fn histogram(name: &str) -> Histogram {
-    GLOBAL_METRICS.histogram(name)
+    global_metrics().histogram(name)
 }
 
 /// Log all global metrics
 pub fn log_all_metrics() {
-    GLOBAL_METRICS.log_all();
+    global_metrics().log_all();
 }
 
 /// Get the global metrics instance
 pub fn global() -> &'static Metrics {
-    &GLOBAL_METRICS
+    global_metrics()
 }
 
 /// Timer guard for recording durations

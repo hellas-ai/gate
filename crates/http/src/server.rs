@@ -1,19 +1,12 @@
 //! HTTP server utilities for handling streams from various sources
 
 use axum::Router;
-#[cfg(not(target_arch = "wasm32"))]
 use axum::extract::Request;
-#[cfg(not(target_arch = "wasm32"))]
 use hyper::body::Incoming;
-#[cfg(not(target_arch = "wasm32"))]
 use hyper_util::rt::{TokioExecutor, TokioIo};
-#[cfg(not(target_arch = "wasm32"))]
 use hyper_util::server;
 use tokio::io::{AsyncRead, AsyncWrite};
-#[cfg(not(target_arch = "wasm32"))]
 use tower::Service;
-#[cfg(not(target_arch = "wasm32"))]
-use tracing::{debug, error, info};
 
 /// HTTP server that can handle streams from various sources (TCP, P2P, etc.)
 #[derive(Clone, Debug)]
@@ -28,7 +21,6 @@ impl HttpServer {
     }
 
     /// Handle a stream
-    #[cfg(not(target_arch = "wasm32"))]
     #[tracing::instrument(name = "http.handle_stream", skip_all)]
     pub async fn handle_stream<S>(&self, stream: S) -> anyhow::Result<()>
     where
@@ -65,16 +57,7 @@ impl HttpServer {
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub async fn handle_stream<S>(&self, _stream: S) -> anyhow::Result<()>
-    where
-        S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
-    {
-        Err(anyhow::anyhow!("Stream handling is not supported on WASM"))
-    }
-
     /// Handle a P2P stream
-    #[cfg(not(target_arch = "wasm32"))]
     #[tracing::instrument(
         name = "http.handle_p2p_stream",
         skip_all,
@@ -94,20 +77,5 @@ impl HttpServer {
     {
         info!("Handling P2P stream from node: {}", node_id);
         self.handle_stream(stream).await
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub async fn handle_p2p_stream<S>(
-        &self,
-        _stream: S,
-        _node_id: impl std::fmt::Display,
-        _relay_domain: Option<String>,
-    ) -> anyhow::Result<()>
-    where
-        S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
-    {
-        Err(anyhow::anyhow!(
-            "P2P stream handling is not supported on WASM"
-        ))
     }
 }

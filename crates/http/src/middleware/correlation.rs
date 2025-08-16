@@ -13,7 +13,6 @@ use gate_core::tracing::{
     prelude::*,
     trace_context::{extract_trace_context, inject_trace_context},
 };
-use tracing::Instrument;
 
 /// Header name for legacy correlation ID
 pub const CORRELATION_ID_HEADER: &str = "x-correlation-id";

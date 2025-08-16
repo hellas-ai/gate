@@ -11,7 +11,6 @@ use crate::{
 use axum::{extract::State, response::Json};
 use chrono::Utc;
 use gate_core::User;
-use tracing::{info, instrument};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 /// Start WebAuthn registration

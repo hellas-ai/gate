@@ -1,13 +1,10 @@
 //! Certificate management for Let's Encrypt integration
-
+use crate::common::ChallengeStatus;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
-
-use crate::common::ChallengeStatus;
 
 use instant_acme::{
     Account, AccountCredentials, ChallengeType, Identifier, LetsEncrypt, NewAccount, NewOrder,

@@ -1,13 +1,13 @@
 //! Observability endpoints for metrics and health checks
 
+use crate::types::HealthCheckResponse;
 use axum::{
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 #[cfg(all(feature = "otlp", not(target_arch = "wasm32")))]
 use gate_core::tracing::prometheus::prometheus_format;
-use serde_json::json;
-use tracing::instrument;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 /// Health check endpoint
@@ -23,14 +23,14 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 #[instrument(name = "health_check")]
 pub async fn health_handler() -> Response {
     // TODO: Add more sophisticated health checks (database, upstream connectivity, etc.)
-    let health_status = json!({
-        "status": "healthy",
-        "timestamp": chrono::Utc::now().to_rfc3339(),
-        "service": "gate-daemon",
-        "version": env!("CARGO_PKG_VERSION"),
-    });
+    let health_status = HealthCheckResponse {
+        status: "healthy".to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        service: "gate-daemon".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    };
 
-    (StatusCode::OK, axum::Json(health_status)).into_response()
+    (StatusCode::OK, Json(health_status)).into_response()
 }
 
 /// Prometheus metrics endpoint

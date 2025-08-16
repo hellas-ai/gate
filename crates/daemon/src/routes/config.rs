@@ -1,18 +1,12 @@
 //! Configuration management routes
 
-use crate::permissions::LocalContext;
-use crate::{ServerState, Settings, StateDir};
-use axum::{extract, response, routing};
-use gate_core::access::{
-    Action, ObjectId, ObjectIdentity, ObjectKind, Permissions, SubjectIdentity, TargetNamespace,
-};
+use crate::Settings;
+use axum::{extract, response};
 use gate_http::{
-    AppState,
     error::HttpError,
     services::HttpIdentity,
     types::{ConfigResponse, ConfigUpdateRequest},
 };
-use tracing::info;
 
 /// Get the full configuration
 #[utoipa::path(
@@ -30,63 +24,21 @@ use tracing::info;
 )]
 pub async fn get_config(
     identity: HttpIdentity,
-    extract::State(state): extract::State<AppState<ServerState>>,
+    extract::State(state): extract::State<gate_http::AppState<crate::MinimalState>>,
 ) -> Result<response::Json<ConfigResponse>, HttpError> {
-    // Check permission to read configuration
-    let permission_manager = &state.data.permission_manager;
-    let config_object = ObjectIdentity {
-        namespace: TargetNamespace::System,
-        kind: ObjectKind::Config,
-        id: ObjectId::new("*"),
-    };
-
-    let local_ctx = LocalContext::from_http_identity(&identity, state.state_backend.as_ref()).await;
-    let local_identity =
-        SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
-
-    if permission_manager
-        .check(&local_identity, Action::Read, &config_object)
+    // Use daemon to get config with permission check
+    let config = state
+        .data
+        .daemon
+        .clone()
+        .with_http_identity(&identity)
         .await
-        .is_err()
-    {
-        return Err(HttpError::AuthorizationFailed(
-            "Permission denied: cannot read configuration".to_string(),
-        ));
-    }
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?
+        .get_config()
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
 
-    // Get the current configuration from state
-    let current_config = &*state.data.settings;
-
-    // Convert to JSON, redacting sensitive fields
-    let mut config_json = serde_json::to_value(current_config)
-        .map_err(|e| HttpError::InternalServerError(format!("Failed to serialize config: {e}")))?;
-
-    // Redact sensitive fields
-    if let Some(upstreams) = config_json
-        .get_mut("upstreams")
-        .and_then(|v| v.as_array_mut())
-    {
-        for upstream in upstreams {
-            if let Some(api_key) = upstream.get_mut("api_key")
-                && api_key.as_str().is_some()
-            {
-                *api_key = serde_json::json!("<redacted>");
-            }
-        }
-    }
-
-    // Redact JWT secret
-    if let Some(auth) = config_json.get_mut("auth")
-        && let Some(jwt) = auth.get_mut("jwt")
-        && let Some(secret) = jwt.get_mut("secret")
-        && secret.as_str().is_some()
-    {
-        *secret = serde_json::json!("<redacted>");
-    }
-
-    Ok(response::Json(ConfigResponse {
-        config: config_json,
-    }))
+    Ok(response::Json(ConfigResponse { config }))
 }
 
 /// Update the full configuration
@@ -107,105 +59,44 @@ pub async fn get_config(
 )]
 pub async fn update_config(
     identity: HttpIdentity,
-    extract::State(_state): extract::State<AppState<ServerState>>,
+    extract::State(state): extract::State<gate_http::AppState<crate::MinimalState>>,
     extract::Json(request): extract::Json<ConfigUpdateRequest>,
 ) -> Result<response::Json<ConfigResponse>, HttpError> {
-    // Check permission to write configuration
-    let permission_manager = &_state.data.permission_manager;
-    let config_object = ObjectIdentity {
-        namespace: TargetNamespace::System,
-        kind: ObjectKind::Config,
-        id: ObjectId::new("*"),
-    };
-
-    let local_ctx = crate::permissions::LocalContext::from_http_identity(
-        &identity,
-        _state.state_backend.as_ref(),
-    )
-    .await;
-    let local_identity =
-        SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx);
-
-    if permission_manager
-        .check(&local_identity, Action::Write, &config_object)
-        .await
-        .is_err()
-    {
-        return Err(HttpError::AuthorizationFailed(
-            "Permission denied: cannot update configuration".to_string(),
-        ));
-    }
-
     // Deserialize the new configuration
     let new_config: Settings = serde_json::from_value(request.config.clone())
         .map_err(|e| HttpError::BadRequest(format!("Invalid configuration: {e}")))?;
 
-    // Write to runtime config file
-    let state_dir = StateDir::new();
-    let config_path = state_dir.config_path();
-
-    // Ensure parent directory exists
-    if let Some(parent) = config_path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            HttpError::InternalServerError(format!("Failed to create config directory: {e}"))
-        })?;
-    }
-
-    // Write the configuration as JSON
-    let config_string = serde_json::to_string_pretty(&new_config)
-        .map_err(|e| HttpError::InternalServerError(format!("Failed to serialize config: {e}")))?;
-
-    tokio::fs::write(&config_path, config_string)
+    // Use daemon to update config with permission check
+    state
+        .data
+        .daemon
+        .clone()
+        .with_http_identity(&identity)
         .await
-        .map_err(|e| HttpError::InternalServerError(format!("Failed to write config file: {e}")))?;
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?
+        .update_config(new_config.clone())
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
 
-    info!(
-        "Wrote updated config to {}. Restart required to apply changes.",
-        config_path.display()
-    );
+    // Get the redacted config to return
+    let config = state
+        .data
+        .daemon
+        .clone()
+        .with_http_identity(&identity)
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?
+        .get_config()
+        .await
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
 
-    // Return the updated configuration (with sensitive fields redacted)
-    let mut config_json = serde_json::to_value(&new_config)
-        .map_err(|e| HttpError::InternalServerError(format!("Failed to serialize config: {e}")))?;
-
-    // Redact sensitive fields
-    if let Some(upstreams) = config_json
-        .get_mut("upstreams")
-        .and_then(|v| v.as_array_mut())
-    {
-        for upstream in upstreams {
-            if let Some(api_key) = upstream.get_mut("api_key")
-                && api_key.as_str().is_some()
-            {
-                *api_key = serde_json::json!("<redacted>");
-            }
-        }
-    }
-
-    // Redact JWT secret
-    if let Some(auth) = config_json.get_mut("auth")
-        && let Some(jwt) = auth.get_mut("jwt")
-        && let Some(secret) = jwt.get_mut("secret")
-        && secret.as_str().is_some()
-    {
-        *secret = serde_json::json!("<redacted>");
-    }
-
-    Ok(response::Json(ConfigResponse {
-        config: config_json,
-    }))
-}
-
-/// Create the configuration routes
-pub fn router() -> axum::Router<AppState<ServerState>> {
-    axum::Router::new().route("/api/config", routing::get(get_config).put(update_config))
-    // Note: auth middleware is applied when converting to the final router
+    Ok(response::Json(ConfigResponse { config }))
 }
 
 /// Add config routes to an OpenAPI router
 pub fn add_routes(
-    mut router: utoipa_axum::router::OpenApiRouter<AppState<ServerState>>,
-) -> utoipa_axum::router::OpenApiRouter<AppState<ServerState>> {
+    mut router: utoipa_axum::router::OpenApiRouter<gate_http::AppState<crate::MinimalState>>,
+) -> utoipa_axum::router::OpenApiRouter<gate_http::AppState<crate::MinimalState>> {
     router = router
         .routes(utoipa_axum::routes!(get_config))
         .routes(utoipa_axum::routes!(update_config));

@@ -3,7 +3,6 @@
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use std::path::PathBuf;
-use tracing::{debug, info, warn};
 
 /// Manages platform-specific application directories for the TLS forward server
 pub struct TlsForwardStateDir {

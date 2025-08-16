@@ -15,7 +15,6 @@ use hyper_util::rt::TokioIo;
 use iroh::{Endpoint, NodeId};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error, info};
 
 /// Client for all daemon-tlsforward communications
 #[derive(Clone)]

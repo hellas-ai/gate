@@ -13,7 +13,6 @@ use iroh::{
 };
 use std::sync::Arc;
 use tower::Service;
-use tracing::{debug, error, info, instrument};
 
 /// HTTP protocol handler that serves REST APIs over P2P connections
 pub struct TlsForwardHttpHandler {

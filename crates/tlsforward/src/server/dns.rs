@@ -1,8 +1,6 @@
 //! DNS management for relay service
-
 use crate::common::error::Result;
 use std::sync::Arc;
-use tracing::warn;
 
 /// DNS manager interface
 #[async_trait::async_trait]

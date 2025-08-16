@@ -1,12 +1,14 @@
 //! Models API routes
 
-use crate::{error::HttpError, state::AppState};
+use crate::{
+    error::HttpError,
+    state::AppState,
+    types::{ModelInfo, ModelsListResponse},
+};
 use axum::{
     extract::State,
     response::{IntoResponse, Json, Response},
 };
-use serde_json::{Value as JsonValue, json};
-use tracing::{info, instrument};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 #[cfg(test)]
@@ -17,7 +19,7 @@ mod tests;
     get,
     path = "/v1/models",
     responses(
-        (status = 200, description = "List of available models", body = JsonValue),
+        (status = 200, description = "List of available models", body = ModelsListResponse),
         (status = 500, description = "Internal server error")
     ),
     tag = "models"
@@ -43,12 +45,13 @@ where
     // Add upstream models
     for (upstream_name, upstream_info) in &all_upstreams {
         for model_id in &upstream_info.models {
-            models.push(json!({
-                "id": model_id,
-                "object": "model",
-                "owned_by": upstream_name,
-                "created": chrono::Utc::now().timestamp(),
-            }));
+            models.push(ModelInfo {
+                id: model_id.clone(),
+                object: "model".to_string(),
+                owned_by: upstream_name.clone(),
+                created: chrono::Utc::now().timestamp(),
+                context_length: None,
+            });
         }
     }
 
@@ -57,22 +60,22 @@ where
         && let Ok(local_models) = inference_backend.list_models().await
     {
         for model in local_models {
-            models.push(json!({
-                "id": model.id,
-                "object": "model",
-                "owned_by": "local",
-                "created": chrono::Utc::now().timestamp(),
-                "context_length": model.context_length,
-            }));
+            models.push(ModelInfo {
+                id: model.id,
+                object: "model".to_string(),
+                owned_by: "local".to_string(),
+                created: chrono::Utc::now().timestamp(),
+                context_length: Some(model.context_length as usize),
+            });
         }
     }
 
     tracing::Span::current().record("model_count", models.len());
 
-    let response = json!({
-        "object": "list",
-        "data": models,
-    });
+    let response = ModelsListResponse {
+        object: "list".to_string(),
+        data: models,
+    };
 
     Ok(Json(response).into_response())
 }

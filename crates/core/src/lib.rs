@@ -9,7 +9,11 @@ pub mod types;
 pub mod validation;
 pub mod webauthn;
 
+#[macro_use]
+extern crate tracing as tracing_crate;
+
 #[cfg(feature = "tracing")]
+#[macro_use]
 pub mod tracing;
 
 #[cfg(any(test, feature = "tests"))]

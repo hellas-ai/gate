@@ -9,6 +9,7 @@
     "beforeBuildCommand": "cd frontend-daemon && trunk build --release && cd ../frontend-tauri && trunk build --release"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "Hellas Gate",

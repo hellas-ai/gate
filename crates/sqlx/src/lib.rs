@@ -1,3 +1,5 @@
+extern crate tracing;
+
 mod common;
 mod webauthn;
 

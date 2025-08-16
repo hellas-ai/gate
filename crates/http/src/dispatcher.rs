@@ -1,5 +1,6 @@
 //! Request dispatcher for forwarding inference requests to upstreams
 
+use crate::tracing::Instrument;
 use crate::{error::HttpError, forwarding::UpstreamRegistry};
 use axum::{
     body::Body,
@@ -10,9 +11,9 @@ use gate_core::InferenceBackend;
 use gate_core::tracing::{CorrelationId, trace_context::inject_trace_context};
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
+
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
-use tracing::{Instrument, debug, info, instrument, warn};
 
 /// Dispatcher for routing inference requests to appropriate upstreams
 pub struct Dispatcher {
@@ -208,7 +209,7 @@ impl Dispatcher {
             }
 
             let response = {
-                let span = tracing::info_span!(
+                let span = info_span!(
                     "upstream_request",
                     url = %url,
                     provider = %forwarding_config.provider,

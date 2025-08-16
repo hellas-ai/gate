@@ -3,7 +3,6 @@ use gate_tlsforward::{CertificateManager, TlsForwardClient};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info};
 
 use crate::{services::TlsForwardService, tls_reload::ReloadableTlsAcceptor};
 

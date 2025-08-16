@@ -6,7 +6,6 @@ use iroh::{
 };
 use std::net::SocketAddr;
 use thiserror::Error;
-use tracing::info;
 
 /// Configuration for P2P router
 #[derive(Debug, Clone)]

@@ -9,7 +9,6 @@ use chrono::Utc;
 use gate_core::ApiKey;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use tracing::instrument;
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 

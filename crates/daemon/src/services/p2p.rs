@@ -4,7 +4,6 @@ use gate_p2p::{Endpoint, NodeAddr, Router, SecretKey, discovery::static_provider
 use gate_tlsforward::{TLS_FORWARD_ALPN, TlsForwardHandler};
 use std::path::Path;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
 
 use crate::{
     config::TlsForwardConfig, services::TlsForwardService, tls_reload::ReloadableTlsAcceptor,

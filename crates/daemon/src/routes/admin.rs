@@ -11,7 +11,6 @@ use gate_core::types::User;
 use gate_http::{error::HttpError, services::HttpIdentity, state::AppState};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::{info, instrument, warn};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]

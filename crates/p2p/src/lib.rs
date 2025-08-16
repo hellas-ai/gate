@@ -1,6 +1,8 @@
 //! P2P networking functionality for Gate
 //!
 //! This crate provides P2P utilities using Iroh primitives directly.
+#[macro_use]
+extern crate tracing;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod router;

@@ -31,7 +31,6 @@ server = [
     "dep:tokio",
     "dep:tower",
     "dep:tower-http",
-    "dep:tracing",
     "dep:utoipa",
     "dep:utoipa-axum",
     "dep:utoipa-scalar",
@@ -73,7 +72,7 @@ thiserror.workspace = true
 tokio = { workspace = true, optional = true }
 tower = { workspace = true, features = ["util"], optional = true }
 tower-http = { workspace = true, optional = true }
-tracing = { workspace = true, optional = true }
+tracing = { workspace = true }
 utoipa = { workspace = true, optional = true }
 utoipa-axum = { workspace = true, optional = true }
 utoipa-scalar = { workspace = true, optional = true }

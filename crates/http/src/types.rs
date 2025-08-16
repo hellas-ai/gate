@@ -139,3 +139,44 @@ pub struct ConfigPatchRequest {
     /// The value to set at the specified path
     pub value: JsonValue,
 }
+
+/// Health check response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "server", derive(utoipa::ToSchema))]
+pub struct HealthCheckResponse {
+    /// Health status (e.g., "healthy", "degraded", "unhealthy")
+    pub status: String,
+    /// ISO 8601 timestamp
+    pub timestamp: String,
+    /// Service name
+    pub service: String,
+    /// Service version
+    pub version: String,
+}
+
+/// Model information in OpenAI format
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "server", derive(utoipa::ToSchema))]
+pub struct ModelInfo {
+    /// Model identifier
+    pub id: String,
+    /// Object type (always "model")
+    pub object: String,
+    /// Owner of the model
+    pub owned_by: String,
+    /// Unix timestamp of when the model was created
+    pub created: i64,
+    /// Optional context length for local models
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<usize>,
+}
+
+/// OpenAI-compatible models list response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "server", derive(utoipa::ToSchema))]
+pub struct ModelsListResponse {
+    /// Object type (always "list")
+    pub object: String,
+    /// List of available models
+    pub data: Vec<ModelInfo>,
+}

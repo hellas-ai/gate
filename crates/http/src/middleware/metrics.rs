@@ -6,9 +6,8 @@
 //! - Active request gauge
 
 use axum::{extract::Request, middleware::Next, response::IntoResponse};
-use gate_core::tracing::metrics::{counter, gauge, histogram};
+use gate_core::tracing::prelude::*;
 use std::time::Instant;
-use tracing::Instrument;
 
 /// Middleware to collect HTTP request metrics
 pub async fn metrics_middleware(request: Request, next: Next) -> impl IntoResponse {

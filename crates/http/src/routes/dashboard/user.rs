@@ -5,7 +5,6 @@ use axum::{Extension, extract::State, response::Json};
 use chrono::{DateTime, Utc};
 use gate_core::access::IdentityContext;
 use serde::{Deserialize, Serialize};
-use tracing::instrument;
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 

@@ -15,7 +15,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
-use tracing::{Instrument, debug, error, info, instrument, warn};
 
 /// HTTPS proxy server configuration
 #[derive(Debug, Clone)]

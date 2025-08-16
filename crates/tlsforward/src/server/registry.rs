@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
-use tracing::debug;
 
 /// Entry in the proxy registry
 #[derive(Debug, Clone)]

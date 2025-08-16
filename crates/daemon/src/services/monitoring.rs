@@ -2,7 +2,6 @@ use gate_core::StateBackend;
 use gate_http::services::WebAuthnService;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info};
 
 use crate::services::{TlsForwardService, TlsForwardState};
 

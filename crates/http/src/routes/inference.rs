@@ -8,7 +8,6 @@ use axum::{
 };
 use gate_core::tracing::prelude::*;
 use serde_json::Value as JsonValue;
-use tracing::instrument;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 /// Handle Anthropic messages requests

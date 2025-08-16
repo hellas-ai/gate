@@ -10,7 +10,6 @@ use gate_core::{Error, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error, info, instrument, warn};
 
 pub struct LocalInferenceService {
     config: LocalInferenceConfig,

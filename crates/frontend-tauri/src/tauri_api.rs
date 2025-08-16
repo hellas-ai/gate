@@ -3,23 +3,18 @@
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-// For Tauri v2, we need to check if we're in a Tauri context
+// Tauri v2 API
 #[wasm_bindgen(inline_js = "
 export function invoke_tauri_command(cmd, args) {
-    if (window.__TAURI_INTERNALS__) {
-        return window.__TAURI_INTERNALS__.invoke(cmd, args);
-    } else if (window.__TAURI__ && window.__TAURI__.invoke) {
-        return window.__TAURI__.invoke(cmd, args);
-    } else if (window.__TAURI__ && window.__TAURI__.tauri && window.__TAURI__.tauri.invoke) {
-        return window.__TAURI__.tauri.invoke(cmd, args);
-    } else {
-        console.error('Tauri API not found. Tried: window.__TAURI_INTERNALS__, window.__TAURI__.invoke, window.__TAURI__.tauri.invoke');
-        return Promise.reject('Tauri API not available');
+    if (window.__TAURI__?.core?.invoke) {
+        return window.__TAURI__.core.invoke(cmd, args);
     }
+    console.error('Tauri API not found. Ensure withGlobalTauri is set to true in tauri.conf.json');
+    return Promise.reject('Tauri API not available');
 }
 
 export function check_tauri_available() {
-    return !!(window.__TAURI_INTERNALS__ || (window.__TAURI__ && window.__TAURI__.invoke) || (window.__TAURI__ && window.__TAURI__.tauri));
+    return !!(window.__TAURI__?.core?.invoke);
 }
 ")]
 extern "C" {
@@ -106,37 +101,31 @@ pub struct DaemonRuntimeConfig {
 /// Start the daemon
 pub async fn start_daemon() -> Result<String, String> {
     let result = invoke("start_daemon", JsValue::UNDEFINED).await?;
-
     serde_wasm_bindgen::from_value::<String>(result).map_err(|e| e.to_string())
 }
 
 /// Stop the daemon
 pub async fn stop_daemon() -> Result<String, String> {
     let result = invoke("stop_daemon", JsValue::UNDEFINED).await?;
-
     serde_wasm_bindgen::from_value::<String>(result).map_err(|e| e.to_string())
 }
 
 /// Check if daemon is running
 pub async fn daemon_status() -> Result<bool, String> {
     let result = invoke("daemon_status", JsValue::UNDEFINED).await?;
-
     serde_wasm_bindgen::from_value::<bool>(result).map_err(|e| e.to_string())
 }
 
 /// Get daemon configuration
 pub async fn get_daemon_config() -> Result<Settings, String> {
     let result = invoke("get_daemon_config", JsValue::UNDEFINED).await?;
-
     serde_wasm_bindgen::from_value::<Settings>(result).map_err(|e| e.to_string())
 }
 
 /// Get daemon runtime status
 pub async fn get_daemon_status() -> Result<DaemonRuntimeStatus, String> {
     web_sys::console::log_1(&"Getting daemon status...".into());
-
     let result = invoke("get_daemon_status", JsValue::UNDEFINED).await?;
-
     serde_wasm_bindgen::from_value::<DaemonRuntimeStatus>(result).map_err(|e| {
         web_sys::console::error_1(&format!("Failed to deserialize status: {e}").into());
         e.to_string()
@@ -146,7 +135,6 @@ pub async fn get_daemon_status() -> Result<DaemonRuntimeStatus, String> {
 /// Get daemon runtime configuration
 pub async fn get_daemon_runtime_config() -> Result<DaemonRuntimeConfig, String> {
     let result = invoke("get_daemon_runtime_config", JsValue::UNDEFINED).await?;
-
     serde_wasm_bindgen::from_value::<DaemonRuntimeConfig>(result).map_err(|e| e.to_string())
 }
 
@@ -217,7 +205,6 @@ pub async fn open_url(url: String) -> Result<(), String> {
 /// Get bootstrap token for initial admin setup
 pub async fn get_bootstrap_token() -> Result<Option<String>, String> {
     let result = invoke("get_bootstrap_token", JsValue::UNDEFINED).await?;
-
     serde_wasm_bindgen::from_value::<Option<String>>(result).map_err(|e| e.to_string())
 }
 

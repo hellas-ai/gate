@@ -3,6 +3,8 @@
 //! This crate provides both client and server functionality:
 //! - Server: Standalone TLS forward service that proxies HTTPS traffic
 //! - Client: Library for gate servers to register with TLS forward service
+#[macro_use]
+extern crate tracing;
 
 pub mod common;
 
