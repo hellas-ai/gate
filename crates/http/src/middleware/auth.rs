@@ -2,7 +2,6 @@ use crate::error::HttpError;
 use crate::services::identity::HttpIdentity;
 use async_trait::async_trait;
 use axum::{extract::Request, http::request::Parts, middleware::Next, response::Response};
-use std::sync::Arc;
 
 /// Trait for authentication providers
 #[async_trait]
@@ -44,62 +43,18 @@ where
     }
 }
 
-/// Service-based authentication provider
-#[cfg(not(target_arch = "wasm32"))]
-pub struct ServiceAuthProvider {
-    auth_service: Arc<crate::services::AuthService>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl ServiceAuthProvider {
-    pub fn new(auth_service: Arc<crate::services::AuthService>) -> Self {
-        Self { auth_service }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[async_trait]
-impl AuthProvider for ServiceAuthProvider {
-    async fn authenticate(&self, parts: &Parts) -> Result<HttpIdentity, HttpError> {
-        let auth_header = parts
-            .headers
-            .get("Authorization")
-            .and_then(|value| value.to_str().ok())
-            .ok_or_else(|| {
-                HttpError::AuthenticationFailed("Missing authorization header".to_string())
-            })?;
-
-        self.auth_service.authenticate_from_header(auth_header)
-    }
-
-    fn should_skip_auth(&self, path: &str) -> bool {
-        path.starts_with("/auth/webauthn/")
-            || path.starts_with("/auth/bootstrap/")
-            || path == "/health"
-            || path.starts_with("/swagger-ui")
-            || path == "/"
-            || path.ends_with(".js")
-            || path.ends_with(".wasm")
-            || path.ends_with(".html")
-            || path.ends_with(".css")
-    }
-}
-
+/// Blanket implementation for AppState<T> where T implements AuthProvider
 #[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl<T> AuthProvider for crate::AppState<T>
 where
-    T: AsRef<Arc<crate::services::AuthService>> + Send + Sync,
+    T: AuthProvider + Clone + Send + Sync,
 {
     async fn authenticate(&self, parts: &Parts) -> Result<HttpIdentity, HttpError> {
-        let auth_service: &Arc<crate::services::AuthService> = self.data.as_ref().as_ref();
-        let service_provider = ServiceAuthProvider::new(auth_service.clone());
-        service_provider.authenticate(parts).await
+        self.data.authenticate(parts).await
     }
 
     fn should_skip_auth(&self, path: &str) -> bool {
-        let auth_service: &Arc<crate::services::AuthService> = self.data.as_ref().as_ref();
-        let service_provider = ServiceAuthProvider::new(auth_service.clone());
-        service_provider.should_skip_auth(path)
+        self.data.should_skip_auth(path)
     }
 }

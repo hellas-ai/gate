@@ -133,7 +133,7 @@ impl Daemon {
 
     pub async fn get_webauthn_service(
         &self,
-    ) -> Result<Option<Arc<gate_http::services::WebAuthnService>>> {
+    ) -> Result<Option<Arc<crate::services::WebAuthnService>>> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(DaemonRequest::GetWebAuthnService { reply })
@@ -172,7 +172,7 @@ impl Daemon {
         Ok(rx.await?)
     }
 
-    pub async fn get_auth_service(&self) -> Result<Arc<gate_http::services::AuthService>> {
+    pub async fn get_auth_service(&self) -> Result<Arc<crate::services::AuthService>> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(DaemonRequest::GetAuthService { reply })

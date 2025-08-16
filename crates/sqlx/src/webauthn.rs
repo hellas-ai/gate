@@ -1,10 +1,24 @@
 //! WebAuthn backend implementation for SQLx
 
-use async_trait::async_trait;
-use gate_core::{Error, Result, StoredCredential, WebAuthnBackend};
+use chrono::{DateTime, Utc};
+use gate_core::{Error, Result};
+use serde::{Deserialize, Serialize};
 use sqlx::{Database, Executor, FromRow, Pool};
 
 use crate::common::{datetime_to_string, string_to_datetime};
+
+/// WebAuthn credential stored in database
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredCredential {
+    pub credential_id: String,
+    pub user_id: String,
+    pub public_key: Vec<u8>,
+    pub aaguid: Option<Vec<u8>>,
+    pub counter: u32,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub device_name: Option<String>,
+}
 
 /// Database row type for WebAuthn credentials
 #[derive(FromRow)]
@@ -45,8 +59,7 @@ impl<DB: Database> SqlxWebAuthnBackend<DB> {
     }
 }
 
-#[async_trait]
-impl<DB> WebAuthnBackend for SqlxWebAuthnBackend<DB>
+impl<DB> SqlxWebAuthnBackend<DB>
 where
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
@@ -64,7 +77,7 @@ where
     // Required for queries
     for<'q> <DB as Database>::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
-    async fn store_webauthn_credential(&self, credential: &StoredCredential) -> Result<()> {
+    pub async fn store_webauthn_credential(&self, credential: &StoredCredential) -> Result<()> {
         sqlx::query(
             "INSERT INTO webauthn_credentials (credential_id, user_id, public_key, aaguid, counter, created_at, last_used_at, device_name) 
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
@@ -84,7 +97,7 @@ where
         Ok(())
     }
 
-    async fn get_webauthn_credential(
+    pub async fn get_webauthn_credential(
         &self,
         credential_id: &str,
     ) -> Result<Option<StoredCredential>> {
@@ -100,7 +113,7 @@ where
         Ok(row.map(Into::into))
     }
 
-    async fn list_user_credentials(&self, user_id: &str) -> Result<Vec<StoredCredential>> {
+    pub async fn list_user_credentials(&self, user_id: &str) -> Result<Vec<StoredCredential>> {
         let rows = sqlx::query_as::<_, WebAuthnCredentialRow>(
             "SELECT credential_id, user_id, public_key, aaguid, counter, created_at, last_used_at, device_name 
              FROM webauthn_credentials WHERE user_id = $1 ORDER BY created_at DESC"
@@ -113,7 +126,7 @@ where
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
-    async fn list_all_credentials(&self) -> Result<Vec<StoredCredential>> {
+    pub async fn list_all_credentials(&self) -> Result<Vec<StoredCredential>> {
         let rows = sqlx::query_as::<_, WebAuthnCredentialRow>(
             "SELECT credential_id, user_id, public_key, aaguid, counter, created_at, last_used_at, device_name 
              FROM webauthn_credentials ORDER BY created_at DESC"
@@ -125,7 +138,7 @@ where
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
-    async fn update_credential_counter(&self, credential_id: &str, counter: u32) -> Result<()> {
+    pub async fn update_credential_counter(&self, credential_id: &str, counter: u32) -> Result<()> {
         let now = datetime_to_string(chrono::Utc::now());
 
         sqlx::query(
@@ -141,7 +154,7 @@ where
         Ok(())
     }
 
-    async fn delete_credential(&self, credential_id: &str) -> Result<()> {
+    pub async fn delete_credential(&self, credential_id: &str) -> Result<()> {
         sqlx::query("DELETE FROM webauthn_credentials WHERE credential_id = $1")
             .bind(credential_id)
             .execute(&self.pool)

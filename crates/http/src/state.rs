@@ -1,9 +1,7 @@
 //! Application state management
 
 use crate::forwarding::UpstreamRegistry;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::middleware::webauthn::WebAuthnState;
-use gate_core::{InferenceBackend, StateBackend, WebAuthnBackend};
+use gate_core::{InferenceBackend, StateBackend};
 use std::sync::Arc;
 
 /// Shared application state
@@ -15,11 +13,6 @@ use std::sync::Arc;
 pub struct AppState<T = ()> {
     /// State backend for data persistence
     pub state_backend: Arc<dyn StateBackend>,
-    /// WebAuthn backend for credential storage
-    pub webauthn_backend: Option<Arc<dyn WebAuthnBackend>>,
-    /// WebAuthn state manager
-    #[cfg(not(target_arch = "wasm32"))]
-    pub webauthn_state: Option<Arc<WebAuthnState>>,
     /// Registry for upstream providers
     pub upstream_registry: Arc<UpstreamRegistry>,
     /// Inference backend for local model inference
@@ -38,29 +31,6 @@ impl<T> AppState<T> {
         Self {
             // context,
             state_backend,
-            webauthn_backend: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            webauthn_state: None,
-            upstream_registry: Arc::new(UpstreamRegistry::new()),
-            inference_backend: None,
-            data: Arc::new(data),
-        }
-    }
-
-    /// Create a new AppState with WebAuthn support
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn with_webauthn(
-        // context: Arc<dyn RequestContext>,
-        state_backend: Arc<dyn StateBackend>,
-        webauthn_backend: Arc<dyn WebAuthnBackend>,
-        webauthn_state: Arc<WebAuthnState>,
-        data: T,
-    ) -> Self {
-        Self {
-            // context,
-            state_backend,
-            webauthn_backend: Some(webauthn_backend),
-            webauthn_state: Some(webauthn_state),
             upstream_registry: Arc::new(UpstreamRegistry::new()),
             inference_backend: None,
             data: Arc::new(data),

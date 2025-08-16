@@ -2,10 +2,10 @@ use crate::Settings;
 use crate::bootstrap::BootstrapTokenManager;
 use crate::error::Result;
 use crate::permissions::{LocalIdentity, LocalPermissionManager};
+use crate::services::{AuthService, WebAuthnService};
 use crate::types::DaemonStatus;
 use gate_core::StateBackend;
 use gate_http::UpstreamRegistry;
-use gate_http::services::{AuthService, WebAuthnService};
 use std::sync::Arc;
 use tokio::sync::oneshot;
 

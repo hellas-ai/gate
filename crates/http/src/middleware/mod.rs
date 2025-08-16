@@ -7,8 +7,6 @@ pub mod trace;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod webauthn;
 
-#[cfg(not(target_arch = "wasm32"))]
-pub use auth::ServiceAuthProvider;
 pub use auth::{AuthProvider, auth_middleware};
 pub use correlation::{
     CORRELATION_ID_HEADER, CorrelationIdExt, correlation_id_middleware, extract_correlation_id,

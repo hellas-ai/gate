@@ -4,7 +4,6 @@ pub mod errors;
 pub mod inference;
 pub mod state;
 pub mod types;
-pub mod webauthn;
 
 #[cfg(feature = "tracing")]
 #[macro_use]
@@ -21,7 +20,6 @@ pub use context::RequestContext;
 pub use errors::{Error, Result};
 pub use inference::InferenceBackend;
 pub use state::StateBackend;
-pub use webauthn::{StoredCredential, WebAuthnBackend};
 
 // Re-export types for convenience
 pub use types::{

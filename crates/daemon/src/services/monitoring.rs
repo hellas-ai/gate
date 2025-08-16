@@ -1,9 +1,8 @@
 use gate_core::StateBackend;
-use gate_http::services::WebAuthnService;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 
-use crate::services::{TlsForwardService, TlsForwardState};
+use crate::services::{TlsForwardService, TlsForwardState, WebAuthnService};
 
 /// Manages all monitoring tasks
 pub struct MonitoringService {

@@ -1,9 +1,9 @@
-use crate::error::HttpError;
-use crate::services::JwtService;
-use crate::services::identity::{HttpContext, HttpIdentity};
-use crate::types::{AuthCompleteResponse, RegisterCompleteResponse};
 use chrono::Utc;
-use gate_core::{StateBackend, StoredCredential, User, WebAuthnBackend};
+use gate_core::{StateBackend, User};
+use gate_http::error::HttpError;
+use gate_http::services::{HttpContext, HttpIdentity, JwtService};
+use gate_http::types::{AuthCompleteResponse, RegisterCompleteResponse};
+use gate_sqlx::{SqliteWebAuthnBackend, StoredCredential};
 use std::sync::Arc;
 use webauthn_rs::prelude::*;
 
@@ -11,14 +11,14 @@ use webauthn_rs::prelude::*;
 pub struct AuthService {
     jwt_service: Arc<JwtService>,
     state_backend: Arc<dyn StateBackend>,
-    webauthn_backend: Arc<dyn WebAuthnBackend>,
+    webauthn_backend: Arc<SqliteWebAuthnBackend>,
 }
 
 impl AuthService {
     pub fn new(
         jwt_service: Arc<JwtService>,
         state_backend: Arc<dyn StateBackend>,
-        webauthn_backend: Arc<dyn WebAuthnBackend>,
+        webauthn_backend: Arc<SqliteWebAuthnBackend>,
     ) -> Self {
         Self {
             jwt_service,

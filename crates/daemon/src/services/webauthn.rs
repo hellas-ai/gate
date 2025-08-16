@@ -1,10 +1,11 @@
 //! WebAuthn service for managing WebAuthn operations
 
-use crate::error::HttpError;
-use crate::middleware::webauthn::{WebAuthnConfig, WebAuthnSession, WebAuthnState};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Utc;
-use gate_core::WebAuthnBackend;
+use gate_http::error::HttpError;
+use gate_http::middleware::webauthn::WebAuthnSession;
+use gate_http::middleware::{WebAuthnConfig, WebAuthnState};
+use gate_sqlx::SqliteWebAuthnBackend;
 use std::sync::Arc;
 use uuid::Uuid;
 use webauthn_rs::prelude::*;
@@ -12,14 +13,14 @@ use webauthn_rs::prelude::*;
 /// WebAuthn service for authentication operations
 pub struct WebAuthnService {
     state: Arc<WebAuthnState>,
-    backend: Arc<dyn WebAuthnBackend>,
+    backend: Arc<SqliteWebAuthnBackend>,
 }
 
 impl WebAuthnService {
     /// Create a new WebAuthn service
     pub fn new(
         config: WebAuthnConfig,
-        backend: Arc<dyn WebAuthnBackend>,
+        backend: Arc<SqliteWebAuthnBackend>,
     ) -> Result<Self, HttpError> {
         let state = WebAuthnState::new(config).map_err(|e| {
             HttpError::InternalServerError(format!("Failed to initialize WebAuthn: {e}"))

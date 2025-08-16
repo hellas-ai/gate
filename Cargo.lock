@@ -2579,6 +2579,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "catgrad-llm",
  "chrono",
  "clap",
@@ -2612,6 +2613,7 @@ dependencies = [
  "utoipa-axum",
  "utoipa-scalar",
  "uuid",
+ "webauthn-rs",
 ]
 
 [[package]]
@@ -2781,7 +2783,6 @@ dependencies = [
  "utoipa-scalar",
  "uuid",
  "webauthn-rs",
- "webauthn-rs-proto",
  "wiremock",
 ]
 
@@ -2804,6 +2805,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "gate-core",
+ "serde",
  "serde_json",
  "sqlx",
  "tokio",

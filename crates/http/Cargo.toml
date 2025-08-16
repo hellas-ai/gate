@@ -35,8 +35,7 @@ server = [
     "dep:utoipa-axum",
     "dep:utoipa-scalar",
     "dep:uuid",
-    "dep:webauthn-rs",
-    "dep:webauthn-rs-proto",
+    "dep:webauthn-rs"
 ]
 client = ["dep:reqwest", "dep:gate-core"]
 
@@ -45,7 +44,6 @@ hyper-util = { workspace = true, features = ["server", "tokio"], optional = true
 jsonwebtoken = { version = "9.3", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
 webauthn-rs = { version = "0.5", optional = true }
-webauthn-rs-proto = { version = "0.5", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { workspace = true, features = ["wasm_js"], optional = true }

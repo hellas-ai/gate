@@ -1,16 +1,16 @@
 use crate::bootstrap::BootstrapTokenManager;
 use crate::daemon::{Daemon, actor::DaemonActor, inner::DaemonInner};
 use crate::error::Result;
+use crate::services::{AuthService, WebAuthnService};
 use crate::{Settings, StateDir};
-use gate_core::WebAuthnBackend;
 use gate_http::{
     UpstreamRegistry,
     forwarding::ForwardingConfig,
     middleware::WebAuthnConfig,
     model_detection,
-    services::{AuthService, JwtConfig, JwtService, WebAuthnService},
+    services::{JwtConfig, JwtService},
 };
-use gate_sqlx::{SqliteStateBackend, SqlxWebAuthnBackend};
+use gate_sqlx::{SqliteStateBackend, SqliteWebAuthnBackend};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -148,7 +148,7 @@ impl DaemonBuilder {
                 .await
                 .map_err(|e| crate::error::DaemonError::Database(e.to_string()))?,
         );
-        let webauthn_backend = Arc::new(SqlxWebAuthnBackend::new(state_backend.pool().clone()));
+        let webauthn_backend = Arc::new(SqliteWebAuthnBackend::new(state_backend.pool().clone()));
 
         // Check bootstrap and count users
         let bootstrap_manager = Arc::new(BootstrapTokenManager::new(webauthn_backend.clone()));

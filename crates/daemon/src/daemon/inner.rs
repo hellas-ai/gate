@@ -2,14 +2,14 @@ use crate::Settings;
 use crate::bootstrap::BootstrapTokenManager;
 use crate::error::Result;
 use crate::permissions::{LocalIdentity, LocalPermissionManager};
-use crate::services::TlsForwardService;
+use crate::services::{AuthService, TlsForwardService, WebAuthnService};
 use crate::types::{DaemonStatus, TlsForwardStatus};
 use gate_core::StateBackend;
 use gate_core::access::{
     Action, ObjectId, ObjectIdentity, ObjectKind, Permissions, TargetNamespace,
 };
 use gate_http::UpstreamRegistry;
-use gate_http::services::{AuthService, JwtService, WebAuthnService};
+use gate_http::services::JwtService;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 

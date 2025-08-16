@@ -1,5 +1,5 @@
 use anyhow::Result;
-use gate_core::WebAuthnBackend;
+use gate_sqlx::SqliteWebAuthnBackend;
 use rand::{Rng, distributions::Alphanumeric};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 #[derive(Clone)]
 pub struct BootstrapTokenManager {
     inner: Arc<RwLock<BootstrapTokenState>>,
-    webauthn_backend: Arc<dyn WebAuthnBackend>,
+    webauthn_backend: Arc<SqliteWebAuthnBackend>,
 }
 
 #[derive(Debug)]
@@ -19,7 +19,7 @@ struct BootstrapTokenState {
 
 impl BootstrapTokenManager {
     /// Creates a new bootstrap token manager
-    pub fn new(webauthn_backend: Arc<dyn WebAuthnBackend>) -> Self {
+    pub fn new(webauthn_backend: Arc<SqliteWebAuthnBackend>) -> Self {
         Self {
             inner: Arc::new(RwLock::new(BootstrapTokenState {
                 token: None,
@@ -105,7 +105,7 @@ impl BootstrapTokenManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gate_sqlx::{SqliteStateBackend, SqlxWebAuthnBackend};
+    use gate_sqlx::{SqliteStateBackend, SqliteWebAuthnBackend};
 
     async fn create_test_manager() -> Arc<BootstrapTokenManager> {
         let state_backend = Arc::new(
@@ -113,7 +113,7 @@ mod tests {
                 .await
                 .expect("Failed to create backend"),
         );
-        let webauthn_backend = Arc::new(SqlxWebAuthnBackend::new(state_backend.pool().clone()));
+        let webauthn_backend = Arc::new(SqliteWebAuthnBackend::new(state_backend.pool().clone()));
         Arc::new(BootstrapTokenManager::new(webauthn_backend))
     }
 

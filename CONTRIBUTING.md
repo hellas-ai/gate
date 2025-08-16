@@ -26,6 +26,7 @@ General guidelines:
 - This is a production-grade codebase. No hacks, no shortcuts, no 'do this later'.
 - This is a greenfield project. We want the highest-quality code possible, so if we need to refactor or change things, its better to do it sooner than later.
 - Complexity is our enemy- we should strive to keep our codebase as simple as possible (but no simpler)
+- We are free to change whatever we need in this project in order to achieve our goals
 
 # Crate organisation
 ## Core Crate
@@ -127,7 +128,10 @@ We use the `tracing` crate throughout this repo.
     - If you are writing Tauri commands and they expect Result<String, String>, implement `Into<String>` for our errors
 
 # Visibility
-- We should think carefully about the visibility
+- We should think carefully about the visibility of all the code we write. Overuse of `pub` makes the library API enormous
+and brittle, not to mention slows compiling/linking.
+- If code is strictly heirachical, we can avoid making anything `pub` other than top-level crate exports. If not, we can use
+e.g `pub(crate)`
 
 # When embarking on a task
 - Read ALL relevant information BEFORE starting to code. This includes the planning stage as well as implementation itself.

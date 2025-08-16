@@ -4,7 +4,12 @@
 //! It contains just the auth service (for middleware) and the daemon handle (for business logic).
 
 use crate::Daemon;
-use gate_http::services::AuthService;
+use crate::services::AuthService;
+use async_trait::async_trait;
+use axum::http::request::Parts;
+use gate_http::error::HttpError;
+use gate_http::middleware::AuthProvider;
+use gate_http::services::HttpIdentity;
 use std::sync::Arc;
 
 /// Minimal state for HTTP routes
@@ -25,9 +30,30 @@ impl MinimalState {
     }
 }
 
-// Implement AsRef for auth middleware compatibility
-impl AsRef<Arc<AuthService>> for MinimalState {
-    fn as_ref(&self) -> &Arc<AuthService> {
-        &self.auth_service
+// Implement AuthProvider directly for MinimalState
+#[async_trait]
+impl AuthProvider for MinimalState {
+    async fn authenticate(&self, parts: &Parts) -> Result<HttpIdentity, HttpError> {
+        let auth_header = parts
+            .headers
+            .get("Authorization")
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| {
+                HttpError::AuthenticationFailed("Missing authorization header".to_string())
+            })?;
+
+        self.auth_service.authenticate_from_header(auth_header)
+    }
+
+    fn should_skip_auth(&self, path: &str) -> bool {
+        path.starts_with("/auth/webauthn/")
+            || path.starts_with("/auth/bootstrap/")
+            || path == "/health"
+            || path.starts_with("/swagger-ui")
+            || path == "/"
+            || path.ends_with(".js")
+            || path.ends_with(".wasm")
+            || path.ends_with(".html")
+            || path.ends_with(".css")
     }
 }

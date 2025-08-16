@@ -24,6 +24,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 async-trait.workspace = true
 axum = { workspace = true, features = ["tokio", "http1"] }
+base64.workspace = true
 
 # Configuration
 chrono.workspace = true
@@ -56,6 +57,7 @@ utoipa-scalar.workspace = true
 
 futures.workspace = true
 uuid.workspace = true
+webauthn-rs.workspace = true
 catgrad-llm = { git = "https://github.com/hellas-ai/catgrad"}
 
 [dev-dependencies]
