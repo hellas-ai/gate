@@ -15,7 +15,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     - uses: mkroening/rust-toolchain-toml@main
     - uses: Swatinem/rust-cache@v2
 
@@ -55,7 +55,7 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     
     # Install Rust toolchain
     - uses: mkroening/rust-toolchain-toml@main
