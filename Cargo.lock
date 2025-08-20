@@ -3878,7 +3878,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -4371,7 +4371,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6783,7 +6783,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7299,7 +7299,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7380,7 +7380,7 @@ dependencies = [
  "security-framework 3.3.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -10318,7 +10318,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -11092,7 +11092,7 @@ dependencies = [
 [[package]]
 name = "yew"
 version = "0.21.0"
-source = "git+https://github.com/yewstack/yew#1707f0378498be4ba0b90616dab9ab791553c124"
+source = "git+https://github.com/yewstack/yew#06845fff9f11f680f3e3404b6a8b9b8b656cfdcd"
 dependencies = [
  "console_error_panic_hook",
  "futures",
@@ -11116,7 +11116,7 @@ dependencies = [
 [[package]]
 name = "yew-macro"
 version = "0.21.0"
-source = "git+https://github.com/yewstack/yew#1707f0378498be4ba0b90616dab9ab791553c124"
+source = "git+https://github.com/yewstack/yew#06845fff9f11f680f3e3404b6a8b9b8b656cfdcd"
 dependencies = [
  "once_cell",
  "prettyplease",
@@ -11130,7 +11130,7 @@ dependencies = [
 [[package]]
 name = "yew-router"
 version = "0.18.0"
-source = "git+https://github.com/yewstack/yew#1707f0378498be4ba0b90616dab9ab791553c124"
+source = "git+https://github.com/yewstack/yew#06845fff9f11f680f3e3404b6a8b9b8b656cfdcd"
 dependencies = [
  "gloo",
  "js-sys",
@@ -11148,7 +11148,7 @@ dependencies = [
 [[package]]
 name = "yew-router-macro"
 version = "0.18.0"
-source = "git+https://github.com/yewstack/yew#1707f0378498be4ba0b90616dab9ab791553c124"
+source = "git+https://github.com/yewstack/yew#06845fff9f11f680f3e3404b6a8b9b8b656cfdcd"
 dependencies = [
  "proc-macro2",
  "quote",
