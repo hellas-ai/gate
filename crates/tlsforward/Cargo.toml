@@ -107,7 +107,7 @@ tower = { version = "0.5", optional = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
-x509-parser = { version = "0.17", optional = true }
+x509-parser = { version = "0.18", optional = true }
 
 [dev-dependencies]
 gate-daemon = { path = "../daemon" }
