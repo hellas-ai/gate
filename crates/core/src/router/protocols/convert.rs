@@ -45,8 +45,8 @@ pub fn convert_request(
         (Protocol::OpenAICompletions, Protocol::OpenAIChat) => completions_to_chat(json),
         (a, b) if a == b => Ok((json.clone(), vec![])),
         _ => Err(crate::Error::UnsupportedConversion(
-            format!("{:?}", from),
-            format!("{:?}", to),
+            format!("{from:?}"),
+            format!("{to:?}"),
         )),
     }
 }
@@ -62,8 +62,8 @@ pub fn convert_response(
         (Protocol::Anthropic, Protocol::OpenAIChat) => anthropic_response_to_openai_chat(json),
         (a, b) if a == b => Ok((json.clone(), vec![])),
         _ => Err(crate::Error::UnsupportedConversion(
-            format!("{:?}", from),
-            format!("{:?}", to),
+            format!("{from:?}"),
+            format!("{to:?}"),
         )),
     }
 }
@@ -112,7 +112,7 @@ fn anthropic_to_openai_chat(json: &JsonValue) -> Result<(JsonValue, Vec<String>)
                                 }
                                 _ => {
                                     warnings
-                                        .push(format!("Content type {} not supported", block_type));
+                                        .push(format!("Content type {block_type} not supported"));
                                 }
                             }
                         }
@@ -207,7 +207,7 @@ fn openai_chat_to_anthropic(json: &JsonValue) -> Result<(JsonValue, Vec<String>)
                     }
                 }
                 _ => {
-                    warnings.push(format!("Unknown role: {}", role));
+                    warnings.push(format!("Unknown role: {role}"));
                 }
             }
         }
@@ -415,12 +415,11 @@ fn anthropic_response_to_openai_chat(json: &JsonValue) -> Result<(JsonValue, Vec
     if let Some(content) = json.get("content").and_then(|c| c.as_array()) {
         let mut text_parts = Vec::new();
         for block in content {
-            if let Some(block_type) = block.get("type").and_then(|t| t.as_str()) {
-                if block_type == "text" {
-                    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                        text_parts.push(text.to_string());
-                    }
-                }
+            if let Some(block_type) = block.get("type").and_then(|t| t.as_str())
+                && block_type == "text"
+                && let Some(text) = block.get("text").and_then(|t| t.as_str())
+            {
+                text_parts.push(text.to_string());
             }
         }
         message["content"] = json!(text_parts.join("\n"));

@@ -46,10 +46,10 @@ fn detect_vision_openai(request: &JsonValue) -> bool {
                 // Check if content is an array (multi-modal)
                 if let Some(content_array) = content.as_array() {
                     for item in content_array {
-                        if let Some(item_type) = item.get("type").and_then(|t| t.as_str()) {
-                            if item_type == "image_url" || item_type == "image" {
-                                return true;
-                            }
+                        if let Some(item_type) = item.get("type").and_then(|t| t.as_str())
+                            && (item_type == "image_url" || item_type == "image")
+                        {
+                            return true;
                         }
                     }
                 }
@@ -65,10 +65,10 @@ fn detect_vision_anthropic(request: &JsonValue) -> bool {
         for message in messages {
             if let Some(content) = message.get("content").and_then(|c| c.as_array()) {
                 for block in content {
-                    if let Some(block_type) = block.get("type").and_then(|t| t.as_str()) {
-                        if block_type == "image" {
-                            return true;
-                        }
+                    if let Some(block_type) = block.get("type").and_then(|t| t.as_str())
+                        && block_type == "image"
+                    {
+                        return true;
                     }
                 }
             }

@@ -67,8 +67,7 @@ impl RoutingStrategy for WeightedStrategy {
                 estimated_latency: candidate.health.latency_ms.map(Duration::from_millis),
                 conversion_needed: candidate.needs_conversion.clone(),
                 rationale: format!(
-                    "Weighted routing: base_weight={:.2}, health_factor={:.2}",
-                    base_weight, health_factor
+                    "Weighted routing: base_weight={base_weight:.2}, health_factor={health_factor:.2}"
                 ),
             });
         }

@@ -37,7 +37,8 @@ pub const ASSISTANT_BUBBLE_COLORS: &str =
     "bg-white dark:bg-gray-700 mr-10 md:mr-20 border border-gray-200 dark:border-gray-600";
 pub const SYSTEM_BUBBLE_COLORS: &str =
     "bg-orange-100 dark:bg-orange-900 italic border border-orange-200 dark:border-orange-800";
-pub const TOOL_BUBBLE_COLORS: &str = "bg-blue-50 dark:bg-blue-900 font-mono text-sm border border-blue-200 dark:border-blue-800";
+pub const TOOL_BUBBLE_COLORS: &str =
+    "bg-blue-50 dark:bg-blue-900 font-mono text-sm border border-blue-200 dark:border-blue-800";
 pub const DEFAULT_BUBBLE_COLORS: &str = "bg-white border border-gray-200 dark:border-gray-700";
 
 // Button styles

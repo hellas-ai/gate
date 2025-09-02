@@ -103,13 +103,12 @@ impl Sink for CatgradSink {
                 } else if let Some(arr) = m.get("content").and_then(|v| v.as_array()) {
                     let mut s = String::new();
                     for block in arr {
-                        if let Some(t) = block.get("type").and_then(|v| v.as_str()) {
-                            if t == "text" {
-                                if let Some(txt) = block.get("text").and_then(|v| v.as_str()) {
-                                    s.push_str(txt);
-                                    s.push('\n');
-                                }
-                            }
+                        if let Some(t) = block.get("type").and_then(|v| v.as_str())
+                            && t == "text"
+                            && let Some(txt) = block.get("text").and_then(|v| v.as_str())
+                        {
+                            s.push_str(txt);
+                            s.push('\n');
                         }
                     }
                     s
@@ -146,10 +145,10 @@ impl Sink for CatgradSink {
                 let mut count = 0usize;
                 for token in runner.complete(context) {
                     // Decode only the current token to avoid cloning the full sequence
-                    if let Ok(piece) = tokenizer.decode(vec![token]) {
-                        if !piece.is_empty() {
-                            deltas.push(piece);
-                        }
+                    if let Ok(piece) = tokenizer.decode(vec![token])
+                        && !piece.is_empty()
+                    {
+                        deltas.push(piece);
                     }
                     count += 1;
                     if count >= max_tokens {
@@ -183,8 +182,8 @@ impl Sink for CatgradSink {
             items.push(Ok(ResponseChunk::Content(chunk_body)));
         }
         items.push(Ok(ResponseChunk::Usage {
-            prompt_tokens: prompt_tokens,
-            completion_tokens: completion_tokens,
+            prompt_tokens,
+            completion_tokens,
         }));
         items.push(Ok(ResponseChunk::Stop {
             reason: StopReason::Complete,

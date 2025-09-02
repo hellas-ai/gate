@@ -64,7 +64,7 @@ impl HttpSink {
         let client = Client::builder()
             .timeout(config.timeout)
             .build()
-            .map_err(|e| Error::Internal(format!("Failed to create HTTP client: {}", e)))?;
+            .map_err(|e| Error::Internal(format!("Failed to create HTTP client: {e}")))?;
 
         let health = Arc::new(RwLock::new(SinkHealth {
             healthy: true,
@@ -88,8 +88,8 @@ impl HttpSink {
             .as_ref()
             .map(|key| match self.config.provider {
                 Provider::Anthropic => ("x-api-key", key.clone()),
-                Provider::OpenAI => ("Authorization", format!("Bearer {}", key)),
-                Provider::Custom => ("Authorization", format!("Bearer {}", key)),
+                Provider::OpenAI => ("Authorization", format!("Bearer {key}")),
+                Provider::Custom => ("Authorization", format!("Bearer {key}")),
             })
     }
 
@@ -192,7 +192,7 @@ impl HttpSink {
             let body = response
                 .json::<JsonValue>()
                 .await
-                .map_err(|e| Error::Internal(format!("Failed to parse response: {}", e)))?;
+                .map_err(|e| Error::Internal(format!("Failed to parse response: {e}")))?;
 
             let chunks = vec![
                 Ok(ResponseChunk::Content(body)),
@@ -250,7 +250,7 @@ impl HttpSink {
                     error!("SSE parse error from {}: {}", provider, e);
                     Ok(ResponseChunk::Stop {
                         reason: StopReason::Error,
-                        error: Some(format!("Stream error: {}", e)),
+                        error: Some(format!("Stream error: {e}")),
                         cost: None,
                     })
                 }

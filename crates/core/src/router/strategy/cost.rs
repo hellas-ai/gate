@@ -71,10 +71,10 @@ impl RoutingStrategy for CostOptimizedStrategy {
             let estimated_cost = self.estimate_cost(&candidate, request);
 
             // Skip if over budget
-            if let (Some(budget), Some(cost)) = (self.budget, estimated_cost) {
-                if cost > budget {
-                    continue;
-                }
+            if let (Some(budget), Some(cost)) = (self.budget, estimated_cost)
+                && cost > budget
+            {
+                continue;
             }
 
             // Calculate score based on cost (lower cost = higher score)
@@ -120,8 +120,7 @@ impl RoutingStrategy for CostOptimizedStrategy {
                     .map(std::time::Duration::from_millis),
                 conversion_needed: candidate.needs_conversion.clone(),
                 rationale: format!(
-                    "Cost-optimized: estimated_cost={:?}, score={:.3}",
-                    estimated_cost, final_score
+                    "Cost-optimized: estimated_cost={estimated_cost:?}, score={final_score:.3}"
                 ),
             });
         }

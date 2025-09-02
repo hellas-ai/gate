@@ -1,11 +1,7 @@
 //! Integration tests for HTTP routes
 
-use axum::{
-    body::Body,
-    http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode},
-};
+use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use gate_http::auth::extract_identity;
-use serde_json::json;
 
 #[tokio::test]
 async fn test_identity_extraction_with_bearer() {

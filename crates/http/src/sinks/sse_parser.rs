@@ -6,23 +6,12 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 /// SSE event parsed from the stream
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SseEvent {
     pub event: Option<String>,
     pub data: String,
     pub id: Option<String>,
     pub retry: Option<u64>,
-}
-
-impl Default for SseEvent {
-    fn default() -> Self {
-        Self {
-            event: None,
-            data: String::new(),
-            id: None,
-            retry: None,
-        }
-    }
 }
 
 /// Parser state for SSE stream

@@ -18,16 +18,11 @@ impl MonitoringMiddleware {
     pub fn new(service_name: String) -> Self {
         Self { service_name }
     }
-
-    /// Create with default service name
-    pub fn default() -> Self {
-        Self::new("gate-router".to_string())
-    }
 }
 
 impl Default for MonitoringMiddleware {
     fn default() -> Self {
-        Self::default()
+        Self::new("gate-router".to_string())
     }
 }
 

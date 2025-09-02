@@ -65,10 +65,10 @@ impl RoutingStrategy for LatencyOptimizedStrategy {
             let latency = Duration::from_millis(latency_ms);
 
             // Skip if over max latency threshold
-            if let Some(max) = self.max_latency {
-                if latency > max {
-                    continue;
-                }
+            if let Some(max) = self.max_latency
+                && latency > max
+            {
+                continue;
             }
 
             // Calculate latency score (lower latency = higher score)

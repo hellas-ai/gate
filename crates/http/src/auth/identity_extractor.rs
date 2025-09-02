@@ -8,37 +8,37 @@ use sha2::Digest;
 /// Extract identity from request headers
 pub fn extract_identity(headers: &HeaderMap) -> SubjectIdentity<RouterIdentityContext> {
     // Check for Authorization header
-    if let Some(auth_header) = headers.get("authorization") {
-        if let Ok(auth_str) = auth_header.to_str() {
-            return parse_authorization_header(auth_str);
-        }
+    if let Some(auth_header) = headers.get("authorization")
+        && let Ok(auth_str) = auth_header.to_str()
+    {
+        return parse_authorization_header(auth_str);
     }
 
     // Check for X-API-Key header
-    if let Some(api_key) = headers.get("x-api-key") {
-        if let Ok(key_str) = api_key.to_str() {
-            return create_api_key_identity(key_str);
-        }
+    if let Some(api_key) = headers.get("x-api-key")
+        && let Ok(key_str) = api_key.to_str()
+    {
+        return create_api_key_identity(key_str);
     }
 
     // Check for X-User-ID header (for internal services)
-    if let Some(user_id) = headers.get("x-user-id") {
-        if let Ok(user_str) = user_id.to_str() {
-            let org_id = headers
-                .get("x-org-id")
-                .and_then(|v| v.to_str().ok())
-                .map(String::from);
+    if let Some(user_id) = headers.get("x-user-id")
+        && let Ok(user_str) = user_id.to_str()
+    {
+        let org_id = headers
+            .get("x-org-id")
+            .and_then(|v| v.to_str().ok())
+            .map(String::from);
 
-            return SubjectIdentity::new(
-                user_str,
-                "internal",
-                RouterIdentityContext {
-                    org_id,
-                    user_id: Some(user_str.to_string()),
-                    api_key_hash: None,
-                },
-            );
-        }
+        return SubjectIdentity::new(
+            user_str,
+            "internal",
+            RouterIdentityContext {
+                org_id,
+                user_id: Some(user_str.to_string()),
+                api_key_hash: None,
+            },
+        );
     }
 
     // Default to anonymous
@@ -83,23 +83,23 @@ fn parse_bearer_token(token: &str) -> SubjectIdentity<RouterIdentityContext> {
 fn parse_basic_auth(credentials: &str) -> SubjectIdentity<RouterIdentityContext> {
     // Decode base64
     use base64::{Engine as _, engine::general_purpose};
-    if let Ok(decoded) = general_purpose::STANDARD.decode(credentials) {
-        if let Ok(decoded_str) = String::from_utf8(decoded) {
-            let parts: Vec<&str> = decoded_str.splitn(2, ':').collect();
-            if parts.len() == 2 {
-                let username = parts[0];
-                // In production, would validate password
+    if let Ok(decoded) = general_purpose::STANDARD.decode(credentials)
+        && let Ok(decoded_str) = String::from_utf8(decoded)
+    {
+        let parts: Vec<&str> = decoded_str.splitn(2, ':').collect();
+        if parts.len() == 2 {
+            let username = parts[0];
+            // In production, would validate password
 
-                return SubjectIdentity::new(
-                    username,
-                    "basic",
-                    RouterIdentityContext {
-                        org_id: None,
-                        user_id: Some(username.to_string()),
-                        api_key_hash: None,
-                    },
-                );
-            }
+            return SubjectIdentity::new(
+                username,
+                "basic",
+                RouterIdentityContext {
+                    org_id: None,
+                    user_id: Some(username.to_string()),
+                    api_key_hash: None,
+                },
+            );
         }
     }
 
@@ -113,7 +113,7 @@ fn create_api_key_identity(api_key: &str) -> SubjectIdentity<RouterIdentityConte
     let mut hasher = Sha256::new();
     hasher.update(api_key.as_bytes());
     let hash_result = hasher.finalize();
-    let api_key_hash = format!("{:x}", hash_result);
+    let api_key_hash = format!("{hash_result:x}");
 
     // Use first 8 chars of hash as identity ID
     SubjectIdentity::new(
