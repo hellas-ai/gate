@@ -125,7 +125,7 @@ pub fn user_list(props: &UserListProps) -> Html {
                                     <td class="px-6 py-4 whitespace-nowrap">
                                         <div class="flex items-center">
                                             <div class="flex-shrink-0 h-10 w-10">
-                                                <div class="h-10 w-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white font-semibold">
+                                                <div class="h-10 w-10 bg-blue-600 rounded-full flex items-center justify-center text-white font-semibold">
                                                     {user.name.as_ref()
                                                         .and_then(|n| n.chars().next())
                                                         .unwrap_or_else(|| user.id.chars().next().unwrap_or('?'))

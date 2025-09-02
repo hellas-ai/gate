@@ -4,10 +4,7 @@ use crate::error::Result;
 use crate::services::{AuthService, WebAuthnService};
 use crate::{Settings, StateDir};
 use gate_http::{
-    UpstreamRegistry,
-    forwarding::ForwardingConfig,
     middleware::WebAuthnConfig,
-    model_detection,
     services::{JwtConfig, JwtService},
 };
 use gate_sqlx::{SqliteStateBackend, SqliteWebAuthnBackend};
@@ -55,60 +52,6 @@ impl DaemonBuilder {
             issuer: settings.auth.jwt.issuer.clone(),
         };
         Arc::new(JwtService::new(jwt_config))
-    }
-
-    /// Build the upstream registry
-    async fn build_upstream_registry(settings: &Settings) -> Result<Arc<UpstreamRegistry>> {
-        let upstream_registry = Arc::new(UpstreamRegistry::new());
-
-        if !settings.upstreams.is_empty() {
-            info!(
-                "Initializing {} upstream providers",
-                settings.upstreams.len()
-            );
-
-            for upstream_config in &settings.upstreams {
-                info!(
-                    "Configuring upstream '{}' with provider: {}",
-                    upstream_config.name, upstream_config.provider
-                );
-
-                let config = ForwardingConfig {
-                    provider: upstream_config.provider.clone(),
-                    base_url: upstream_config.base_url.clone(),
-                    api_key: upstream_config.api_key.clone(),
-                    timeout_seconds: upstream_config.timeout_seconds,
-                };
-
-                // Detect models for this upstream
-                info!(
-                    "Detecting models for upstream '{}'...",
-                    upstream_config.name
-                );
-                let models = model_detection::detect_models(&config).await;
-
-                if models.is_empty() {
-                    info!(
-                        "No models detected for upstream '{}', it may be offline or not support model listing",
-                        upstream_config.name
-                    );
-                } else {
-                    info!(
-                        "Detected {} models for upstream '{}'",
-                        models.len(),
-                        upstream_config.name
-                    );
-                }
-
-                upstream_registry
-                    .register_upstream(upstream_config.name.clone(), config, models)
-                    .await;
-            }
-        } else {
-            debug!("No upstreams configured");
-        }
-
-        Ok(upstream_registry)
     }
 
     pub async fn build(self) -> Result<Daemon> {
@@ -173,9 +116,6 @@ impl DaemonBuilder {
 
         // Build services
         let jwt_service = Self::build_jwt_service(&settings);
-        let upstream_registry = Self::build_upstream_registry(&settings)
-            .await
-            .map_err(|e| crate::error::DaemonError::ConfigError(e.to_string()))?;
 
         // Build auth and webauthn services
         let (auth_service, webauthn_service) = {
@@ -220,23 +160,6 @@ impl DaemonBuilder {
         // TODO: Setup TLS forward service if enabled
         let tlsforward_service = None;
 
-        // Setup local inference service if configured
-        let inference_backend: Option<Arc<dyn gate_core::InferenceBackend>> =
-            if let Some(ref inference_config) = settings.local_inference {
-                match crate::services::LocalInferenceService::new(inference_config.clone()) {
-                    Ok(service) => {
-                        info!("Local inference service initialized");
-                        Some(Arc::new(service) as Arc<dyn gate_core::InferenceBackend>)
-                    }
-                    Err(e) => {
-                        warn!("Failed to initialize local inference service: {}", e);
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-
         // Create DaemonInner
         let daemon_inner = DaemonInner::new(
             settings,
@@ -246,8 +169,6 @@ impl DaemonBuilder {
             bootstrap_manager,
             webauthn_service,
             tlsforward_service,
-            upstream_registry,
-            inference_backend,
             user_count,
         )
         .await;

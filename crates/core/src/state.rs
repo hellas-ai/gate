@@ -3,6 +3,7 @@ use crate::{
     access::{Action, ObjectIdentity},
 };
 use async_trait::async_trait;
+// serde traits not needed in this module now
 
 #[async_trait]
 pub trait StateBackend: Send + Sync {
@@ -62,4 +63,48 @@ pub trait StateBackend: Send + Sync {
         &self,
         user_id: &str,
     ) -> Result<Vec<(String, String, chrono::DateTime<chrono::Utc>)>>;
+
+    // Router-specific methods with default implementations
+    async fn resolve_model_alias(&self, _alias: &str) -> Result<Vec<String>> {
+        Err(crate::Error::Internal(
+            "Model alias resolution not implemented".into(),
+        ))
+    }
+
+    async fn get_virtual_model(
+        &self,
+        _name: &str,
+        _version: Option<&str>,
+    ) -> Result<Option<crate::router::types::VirtualModel>> {
+        Err(crate::Error::Internal(
+            "Virtual models not implemented".into(),
+        ))
+    }
+
+    async fn save_virtual_model(&self, _model: &crate::router::types::VirtualModel) -> Result<()> {
+        Err(crate::Error::Internal(
+            "Virtual models not implemented".into(),
+        ))
+    }
+
+    async fn update_sink_health(
+        &self,
+        _sink_id: &str,
+        _health: &crate::router::types::SinkHealth,
+    ) -> Result<()> {
+        Err(crate::Error::Internal(
+            "Sink health tracking not implemented".into(),
+        ))
+    }
+
+    async fn get_sink_health(
+        &self,
+        _sink_id: &str,
+    ) -> Result<Option<crate::router::types::SinkHealth>> {
+        Err(crate::Error::Internal(
+            "Sink health tracking not implemented".into(),
+        ))
+    }
 }
+
+// Router-specific types moved to crate::router::types

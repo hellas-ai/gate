@@ -126,62 +126,6 @@ pub struct Error {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatCompletionRequest {
-    pub model: String,
-    pub body: JsonValue,
-    pub stream: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub headers: Option<HashMap<String, String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trace_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub organization_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatCompletionResponse {
-    pub body: JsonValue,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<String>,
-    #[serde(default)]
-    pub is_streaming: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MessagesRequest {
-    pub model: String,
-    pub body: JsonValue,
-    pub stream: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub headers: Option<HashMap<String, String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trace_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub organization_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MessagesResponse {
-    pub body: JsonValue,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<String>,
-    #[serde(default)]
-    pub is_streaming: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookAction {
     pub action_type: String,
     pub payload: Option<JsonValue>,
@@ -212,20 +156,4 @@ pub struct ResponseHookContext {
     pub usage: Option<UsageRecord>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StreamingChatCompletionResponse {
-    pub chunk: JsonValue,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<String>,
-    #[serde(default)]
-    pub is_final: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StreamingMessagesResponse {
-    pub chunk: JsonValue,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<String>,
-    #[serde(default)]
-    pub is_final: bool,
-}
+// Legacy chat/messages response types removed in favor of protocol-agnostic streaming APIs in router

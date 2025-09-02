@@ -4,11 +4,10 @@ use crate::error::Result;
 use crate::permissions::{LocalIdentity, LocalPermissionManager};
 use crate::services::{AuthService, TlsForwardService, WebAuthnService};
 use crate::types::{DaemonStatus, TlsForwardStatus};
+use gate_core::StateBackend;
 use gate_core::access::{
     Action, ObjectId, ObjectIdentity, ObjectKind, Permissions, TargetNamespace,
 };
-use gate_core::{InferenceBackend, StateBackend};
-use gate_http::UpstreamRegistry;
 use gate_http::services::JwtService;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -22,8 +21,6 @@ pub struct DaemonInner {
     bootstrap_manager: Arc<BootstrapTokenManager>,
     webauthn_service: Option<Arc<WebAuthnService>>,
     tlsforward_service: Option<Arc<TlsForwardService>>,
-    upstream_registry: Arc<UpstreamRegistry>,
-    inference_backend: Option<Arc<dyn InferenceBackend>>,
     user_count: usize,
 }
 
@@ -37,8 +34,6 @@ impl DaemonInner {
         bootstrap_manager: Arc<BootstrapTokenManager>,
         webauthn_service: Option<Arc<WebAuthnService>>,
         tlsforward_service: Option<Arc<TlsForwardService>>,
-        upstream_registry: Arc<UpstreamRegistry>,
-        inference_backend: Option<Arc<dyn InferenceBackend>>,
         user_count: usize,
     ) -> Self {
         let permission_manager = Arc::new(LocalPermissionManager::new(state_backend.clone()));
@@ -52,8 +47,6 @@ impl DaemonInner {
             bootstrap_manager,
             webauthn_service,
             tlsforward_service,
-            upstream_registry,
-            inference_backend,
             user_count,
         }
     }
@@ -63,7 +56,7 @@ impl DaemonInner {
         DaemonStatus {
             running: true,
             listen_address: format!("{}:{}", settings.server.host, settings.server.port),
-            upstream_count: settings.upstreams.len(),
+            provider_count: settings.providers.len(),
             user_count: self.user_count,
             tlsforward_enabled: self.tlsforward_service.is_some(),
             tlsforward_status: self.get_tlsforward_status().await,
@@ -158,14 +151,6 @@ impl DaemonInner {
         self.jwt_service.clone()
     }
 
-    pub fn get_upstream_registry(&self) -> Arc<UpstreamRegistry> {
-        self.upstream_registry.clone()
-    }
-
-    pub fn get_inference_backend(&self) -> Option<Arc<dyn InferenceBackend>> {
-        self.inference_backend.clone()
-    }
-
     pub async fn get_settings(&self) -> Settings {
         self.settings.read().await.clone()
     }
@@ -191,12 +176,12 @@ impl DaemonInner {
         })?;
 
         // Redact sensitive fields
-        if let Some(upstreams) = config_json
-            .get_mut("upstreams")
+        if let Some(providers) = config_json
+            .get_mut("providers")
             .and_then(|v| v.as_array_mut())
         {
-            for upstream in upstreams {
-                if let Some(api_key) = upstream.get_mut("api_key")
+            for provider in providers {
+                if let Some(api_key) = provider.get_mut("api_key")
                     && api_key.as_str().is_some()
                 {
                     *api_key = serde_json::json!("<redacted>");

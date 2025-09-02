@@ -1,10 +1,10 @@
 //! Health check handler
 
-use axum::response::Json;
+use axum::{Router, response::Json, routing::get};
 use serde::{Deserialize, Serialize};
 
 /// Health check response
-#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub status: String,
     pub version: String,
@@ -12,18 +12,17 @@ pub struct HealthResponse {
 }
 
 /// Health check endpoint
-#[utoipa::path(
-    get,
-    path = "/health",
-    responses(
-        (status = 200, description = "Service is healthy", body = HealthResponse)
-    ),
-    tag = "health"
-)]
 pub async fn health_check() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "healthy".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         timestamp: chrono::Utc::now(),
     })
+}
+
+pub fn router<T>() -> Router<T>
+where
+    T: Send + Sync + Clone + 'static,
+{
+    Router::new().route("/health", get(health_check))
 }

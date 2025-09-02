@@ -188,24 +188,6 @@ impl Daemon {
         Ok(rx.await?)
     }
 
-    pub async fn get_upstream_registry(&self) -> Result<Arc<gate_http::UpstreamRegistry>> {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(DaemonRequest::GetUpstreamRegistry { reply })
-            .await?;
-        Ok(rx.await?)
-    }
-
-    pub async fn get_inference_backend(
-        &self,
-    ) -> Result<Option<Arc<dyn gate_core::InferenceBackend>>> {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(DaemonRequest::GetInferenceBackend { reply })
-            .await?;
-        Ok(rx.await?)
-    }
-
     pub async fn get_config(&self) -> Result<serde_json::Value> {
         let identity = self
             .identity
@@ -224,8 +206,6 @@ impl Daemon {
         let addr = format!("{}:{}", settings.server.host, settings.server.port);
         let auth_service = self.get_auth_service().await?;
         let state_backend = self.get_state_backend().await?;
-        let upstream_registry = self.get_upstream_registry().await?;
-        let inference_backend = self.get_inference_backend().await?;
 
         // Build router with MinimalState containing daemon handle
         let router = OpenApiRouter::new();
@@ -233,27 +213,103 @@ impl Daemon {
         let router = crate::routes::config::add_routes(router);
         let router = crate::routes::admin::add_routes(router);
 
-        // Add inference-related routes from gate_http
-        let router = gate_http::routes::models::add_routes(router);
-        let router = gate_http::routes::inference::add_routes(router);
-        let router = gate_http::routes::observability::add_routes(router);
-
         let minimal_state = crate::MinimalState::new(auth_service.clone(), self.clone());
 
         // Wrap MinimalState in AppState for middleware compatibility
-        let mut app_state = gate_http::AppState::new(state_backend, minimal_state)
-            .with_upstream_registry(upstream_registry);
+        let mut app_state = gate_http::AppState::new(state_backend.clone(), minimal_state);
 
-        // Add inference backend if available
-        if let Some(backend) = inference_backend {
-            app_state = app_state.with_inference_backend(backend);
+        // Build sink registry and register all sinks
+        let sink_registry = std::sync::Arc::new(gate_core::router::routing::SinkRegistry::new());
+
+        // Register provider sinks from configuration
+        for provider_config in &settings.providers {
+            let sink = match provider_config.provider {
+                crate::config::ProviderType::Anthropic => {
+                    let config = gate_http::sinks::anthropic::AnthropicConfig {
+                        api_key: provider_config.api_key.clone().unwrap_or_default(),
+                        base_url: Some(provider_config.base_url.clone()),
+                        models: if provider_config.models.is_empty() {
+                            None
+                        } else {
+                            Some(provider_config.models.clone())
+                        },
+                        timeout_seconds: Some(provider_config.timeout_seconds),
+                    };
+                    match gate_http::sinks::anthropic::create_sink(config) {
+                        Ok(s) => std::sync::Arc::new(s),
+                        Err(e) => {
+                            tracing::warn!("Failed to create Anthropic sink: {}", e);
+                            continue;
+                        }
+                    }
+                }
+                crate::config::ProviderType::OpenAI => {
+                    let config = gate_http::sinks::openai::OpenAIConfig {
+                        api_key: provider_config.api_key.clone().unwrap_or_default(),
+                        base_url: Some(provider_config.base_url.clone()),
+                        models: if provider_config.models.is_empty() {
+                            None
+                        } else {
+                            Some(provider_config.models.clone())
+                        },
+                        timeout_seconds: Some(provider_config.timeout_seconds),
+                    };
+                    match gate_http::sinks::openai::create_sink(config) {
+                        Ok(s) => std::sync::Arc::new(s),
+                        Err(e) => {
+                            tracing::warn!("Failed to create OpenAI sink: {}", e);
+                            continue;
+                        }
+                    }
+                }
+                crate::config::ProviderType::Custom => {
+                    tracing::warn!("Custom provider type not yet implemented");
+                    continue;
+                }
+            };
+            sink_registry
+                .register(format!("provider://{}", provider_config.name), sink)
+                .await;
+            tracing::info!("Registered provider sink: {}", provider_config.name);
         }
+        // Register Catgrad sink when local inference is enabled
+        if let Some(ref inf_cfg) = settings.local_inference {
+            match crate::services::LocalInferenceService::new(inf_cfg.clone()) {
+                Ok(_service) => {
+                    let sink = std::sync::Arc::new(crate::sinks::catgrad_sink::CatgradSink::new(
+                        "self://catgrad",
+                        inf_cfg.models.clone(),
+                    ));
+                    sink_registry
+                        .register("self://catgrad".to_string(), sink)
+                        .await;
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to initialize LocalInferenceService: {}", e);
+                }
+            }
+        }
+        let sink_index = std::sync::Arc::new(gate_core::router::index::SinkIndex::new());
+        sink_index.refresh_from_registry(&sink_registry).await;
+        let router_core = gate_core::router::routing::Router::builder()
+            .state_backend(state_backend)
+            .sink_registry(sink_registry)
+            .sink_index(sink_index)
+            .build();
+        let router_core = std::sync::Arc::new(router_core);
+        app_state = app_state.with_router(router_core);
 
         // Build the full axum app with middleware
         let mut app = router
             .split_for_parts()
             .0
+            // Merge routes that need state
+            .merge(gate_http::routes::models::router())
+            .merge(gate_http::routes::inference::router())
+            // Apply state to the merged router
             .with_state(app_state.clone())
+            // Merge routes that don't need state
+            .merge(gate_http::routes::observability::router())
             .route_layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 gate_http::middleware::auth::auth_middleware::<crate::MinimalState>,

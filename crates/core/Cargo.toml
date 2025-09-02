@@ -9,28 +9,31 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-default = []
+default = ["router"]
 cloudflare = ["dep:worker", "dep:sqlx-d1"]
 tests = ["dep:uuid"]
+router = ["dep:uuid", "dep:async-stream", "dep:rand", "dep:js-sys", "tracing"]
 tracing = ["dep:tracing", "dep:hex", "dep:getrandom"]
 tracing-otlp = ["tracing", "dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry", "dep:tracing-subscriber"]
 tracing-prometheus = ["tracing"]
 
 [dependencies]
 anyhow.workspace = true
+async-stream = { version = "0.3", optional = true }
 async-trait.workspace = true
 chrono.workspace = true
 config.workspace = true
 futures.workspace = true
 http.workspace = true
+rand = { version = "0.8", optional = true }
 rust_decimal = { version = "1.0", features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true
 sqlx-d1 = { version = "0.2.0", optional = true }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "time"] }
 url.workspace = true
-uuid = { workspace = true, features = ["v4"], optional = true }
+uuid = { workspace = true, features = ["v4", "serde"], optional = true }
 
 # Optional dependencies for cloudflare feature
 worker = { version = "0.6", optional = true }
@@ -41,6 +44,7 @@ hex = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { workspace = true, features = ["wasm_js"], optional = true }
+js-sys = { version = "0.3", optional = true }
 
 # Optional dependencies for tracing-otlp feature (native only)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

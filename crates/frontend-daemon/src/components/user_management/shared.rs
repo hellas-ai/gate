@@ -59,7 +59,7 @@ pub fn user_card(props: &UserCardProps) -> Html {
             >
                 <div class="flex items-center space-x-3">
                     <div class="flex-shrink-0">
-                        <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white font-semibold">
+                        <div class="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center text-white font-semibold">
                             {props.user.name.as_ref()
                                 .and_then(|n| n.chars().next())
                                 .unwrap_or_else(|| props.user.id.chars().next().unwrap_or('?'))
@@ -87,7 +87,7 @@ pub fn user_card(props: &UserCardProps) -> Html {
                 <div class="flex items-start justify-between">
                     <div class="flex items-center space-x-4">
                         <div class="flex-shrink-0">
-                            <div class="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white font-semibold text-lg">
+                            <div class="w-12 h-12 bg-blue-600 rounded-full flex items-center justify-center text-white font-semibold text-lg">
                                 {props.user.name.as_ref()
                                     .and_then(|n| n.chars().next())
                                     .unwrap_or_else(|| props.user.id.chars().next().unwrap_or('?'))

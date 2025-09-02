@@ -210,7 +210,7 @@ pub fn user_detail(props: &UserDetailProps) -> Html {
                 <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
                     <div class="flex items-center justify-between">
                         <div class="flex items-center space-x-4">
-                            <div class="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white font-bold text-2xl">
+                            <div class="w-16 h-16 bg-blue-600 rounded-full flex items-center justify-center text-white font-bold text-2xl">
                                 {user_info.name.as_ref()
                                     .and_then(|n| n.chars().next())
                                     .unwrap_or_else(|| user_info.id.chars().next().unwrap_or('?'))

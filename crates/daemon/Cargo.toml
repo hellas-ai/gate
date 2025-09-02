@@ -33,7 +33,7 @@ config.workspace = true
 directories.workspace = true
 dotenvy = "0.15"
 gate-core = { workspace = true, features = ["tracing", "tracing-otlp", "tracing-prometheus"] }
-gate-http = { workspace = true, features = ["server"] }
+gate-http = { workspace = true, features = ["server", "schema"] }
 gate-p2p.workspace = true
 gate-tlsforward = { workspace = true, features = ["client"] }
 gate-sqlx.workspace = true

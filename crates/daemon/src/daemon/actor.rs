@@ -56,12 +56,6 @@ impl DaemonActor {
                 DaemonRequest::GetStateBackend { reply } => {
                     let _ = reply.send(self.inner.get_state_backend());
                 }
-                DaemonRequest::GetUpstreamRegistry { reply } => {
-                    let _ = reply.send(self.inner.get_upstream_registry());
-                }
-                DaemonRequest::GetInferenceBackend { reply } => {
-                    let _ = reply.send(self.inner.get_inference_backend());
-                }
                 DaemonRequest::GetUserCount { reply } => {
                     let _ = reply.send(self.inner.get_user_count());
                 }

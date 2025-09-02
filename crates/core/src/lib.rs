@@ -2,6 +2,7 @@ pub mod access;
 pub mod context;
 pub mod errors;
 pub mod inference;
+pub mod router;
 pub mod state;
 pub mod types;
 
@@ -23,8 +24,6 @@ pub use state::StateBackend;
 
 // Re-export types for convenience
 pub use types::{
-    ApiKey, ChatCompletionRequest, ChatCompletionResponse, Error as ProtoError, HookAction,
-    HookResponse, MessagesRequest, MessagesResponse, Model, ModelType, Organization, Provider,
-    ProviderType, RequestHookContext, ResponseHookContext, StreamingChatCompletionResponse,
-    StreamingMessagesResponse, TimeRange, UsageRecord, User,
+    ApiKey, Error as ProtoError, HookAction, HookResponse, Model, ModelType, Organization,
+    Provider, ProviderType, RequestHookContext, ResponseHookContext, TimeRange, UsageRecord, User,
 };

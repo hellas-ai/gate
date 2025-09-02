@@ -55,11 +55,11 @@ pub fn onboarding_auth(props: &OnboardingAuthProps) -> Html {
 
     // Main onboarding UI
     html! {
-        <div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900">
+        <div class="min-h-screen flex items-center justify-center bg-gray-950">
             <div class="max-w-md w-full p-8">
                 <div class="backdrop-blur-lg bg-white/10 rounded-2xl shadow-2xl p-8 border border-white/20">
                     <div class="text-center mb-8">
-                        <h1 class="text-3xl font-bold text-white mb-2">{"Welcome to Gate"}</h1>
+                        <img src="/assets/Hellas_Logotype_White.svg" alt="hellas" class="w-40 mx-auto mb-4" />
                         <p class="text-white/70">{"Let's set up your first admin account"}</p>
                     </div>
 
@@ -141,7 +141,7 @@ fn registration_form(
             </div>
 
             <button
-                class="w-full px-4 py-3 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white rounded-lg font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                class="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 onclick={on_register}
                 disabled={(**name).is_empty()}
             >

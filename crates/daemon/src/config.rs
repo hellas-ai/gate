@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 
 use config::{Config, ConfigError, Environment, File};
-use gate_http::forwarding::UpstreamProvider;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -91,6 +90,7 @@ fn default_local_inference() -> Option<LocalInferenceConfig> {
         max_concurrent_inferences: 1,
         default_temperature: 0.7,
         default_max_tokens: 1024,
+        models: vec![],
     })
 }
 
@@ -110,9 +110,9 @@ pub struct Settings {
     /// Authentication settings
     #[serde(default)]
     pub auth: AuthConfig,
-    /// Upstream provider settings (supports multiple)
+    /// Provider configurations
     #[serde(default)]
-    pub upstreams: Vec<UpstreamConfig>,
+    pub providers: Vec<ProviderConfig>,
     /// Relay configuration
     #[serde(default)]
     pub tlsforward: TlsForwardConfig,
@@ -173,13 +173,22 @@ impl Default for AuthConfig {
     }
 }
 
-/// Upstream provider configuration
+/// Provider type
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpstreamConfig {
-    /// Name identifier for this upstream
+#[serde(rename_all = "lowercase")]
+pub enum ProviderType {
+    Anthropic,
+    OpenAI,
+    Custom,
+}
+
+/// Provider configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderConfig {
+    /// Name identifier for this provider
     pub name: String,
-    /// LLM Provider type
-    pub provider: UpstreamProvider,
+    /// Provider type
+    pub provider: ProviderType,
     /// Base URL for the upstream API
     pub base_url: String,
     /// API key for authentication (can be set via env var)
@@ -193,7 +202,7 @@ pub struct UpstreamConfig {
     pub models: Vec<String>,
 }
 
-impl Default for UpstreamConfig {
+impl Default for ProviderConfig {
     fn default() -> Self {
         serde_json::from_value(json!({})).expect("Default settings should always be valid")
     }
@@ -318,6 +327,9 @@ pub struct LocalInferenceConfig {
     /// Default max tokens for inference when not specified
     #[serde(default = "default_max_tokens")]
     pub default_max_tokens: u32,
+    /// List of available models for local inference
+    #[serde(default)]
+    pub models: Vec<String>,
 }
 
 impl Default for LocalInferenceConfig {

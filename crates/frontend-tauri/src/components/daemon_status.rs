@@ -17,7 +17,7 @@ pub struct DaemonStatusProps {
 pub struct DaemonStatusComponent {
     is_running: bool,
     listen_address: Option<String>,
-    has_upstreams: bool,
+    has_providers: bool,
     runtime_config: Option<DaemonRuntimeConfig>,
     error_message: Option<String>,
     debug_messages: Vec<String>,
@@ -68,7 +68,7 @@ impl Component for DaemonStatusComponent {
         let component = Self {
             is_running: false,
             listen_address: None,
-            has_upstreams: false,
+            has_providers: false,
             runtime_config: None,
             error_message: None,
             debug_messages: vec![],
@@ -91,10 +91,10 @@ impl Component for DaemonStatusComponent {
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
-            Msg::UpdateStatus(running, address, upstreams) => {
+            Msg::UpdateStatus(running, address, providers) => {
                 self.is_running = running;
                 self.listen_address = address;
-                self.has_upstreams = upstreams;
+                self.has_providers = providers;
                 true
             }
             Msg::UpdateConfig(config) => {
@@ -117,7 +117,7 @@ impl Component for DaemonStatusComponent {
                             link.send_message(Msg::UpdateStatus(
                                 status.running,
                                 status.listen_address,
-                                status.has_upstreams,
+                                status.has_providers,
                             ));
 
                             // If running, get config too
@@ -388,10 +388,10 @@ impl Component for DaemonStatusComponent {
                                     </div>
 
                                     <div class="flex items-center justify-between">
-                                        <span class={classes!("text-xs", "uppercase", "tracking-wider", "font-medium", "text-gray-500")}>{"Upstreams"}</span>
+                                        <span class={classes!("text-xs", "uppercase", "tracking-wider", "font-medium", "text-gray-500")}>{"Providers"}</span>
                                         <span class={classes!("text-sm", if is_dark { "text-gray-200" } else { "text-gray-800" })}>
-                                            {if config.upstream_count > 0 {
-                                                format!("{} configured", config.upstream_count)
+                                            {if config.provider_count > 0 {
+                                                format!("{} configured", config.provider_count)
                                             } else {
                                                 "None configured".to_string()
                                             }}

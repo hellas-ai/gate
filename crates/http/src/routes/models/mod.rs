@@ -6,29 +6,19 @@ use crate::{
     types::{ModelInfo, ModelsListResponse},
 };
 use axum::{
+    Router,
     extract::State,
     response::{IntoResponse, Json, Response},
+    routing::get,
 };
-use utoipa_axum::{router::OpenApiRouter, routes};
-
-#[cfg(test)]
-mod tests;
+use gate_core::router::prelude::Sink;
+use tracing::{info, instrument};
 
 /// Handle models list requests
-#[utoipa::path(
-    get,
-    path = "/v1/models",
-    responses(
-        (status = 200, description = "List of available models", body = ModelsListResponse),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "models"
-)]
 #[instrument(
     name = "list_models",
     skip(app_state),
     fields(
-        upstream_count = tracing::field::Empty,
         model_count = tracing::field::Empty
     )
 )]
@@ -38,35 +28,31 @@ where
 {
     info!("Received models list request");
 
-    let all_upstreams = app_state.upstream_registry.get_all_upstreams().await;
-    tracing::Span::current().record("upstream_count", all_upstreams.len());
     let mut models = Vec::new();
 
-    // Add upstream models
-    for (upstream_name, upstream_info) in &all_upstreams {
-        for model_id in &upstream_info.models {
-            models.push(ModelInfo {
-                id: model_id.clone(),
-                object: "model".to_string(),
-                owned_by: upstream_name.clone(),
-                created: chrono::Utc::now().timestamp(),
-                context_length: None,
-            });
-        }
-    }
-
-    // Add local inference models if available
-    if let Some(inference_backend) = &app_state.inference_backend
-        && let Ok(local_models) = inference_backend.list_models().await
-    {
-        for model in local_models {
-            models.push(ModelInfo {
-                id: model.id,
-                object: "model".to_string(),
-                owned_by: "local".to_string(),
-                created: chrono::Utc::now().timestamp(),
-                context_length: Some(model.context_length as usize),
-            });
+    // Get models from router if available
+    if let Some(router) = &app_state.router {
+        let desc = router.describe().await;
+        match desc.models {
+            gate_core::router::types::ModelList::Static(list) => {
+                for id in list {
+                    models.push(ModelInfo {
+                        id,
+                        object: "model".to_string(),
+                        owned_by: "system".to_string(),
+                        created: chrono::Utc::now().timestamp(),
+                        context_length: desc.capabilities.max_context_length,
+                    });
+                }
+            }
+            gate_core::router::types::ModelList::Dynamic => {
+                // Dynamic models are resolved at runtime
+                info!("Router has dynamic model list");
+            }
+            gate_core::router::types::ModelList::Infinite => {
+                // Router accepts any model name
+                info!("Router accepts any model");
+            }
         }
     }
 
@@ -80,9 +66,10 @@ where
     Ok(Json(response).into_response())
 }
 
-/// Add models routes to router
-pub fn add_routes<T: Send + Sync + Clone + 'static>(
-    router: OpenApiRouter<AppState<T>>,
-) -> OpenApiRouter<AppState<T>> {
-    router.routes(routes!(models_handler))
+/// Create models router
+pub fn router<T>() -> Router<AppState<T>>
+where
+    T: Send + Sync + Clone + 'static,
+{
+    Router::new().route("/v1/models", get(models_handler))
 }

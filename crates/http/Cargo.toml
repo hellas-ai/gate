@@ -11,6 +11,7 @@ categories.workspace = true
 [features]
 default = ["server"]
 otlp = ["gate-core/tracing-otlp", "gate-core/tracing-prometheus"]
+schema = ["dep:utoipa"]
 server = [
     "dep:anyhow",
     "dep:async-trait",
@@ -31,9 +32,6 @@ server = [
     "dep:tokio",
     "dep:tower",
     "dep:tower-http",
-    "dep:utoipa",
-    "dep:utoipa-axum",
-    "dep:utoipa-scalar",
     "dep:uuid",
     "dep:webauthn-rs"
 ]
@@ -42,13 +40,13 @@ client = ["dep:reqwest", "dep:gate-core"]
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 hyper-util = { workspace = true, features = ["server", "tokio"], optional = true }
 jsonwebtoken = { version = "9.3", optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"], optional = true }
 webauthn-rs = { version = "0.5", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { workspace = true, features = ["wasm_js"], optional = true }
 hyper-util = { workspace = true, features = ["server"], optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream"], optional = true }
 
 [dependencies]
 anyhow = { workspace = true, optional = true }
@@ -63,6 +61,7 @@ http = { workspace = true, optional = true }
 opentelemetry = { version = "0.30", default-features = false, features = ["trace"] }
 hyper = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
+rust_decimal = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = { workspace = true, optional = true }
@@ -72,8 +71,6 @@ tower = { workspace = true, features = ["util"], optional = true }
 tower-http = { workspace = true, optional = true }
 tracing = { workspace = true }
 utoipa = { workspace = true, optional = true }
-utoipa-axum = { workspace = true, optional = true }
-utoipa-scalar = { workspace = true, optional = true }
 uuid = { version = "1.10", features = ["v4", "serde", "js"], optional = true }
 
 [dev-dependencies]

@@ -1,27 +1,22 @@
 //! Inference API routes for LLM providers
 
-use crate::{dispatcher::Dispatcher, error::HttpError, state::AppState, types::*};
+use crate::{
+    auth::extract_identity, error::HttpError, sinks::response_converter::response_stream_to_axum,
+    state::AppState, types::*,
+};
 use axum::{
+    Router,
     extract::{Json, State},
     http::HeaderMap,
     response::Response,
+    routing::post,
+};
+use gate_core::router::{
+    service::route_and_execute_json_with_protocol, sink::RequestContext, types::Protocol,
 };
 use gate_core::tracing::prelude::*;
-use serde_json::Value as JsonValue;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 /// Handle Anthropic messages requests
-#[utoipa::path(
-    post,
-    path = "/v1/messages",
-    request_body = AnthropicMessagesRequest,
-    responses(
-        (status = 200, description = "Successful response", body = JsonValue),
-        (status = 400, description = "Bad request"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "inference"
-)]
 #[instrument(
     name = "anthropic_messages",
     skip(app_state, headers),
@@ -39,39 +34,39 @@ pub async fn messages_handler<T>(
 where
     T: Clone + Send + Sync + 'static,
 {
-    let dispatcher = if let Some(inference_backend) = &app_state.inference_backend {
-        Dispatcher::with_inference_backend(
-            app_state.upstream_registry.clone(),
-            inference_backend.clone(),
-        )
-    } else {
-        Dispatcher::new(app_state.upstream_registry.clone())
+    let router = app_state
+        .router
+        .ok_or_else(|| HttpError::InternalServerError("Router not configured".to_string()))?;
+
+    let ctx = RequestContext {
+        identity: extract_identity(&headers),
+        correlation_id,
+        headers: headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect(),
+        trace_id: headers
+            .get("x-trace-id")
+            .and_then(|v| v.to_str().ok())
+            .map(String::from),
+        metadata: Default::default(),
     };
 
-    dispatcher
-        .messages(
-            &request.model,
-            serde_json::to_value(&request).map_err(|e| {
-                HttpError::InternalServerError(format!("Failed to serialize request: {e}"))
-            })?,
-            headers,
-            correlation_id,
-        )
-        .await
+    let request_json = serde_json::to_value(&request)
+        .map_err(|e| HttpError::InternalServerError(format!("Failed to serialize request: {e}")))?;
+
+    let stream = route_and_execute_json_with_protocol(
+        router.as_ref(),
+        &ctx,
+        Protocol::Anthropic,
+        request_json,
+    )
+    .await?;
+
+    response_stream_to_axum(stream).await
 }
 
 /// Handle OpenAI chat completions requests
-#[utoipa::path(
-    post,
-    path = "/v1/chat/completions",
-    request_body = OpenAIChatCompletionRequest,
-    responses(
-        (status = 200, description = "Successful completion", body = JsonValue),
-        (status = 400, description = "Bad request"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "inference"
-)]
 #[instrument(
     name = "openai_chat_completions",
     skip(app_state, headers),
@@ -89,39 +84,39 @@ pub async fn chat_completions_handler<T>(
 where
     T: Clone + Send + Sync + 'static,
 {
-    let dispatcher = if let Some(inference_backend) = &app_state.inference_backend {
-        Dispatcher::with_inference_backend(
-            app_state.upstream_registry.clone(),
-            inference_backend.clone(),
-        )
-    } else {
-        Dispatcher::new(app_state.upstream_registry.clone())
+    let router = app_state
+        .router
+        .ok_or_else(|| HttpError::InternalServerError("Router not configured".to_string()))?;
+
+    let ctx = RequestContext {
+        identity: extract_identity(&headers),
+        correlation_id,
+        headers: headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect(),
+        trace_id: headers
+            .get("x-trace-id")
+            .and_then(|v| v.to_str().ok())
+            .map(String::from),
+        metadata: Default::default(),
     };
 
-    dispatcher
-        .chat_completions(
-            &request.model,
-            serde_json::to_value(&request).map_err(|e| {
-                HttpError::InternalServerError(format!("Failed to serialize request: {e}"))
-            })?,
-            headers,
-            correlation_id,
-        )
-        .await
+    let request_json = serde_json::to_value(&request)
+        .map_err(|e| HttpError::InternalServerError(format!("Failed to serialize request: {e}")))?;
+
+    let stream = route_and_execute_json_with_protocol(
+        router.as_ref(),
+        &ctx,
+        Protocol::OpenAIChat,
+        request_json,
+    )
+    .await?;
+
+    response_stream_to_axum(stream).await
 }
 
 /// Handle OpenAI responses requests
-#[utoipa::path(
-    post,
-    path = "/v1/responses",
-    request_body = OpenAICompletionRequest,
-    responses(
-        (status = 200, description = "Successful response", body = JsonValue),
-        (status = 400, description = "Bad request"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "inference"
-)]
 #[instrument(
     name = "openai_responses",
     skip(app_state, headers),
@@ -139,33 +134,45 @@ pub async fn responses_handler<T>(
 where
     T: Clone + Send + Sync + 'static,
 {
-    let dispatcher = if let Some(inference_backend) = &app_state.inference_backend {
-        Dispatcher::with_inference_backend(
-            app_state.upstream_registry.clone(),
-            inference_backend.clone(),
-        )
-    } else {
-        Dispatcher::new(app_state.upstream_registry.clone())
+    let router = app_state
+        .router
+        .ok_or_else(|| HttpError::InternalServerError("Router not configured".to_string()))?;
+
+    let ctx = RequestContext {
+        identity: extract_identity(&headers),
+        correlation_id,
+        headers: headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect(),
+        trace_id: headers
+            .get("x-trace-id")
+            .and_then(|v| v.to_str().ok())
+            .map(String::from),
+        metadata: Default::default(),
     };
 
-    dispatcher
-        .responses(
-            &request.model,
-            serde_json::to_value(&request).map_err(|e| {
-                HttpError::InternalServerError(format!("Failed to serialize request: {e}"))
-            })?,
-            headers,
-            correlation_id,
-        )
-        .await
+    let request_json = serde_json::to_value(&request)
+        .map_err(|e| HttpError::InternalServerError(format!("Failed to serialize request: {e}")))?;
+
+    let stream = route_and_execute_json_with_protocol(
+        router.as_ref(),
+        &ctx,
+        Protocol::OpenAICompletions,
+        request_json,
+    )
+    .await?;
+
+    response_stream_to_axum(stream).await
 }
 
-/// Add inference routes to router
-pub fn add_routes<T: Send + Sync + Clone + 'static>(
-    router: OpenApiRouter<AppState<T>>,
-) -> OpenApiRouter<AppState<T>> {
-    router
-        .routes(routes!(chat_completions_handler))
-        .routes(routes!(responses_handler))
-        .routes(routes!(messages_handler))
+/// Create inference router
+pub fn router<T>() -> Router<AppState<T>>
+where
+    T: Send + Sync + Clone + 'static,
+{
+    Router::new()
+        .route("/v1/chat/completions", post(chat_completions_handler))
+        .route("/v1/responses", post(responses_handler))
+        .route("/v1/messages", post(messages_handler))
 }

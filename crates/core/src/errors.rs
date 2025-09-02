@@ -40,6 +40,34 @@ pub enum Error {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    // Router-specific errors
+    #[error("No sinks available for routing")]
+    NoSinksAvailable,
+
+    #[error("Protocol conversion not supported: {0} to {1}")]
+    UnsupportedConversion(String, String),
+
+    #[error("Quota exceeded: {0}")]
+    QuotaExceeded(String),
+
+    #[error("All routes failed")]
+    AllRoutesFailed,
+
+    #[error("Model not supported by any sink: {0}")]
+    ModelNotSupported(String),
+
+    #[error("Invalid routing configuration: {0}")]
+    InvalidRoutingConfig(String),
+
+    #[error("Invalid request: {0}")]
+    InvalidRequest(String),
+
+    #[error("Service unavailable: {0}")]
+    ServiceUnavailable(String),
+
+    #[error("Invalid configuration: {0}")]
+    InvalidConfig(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

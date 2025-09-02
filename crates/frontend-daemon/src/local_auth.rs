@@ -234,7 +234,7 @@ pub fn local_auth() -> Html {
                                 />
                                 <div class="flex gap-3">
                                     <button
-                                        class="flex-1 px-4 py-3 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white rounded-lg font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                                        class="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                         onclick={on_register}
                                         disabled={(*name).is_empty()}
                                     >
@@ -291,7 +291,7 @@ pub fn local_auth() -> Html {
 
                             <div class="flex gap-3">
                                 <button
-                                    class="flex-1 px-4 py-3 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white rounded-lg font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                                    class="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                     onclick={on_register}
                                     disabled={(*name).is_empty()}
                                 >

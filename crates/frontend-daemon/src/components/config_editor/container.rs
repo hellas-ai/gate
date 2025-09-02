@@ -5,8 +5,8 @@ use yew::prelude::*;
 
 use super::{
     auth::AuthConfigSection, inference::InferenceConfigSection,
-    letsencrypt::LetsEncryptConfigSection, server::ServerConfigSection,
-    tlsforward::TlsForwardConfigSection, upstreams::UpstreamsConfigSection,
+    letsencrypt::LetsEncryptConfigSection, providers::ProvidersConfigSection,
+    server::ServerConfigSection, tlsforward::TlsForwardConfigSection,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -16,7 +16,7 @@ pub struct GateConfig {
     #[serde(default)]
     pub auth: AuthConfig,
     #[serde(default)]
-    pub upstreams: Vec<UpstreamConfig>,
+    pub providers: Vec<ProviderConfig>,
     #[serde(default)]
     pub tlsforward: TlsForwardConfig,
     #[serde(default)]
@@ -105,7 +105,7 @@ pub struct RegistrationConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct UpstreamConfig {
+pub struct ProviderConfig {
     pub name: String,
     pub provider: String,
     pub base_url: String,
@@ -113,7 +113,7 @@ pub struct UpstreamConfig {
     pub api_key: Option<String>,
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
-    #[serde(default, skip_serializing)]
+    #[serde(default)]
     pub models: Vec<String>,
 }
 
@@ -353,11 +353,11 @@ pub fn config_editor() -> Html {
         })
     };
 
-    let on_upstreams_change = {
+    let on_providers_change = {
         let config = config.clone();
-        Callback::from(move |new_upstreams| {
+        Callback::from(move |new_providers| {
             let mut new_config = (*config).clone();
-            new_config.upstreams = new_upstreams;
+            new_config.providers = new_providers;
             config.set(new_config);
         })
     };
@@ -429,9 +429,9 @@ pub fn config_editor() -> Html {
                                     config={config.auth.clone()}
                                     on_change={on_auth_change}
                                 />
-                                <UpstreamsConfigSection
-                                    upstreams={config.upstreams.clone()}
-                                    on_change={on_upstreams_change}
+                                <ProvidersConfigSection
+                                    providers={config.providers.clone()}
+                                    on_change={on_providers_change}
                                 />
                                 <TlsForwardConfigSection
                                     config={config.tlsforward.clone()}

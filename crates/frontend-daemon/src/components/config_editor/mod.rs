@@ -2,9 +2,9 @@ mod auth;
 mod container;
 mod inference;
 mod letsencrypt;
+mod providers;
 mod server;
 mod shared;
 mod tlsforward;
-mod upstreams;
 
 pub use container::ConfigEditor;

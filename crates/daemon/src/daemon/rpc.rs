@@ -4,8 +4,7 @@ use crate::error::Result;
 use crate::permissions::{LocalIdentity, LocalPermissionManager};
 use crate::services::{AuthService, WebAuthnService};
 use crate::types::DaemonStatus;
-use gate_core::{InferenceBackend, StateBackend};
-use gate_http::UpstreamRegistry;
+use gate_core::StateBackend;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
@@ -43,12 +42,6 @@ pub enum DaemonRequest {
     },
     GetStateBackend {
         reply: oneshot::Sender<Arc<dyn StateBackend>>,
-    },
-    GetUpstreamRegistry {
-        reply: oneshot::Sender<Arc<UpstreamRegistry>>,
-    },
-    GetInferenceBackend {
-        reply: oneshot::Sender<Option<Arc<dyn InferenceBackend>>>,
     },
     GetUserCount {
         reply: oneshot::Sender<usize>,
