@@ -24,6 +24,8 @@ pub struct ServerConfig {
     pub port: u16,
     #[serde(default)]
     pub metrics_port: Option<u16>,
+    #[serde(default = "default_true")]
+    pub allow_local_bypass: bool,
 }
 
 impl Default for ServerConfig {
@@ -32,6 +34,7 @@ impl Default for ServerConfig {
             host: default_host(),
             port: default_port(),
             metrics_port: None,
+            allow_local_bypass: default_true(),
         }
     }
 }

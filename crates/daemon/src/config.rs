@@ -145,6 +145,9 @@ pub struct ServerConfig {
     /// Prometheus metrics endpoint port (if enabled)
     #[serde(default)]
     pub metrics_port: Option<u16>,
+    /// Allow localhost clients to bypass auth (effective only when host is loopback)
+    #[serde(default = "default_true")]
+    pub allow_local_bypass: bool,
 }
 
 impl Default for ServerConfig {

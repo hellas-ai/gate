@@ -213,7 +213,21 @@ impl Daemon {
         let router = crate::routes::config::add_routes(router);
         let router = crate::routes::admin::add_routes(router);
 
-        let minimal_state = crate::MinimalState::new(auth_service.clone(), self.clone());
+        // Compute whether to allow local bypass: requires config enabled and server bound to localhost
+        fn is_local_host(host: &str) -> bool {
+            matches!(host, "localhost" | "127.0.0.1" | "::1")
+        }
+
+        let allow_local_bypass =
+            settings.server.allow_local_bypass && is_local_host(&settings.server.host);
+        info!(
+            host = %settings.server.host,
+            allow_local_bypass = %allow_local_bypass,
+            "Computed localhost bypass setting"
+        );
+
+        let minimal_state =
+            crate::MinimalState::new(auth_service.clone(), self.clone(), allow_local_bypass);
 
         // Wrap MinimalState in AppState for middleware compatibility
         let mut app_state = gate_http::AppState::new(state_backend.clone(), minimal_state);
@@ -359,7 +373,11 @@ impl Daemon {
             .map_err(DaemonError::Io)?;
         tracing::info!("Server listening on http://{}", addr);
 
-        axum::serve(listener, app).await.map_err(DaemonError::Io)?;
+        // Include peer address in request extensions for middleware
+        let make_svc = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
+        axum::serve(listener, make_svc)
+            .await
+            .map_err(DaemonError::Io)?;
 
         Ok(())
     }
