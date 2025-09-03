@@ -1,7 +1,7 @@
 use yew::prelude::*;
 
-use super::container::ServerConfig;
 use super::shared::{ConfigField, ConfigInput, ConfigSection};
+use super::types::ServerConfig;
 
 #[derive(Properties, PartialEq)]
 pub struct ServerConfigSectionProps {

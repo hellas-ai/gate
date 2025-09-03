@@ -1,7 +1,7 @@
 use yew::prelude::*;
 
-use super::container::LocalInferenceConfig;
 use super::shared::{ConfigField, ConfigInput, ConfigSection};
+use super::types::LocalInferenceConfig;
 
 #[derive(Properties, PartialEq)]
 pub struct InferenceConfigSectionProps {

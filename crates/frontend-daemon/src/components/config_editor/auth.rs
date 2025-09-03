@@ -1,7 +1,7 @@
 use yew::prelude::*;
 
-use super::container::AuthConfig;
 use super::shared::{ConfigField, ConfigInput, ConfigSection, ConfigToggle};
+use super::types::AuthConfig;
 
 #[derive(Properties, PartialEq)]
 pub struct AuthConfigSectionProps {

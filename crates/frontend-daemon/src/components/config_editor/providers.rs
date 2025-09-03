@@ -1,7 +1,7 @@
 use yew::prelude::*;
 
-use super::container::ProviderConfig;
 use super::shared::{ConfigField, ConfigInput, ConfigSection};
+use super::types::ProviderConfig;
 
 #[derive(Properties, PartialEq)]
 pub struct ProvidersConfigSectionProps {
