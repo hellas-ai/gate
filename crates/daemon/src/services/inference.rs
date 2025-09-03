@@ -20,7 +20,7 @@ impl LocalInferenceService {
     pub fn new(config: LocalInferenceConfig) -> Result<Self> {
         // Initialize catgrad worker if local inference is enabled
         let catgrad_worker = if config.enabled {
-            info!("Initializing catgrad worker for local inference");
+            debug!("Initializing catgrad worker for local inference");
             match catgrad::CatgradWorker::new() {
                 Ok(worker) => Some(Arc::new(worker)),
                 Err(e) => {
@@ -344,7 +344,7 @@ impl InferenceBackend for LocalInferenceService {
             // },
             // segmentation fault
             // LocalModel {
-            //     id: "microsoft/Phi-4-mini-instruct".to_string(),
+            //     id: "c".to_string(),
             //     name: "Phi-4 Mini Instruct".to_string(),
             //     provider: "local".to_string(),
             //     path: None,

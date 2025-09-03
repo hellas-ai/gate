@@ -220,11 +220,6 @@ impl Daemon {
 
         let allow_local_bypass =
             settings.server.allow_local_bypass && is_local_host(&settings.server.host);
-        info!(
-            host = %settings.server.host,
-            allow_local_bypass = %allow_local_bypass,
-            "Computed localhost bypass setting"
-        );
 
         let minimal_state =
             crate::MinimalState::new(auth_service.clone(), self.clone(), allow_local_bypass);

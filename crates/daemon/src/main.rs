@@ -53,22 +53,22 @@ async fn main() -> Result<()> {
 
     // Load configuration if specified
     if let Some(config_path) = cli.config {
-        info!("Loading configuration from: {}", config_path);
+        debug!("Loading configuration from: {}", config_path);
         let settings = Settings::load_from_file(&config_path)?;
         builder = builder.with_settings(settings);
     } else {
-        info!(
+        debug!(
             "No configuration path specified, using default at {}",
             default_config_path.display()
         );
         if default_config_path.exists() {
-            info!(
+            debug!(
                 "Loading configuration from default path: {}",
                 default_config_path.display()
             );
             builder = builder.with_settings(Settings::load_from_file(&default_config_path)?);
         } else {
-            info!("No configuration found, creating one using default settings");
+            warn!("No configuration found, creating one using default settings");
             let settings = Settings::default();
             settings.save_to_file(&default_config_path).await?;
             builder = builder.with_settings(settings);

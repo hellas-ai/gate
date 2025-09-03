@@ -3,7 +3,7 @@ mod container;
 mod inference;
 mod letsencrypt;
 pub mod pages;
-mod providers;
+pub mod providers;
 mod server;
 mod shared;
 mod sub_nav;

@@ -1,3 +1,5 @@
+pub mod favicon;
+
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(inline_js = "
