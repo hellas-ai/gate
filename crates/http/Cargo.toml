@@ -74,7 +74,7 @@ tracing = { workspace = true }
 utoipa = { workspace = true, optional = true }
 utoipa-axum = { workspace = true, optional = true }
 utoipa-scalar = { workspace = true, optional = true }
-uuid = { version = "1.10", features = ["v4", "serde", "js"], optional = true }
+uuid = { version = "1.18", features = ["v4", "serde", "js"], optional = true }
 
 [dev-dependencies]
 gate-core = { workspace = true, features = ["tests"] }
