@@ -122,7 +122,7 @@ serde-wasm-bindgen = { version = "0.6", default-features = false }
 utoipa-swagger-ui = { version = "8.0", features = ["axum"] }
 
 # Utilities
-uuid = { version = "1.0", features = ["v4", "serde", "js"] }
+uuid = { version = "1.18", features = ["v4", "serde", "js"] }
 webauthn-rs = { version = "0.5" }
 wiremock = "0.6"
 wasm-bindgen-test = { version = "0.3", default-features = false }
