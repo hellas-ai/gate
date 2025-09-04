@@ -199,8 +199,6 @@ impl HttpSink {
         let protocol = request_stream.protocol();
         let url = self.build_url(ctx, protocol)?;
 
-        debug!("Executing streaming request to {}", url);
-
         // Build the HTTP request
         let mut req = self.client.post(url).json(&request);
 

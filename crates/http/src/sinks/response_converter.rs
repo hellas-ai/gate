@@ -46,7 +46,27 @@ pub async fn response_stream_to_axum(stream: ResponseStream) -> Result<Response,
                         {
                             ev = ev.event(event_name);
                         }
-                        Ok(ev.data(json.to_string()))
+                        // Ensure the "type" field appears first in the serialized JSON for consistency
+                        let body = if let Some(obj) = json.as_object() {
+                            if let Some(typ) = obj.get("type") {
+                                let mut parts = Vec::with_capacity(obj.len());
+                                parts.push(format!("\"type\":{typ}"));
+                                for (k, v) in obj {
+                                    if k != "type" {
+                                        // Serialize the key properly to ensure escaping
+                                        let key =
+                                            serde_json::to_string(k).unwrap_or_else(|_| k.clone());
+                                        parts.push(format!("{key}:{v}"));
+                                    }
+                                }
+                                format!("{{{}}}", parts.join(","))
+                            } else {
+                                json.to_string()
+                            }
+                        } else {
+                            json.to_string()
+                        };
+                        Ok(ev.data(body))
                     }
                     ResponseChunk::Stop {
                         reason,

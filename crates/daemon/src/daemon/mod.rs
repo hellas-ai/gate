@@ -281,6 +281,7 @@ impl Daemon {
                     continue;
                 }
             };
+
             if matches!(
                 provider_config.provider,
                 crate::config::ProviderType::Anthropic
@@ -306,6 +307,7 @@ impl Daemon {
                 .await;
             tracing::info!("Registered provider sink: {}", provider_config.name);
         }
+
         // If no Anthropic provider was configured, register a fallback Anthropic sink
         if !has_anthropic {
             match gate_http::sinks::anthropic::create_fallback_sink().await {
@@ -427,6 +429,9 @@ impl Daemon {
                 warn!("Static directory not found: {}", static_dir);
             }
         }
+
+        // Apply request tracing/logging as the outermost layer so it sees final statuses (including 404/405)
+        let app = gate_http::middleware::with_request_tracing(app);
 
         // Include peer address in request extensions for middleware
         let make_svc = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
