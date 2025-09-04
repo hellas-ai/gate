@@ -10,7 +10,7 @@ impl GateClient {
     /// Start WebAuthn registration
     pub async fn register_start(&self, name: String) -> Result<RegisterStartResponse, ClientError> {
         let req = self
-            .request(reqwest::Method::POST, "/auth/webauthn/register/start")
+            .request(reqwest::Method::POST, "/auth/webauthn/register/start")?
             .json(&RegisterStartRequest { name });
         self.execute(req).await
     }
@@ -21,14 +21,14 @@ impl GateClient {
         request: RegisterCompleteRequest,
     ) -> Result<RegisterCompleteResponse, ClientError> {
         let req = self
-            .request(reqwest::Method::POST, "/auth/webauthn/register/complete")
+            .request(reqwest::Method::POST, "/auth/webauthn/register/complete")?
             .json(&request);
         self.execute(req).await
     }
 
     /// Start WebAuthn authentication
     pub async fn auth_start(&self) -> Result<AuthStartResponse, ClientError> {
-        let req = self.request(reqwest::Method::POST, "/auth/webauthn/authenticate/start");
+        let req = self.request(reqwest::Method::POST, "/auth/webauthn/authenticate/start")?;
         self.execute(req).await
     }
 
@@ -41,7 +41,7 @@ impl GateClient {
             .request(
                 reqwest::Method::POST,
                 "/auth/webauthn/authenticate/complete",
-            )
+            )?
             .json(&request);
         self.execute(req).await
     }

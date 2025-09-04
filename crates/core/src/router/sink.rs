@@ -3,9 +3,15 @@
 use super::types::{
     CostStructure, ModelList, Protocol, ResponseChunk, SinkCapabilities, SinkHealth,
 };
-use crate::Result;
+use crate::{
+    Result,
+    access::{IdentityContext, SubjectIdentity},
+    tracing::CorrelationId,
+};
 use async_trait::async_trait;
 use futures::Stream;
+use http::HeaderMap;
+use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 
 /// Stream of response chunks
@@ -14,23 +20,25 @@ pub type ResponseStream = Pin<Box<dyn Stream<Item = Result<ResponseChunk>> + Sen
 /// Request context for request execution
 #[derive(Debug, Clone)]
 pub struct RequestContext {
-    pub identity: crate::access::SubjectIdentity<RouterIdentityContext>,
-    pub correlation_id: crate::tracing::CorrelationId,
+    pub identity: SubjectIdentity<RouterIdentityContext>,
+    pub correlation_id: CorrelationId,
     /// Request headers supplied by the caller (not credentials)
-    pub headers: std::collections::HashMap<String, String>,
+    pub headers: HeaderMap,
+    /// Raw query string from the incoming HTTP request (without leading '?')
+    pub query: Option<String>,
     pub trace_id: Option<String>,
     pub metadata: std::collections::HashMap<String, String>,
 }
 
 /// Identity context specific to router
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RouterIdentityContext {
     pub org_id: Option<String>,
     pub user_id: Option<String>,
     pub api_key_hash: Option<String>,
 }
 
-impl crate::access::IdentityContext for RouterIdentityContext {
+impl IdentityContext for RouterIdentityContext {
     fn to_attributes(&self) -> std::collections::HashMap<String, String> {
         let mut attrs = std::collections::HashMap::new();
         if let Some(ref org_id) = self.org_id {

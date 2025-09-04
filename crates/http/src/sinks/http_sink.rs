@@ -1,5 +1,10 @@
 //! Generic HTTP-based sink for external LLM providers
 
+use crate::sinks::anthropic::{
+    ANTHROPIC_BETA, ANTHROPIC_BETA_OAUTH, ANTHROPIC_VERSION, ANTHROPIC_VERSION_VALUE,
+    CLAUDE_CODE_USER_AGENT, X_API_KEY, X_APP, X_APP_VALUE,
+};
+
 use super::sse_parser::parse_sse;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -9,13 +14,15 @@ use gate_core::router::types::{
     StopReason,
 };
 use gate_core::{Error, Result};
+use http::header::{AUTHORIZATION, USER_AGENT};
+use http::{HeaderName, HeaderValue};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{debug, error};
+use url::{Url, form_urlencoded};
 
 /// Provider type for HTTP sinks
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,21 +89,63 @@ impl HttpSink {
     }
 
     /// Get the appropriate authorization header for the provider
-    fn auth_header(&self) -> Option<(&'static str, String)> {
+    fn auth_header(&self) -> Option<(HeaderName, HeaderValue)> {
         self.config
             .api_key
             .as_ref()
-            .map(|key| match self.config.provider {
-                Provider::Anthropic => ("x-api-key", key.clone()),
-                Provider::OpenAI => ("Authorization", format!("Bearer {key}")),
-                Provider::Custom => ("Authorization", format!("Bearer {key}")),
+            .and_then(|key| match self.config.provider {
+                Provider::Anthropic => {
+                    if key.starts_with("sk-ant-oat01-") {
+                        HeaderValue::from_str(&format!("Bearer {key}"))
+                            .ok()
+                            .map(|v| (AUTHORIZATION, v))
+                    } else {
+                        HeaderValue::from_str(key).ok().map(|v| (X_API_KEY, v))
+                    }
+                }
+                Provider::OpenAI | Provider::Custom => {
+                    HeaderValue::from_str(&format!("Bearer {key}"))
+                        .ok()
+                        .map(|v| (AUTHORIZATION, v))
+                }
             })
     }
 
+    /// Determine auth header from a client-supplied key (Anthropic only for now)
+    fn inferred_auth_from_client_headers(
+        &self,
+        ctx: &RequestContext,
+    ) -> Option<(HeaderName, HeaderValue)> {
+        if let Provider::Anthropic = self.config.provider {
+            // Prefer x-api-key when provided
+            if let Some(val) = ctx.headers.get("x-api-key")
+                && let Ok(key) = val.to_str()
+                && !key.is_empty()
+                && let Ok(hv) = HeaderValue::from_str(key)
+            {
+                return Some((X_API_KEY, hv));
+            }
+            // Fallback to Authorization: Bearer ...
+            if let Some(val) = ctx.headers.get("authorization")
+                && let Ok(auth) = val.to_str()
+                && auth.starts_with("Bearer sk-ant-")
+                && let Ok(hv) = HeaderValue::from_str(auth)
+            {
+                return Some((AUTHORIZATION, hv));
+            }
+        }
+        None
+    }
+
     /// Get provider-specific headers
-    fn provider_headers(&self) -> Vec<(&'static str, &'static str)> {
+    fn provider_headers(&self) -> Vec<(HeaderName, HeaderValue)> {
         match self.config.provider {
-            Provider::Anthropic => vec![("anthropic-version", "2023-06-01")],
+            Provider::Anthropic => vec![
+                (ANTHROPIC_BETA, ANTHROPIC_BETA_OAUTH),
+                (ANTHROPIC_VERSION, ANTHROPIC_VERSION_VALUE),
+                (USER_AGENT, CLAUDE_CODE_USER_AGENT),
+                (X_APP, X_APP_VALUE),
+            ],
             _ => vec![],
         }
     }
@@ -115,6 +164,26 @@ impl HttpSink {
         }
     }
 
+    /// Build the upstream URL from base_url, endpoint, and forwarded query
+    fn build_url(&self, ctx: &RequestContext, protocol: Protocol) -> Result<Url> {
+        let endpoint = self.endpoint_for_protocol(protocol)?;
+        let mut url = Url::parse(&self.config.base_url).map_err(|e| {
+            Error::Internal(format!(
+                "Invalid base_url for {}: {}",
+                self.config.provider, e
+            ))
+        })?;
+        url = url
+            .join(endpoint.trim_start_matches('/'))
+            .map_err(|e| Error::Internal(format!("Failed to join endpoint: {e}")))?;
+        if let Some(q) = &ctx.query {
+            let mut qp = url.query_pairs_mut();
+            qp.clear()
+                .extend_pairs(form_urlencoded::parse(q.as_bytes()));
+        }
+        Ok(url)
+    }
+
     /// Execute a streaming request
     async fn execute_streaming(
         &self,
@@ -128,17 +197,22 @@ impl HttpSink {
             .ok_or_else(|| Error::InvalidRequest("Empty request stream".to_string()))??;
 
         let protocol = request_stream.protocol();
-        let endpoint = self.endpoint_for_protocol(protocol)?;
-        let url = format!("{}{}", self.config.base_url, endpoint);
+        let url = self.build_url(ctx, protocol)?;
 
         debug!("Executing streaming request to {}", url);
 
         // Build the HTTP request
-        let mut req = self.client.post(&url).json(&request);
+        let mut req = self.client.post(url).json(&request);
 
         // Add authentication
         if let Some((header_name, header_value)) = self.auth_header() {
+            // Use configured API key
             req = req.header(header_name, header_value);
+        } else {
+            // Use client-supplied key when no configured key exists
+            if let Some((hn, hv)) = self.inferred_auth_from_client_headers(ctx) {
+                req = req.header(hn, hv);
+            }
         }
 
         // Add provider headers
@@ -146,14 +220,16 @@ impl HttpSink {
             req = req.header(name, value);
         }
 
-        // Add trace headers from context
-        for (name, value) in &ctx.headers {
-            if !matches!(
-                name.as_str(),
+        // Add trace headers from context (typed)
+        for (name, value) in ctx.headers.iter() {
+            let n = name.as_str();
+            if matches!(
+                n,
                 "host" | "content-length" | "content-type" | "authorization" | "x-api-key"
             ) {
-                req = req.header(name, value);
+                continue;
             }
+            req = req.header(name, value);
         }
 
         // Send the request
@@ -185,16 +261,44 @@ impl HttpSink {
             .unwrap_or(false);
 
         if is_sse {
-            // Parse SSE stream into ResponseChunks
-            self.parse_sse_stream(response, protocol).await
-        } else {
-            // Non-streaming response - convert to single chunk
-            let body = response
-                .json::<JsonValue>()
-                .await
-                .map_err(|e| Error::Internal(format!("Failed to parse response: {e}")))?;
+            // Capture upstream headers to forward
+            let mut hdrs = std::collections::HashMap::new();
+            for (name, value) in response.headers().iter() {
+                if let Ok(v) = value.to_str() {
+                    hdrs.insert(name.to_string(), v.to_string());
+                }
+            }
 
+            // Parse SSE stream into ResponseChunks
+            let sse_stream = self.parse_sse_stream(response, protocol).await?;
+
+            // Prepend headers chunk
+            let stream = futures::stream::once(async move { Ok(ResponseChunk::Headers(hdrs)) })
+                .chain(sse_stream);
+            Ok(Box::pin(stream))
+        } else {
+            // Capture upstream headers to forward
+            let mut hdrs = std::collections::HashMap::new();
+            for (name, value) in response.headers().iter() {
+                if let Ok(v) = value.to_str() {
+                    hdrs.insert(name.to_string(), v.to_string());
+                }
+            }
+
+            // Non-streaming response - convert to single chunk
+            let text = response
+                .text()
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to read response: {e}")))?;
+            debug!("Non-streaming response: {}", text);
+            let body: JsonValue = serde_json::from_str(&text).map_err(|e| {
+                Error::Internal(format!(
+                    "Failed to parse JSON response from {}: {e}",
+                    self.config.provider
+                ))
+            })?;
             let chunks = vec![
+                Ok(ResponseChunk::Headers(hdrs)),
                 Ok(ResponseChunk::Content(body)),
                 Ok(ResponseChunk::Stop {
                     reason: StopReason::Complete,
@@ -322,5 +426,107 @@ impl Sink for HttpSink {
         } else {
             Err(Error::InvalidRequest("Empty request stream".to_string()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gate_core::router::sink::RouterIdentityContext;
+    use gate_core::tracing::CorrelationId;
+
+    fn make_ctx(headers: Vec<(&str, &str)>) -> RequestContext {
+        let mut hmap = http::HeaderMap::new();
+        for (k, v) in headers {
+            let name = http::HeaderName::from_lowercase(k.as_bytes()).unwrap();
+            let val = http::HeaderValue::from_str(v).unwrap();
+            hmap.insert(name, val);
+        }
+        RequestContext {
+            identity: gate_core::access::SubjectIdentity::new(
+                "test",
+                "test",
+                RouterIdentityContext::default(),
+            ),
+            correlation_id: CorrelationId::new(),
+            headers: hmap,
+            query: None,
+            trace_id: None,
+            metadata: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_inferred_auth_from_client_headers_anthropic() {
+        let sink = HttpSink::new(HttpSinkConfig {
+            id: "provider://anthropic".into(),
+            provider: Provider::Anthropic,
+            base_url: "https://api.anthropic.com".into(),
+            api_key: None,
+            models: vec![],
+            timeout: std::time::Duration::from_secs(5),
+            max_retries: 0,
+            accepted_protocols: vec![Protocol::Anthropic],
+            capabilities: SinkCapabilities {
+                supports_streaming: true,
+                supports_batching: false,
+                supports_tools: true,
+                max_context_length: None,
+                modalities: vec!["text".to_string()],
+            },
+            cost_structure: None,
+        })
+        .expect("create sink");
+
+        // x-api-key preferred
+        let ctx = make_ctx(vec![("x-api-key", "sk-ant-abc123")]);
+        let res = sink.inferred_auth_from_client_headers(&ctx);
+        assert!(res.is_some());
+        let (hn, hv) = res.unwrap();
+        assert_eq!(hn, X_API_KEY);
+        assert_eq!(hv, http::HeaderValue::from_static("sk-ant-abc123"));
+
+        // Authorization Bearer fallback
+        let ctx = make_ctx(vec![("authorization", "Bearer sk-ant-oat01-xyz")]);
+        let res = sink.inferred_auth_from_client_headers(&ctx);
+        assert!(res.is_some());
+        let (hn, hv) = res.unwrap();
+        assert_eq!(hn, AUTHORIZATION);
+        assert_eq!(
+            hv,
+            http::HeaderValue::from_static("Bearer sk-ant-oat01-xyz")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_build_url_forwards_query() {
+        let sink = HttpSink::new(HttpSinkConfig {
+            id: "provider://anthropic".into(),
+            provider: Provider::Anthropic,
+            base_url: "https://api.anthropic.com".into(),
+            api_key: None,
+            models: vec![],
+            timeout: std::time::Duration::from_secs(5),
+            max_retries: 0,
+            accepted_protocols: vec![Protocol::Anthropic],
+            capabilities: SinkCapabilities {
+                supports_streaming: true,
+                supports_batching: false,
+                supports_tools: true,
+                max_context_length: None,
+                modalities: vec!["text".to_string()],
+            },
+            cost_structure: None,
+        })
+        .expect("create sink");
+
+        let mut ctx = make_ctx(vec![]);
+        ctx.query = Some("beta=true&foo=bar".to_string());
+
+        let url = sink.build_url(&ctx, Protocol::Anthropic).expect("url");
+        assert_eq!(
+            url.as_str(),
+            "https://api.anthropic.com/v1/messages?beta=true&foo=bar"
+        );
     }
 }

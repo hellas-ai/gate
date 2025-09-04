@@ -1,4 +1,5 @@
 use super::plan::{Route, RoutingPlan};
+use super::registry::SinkRegistry;
 use super::sink::{RequestContext, Sink};
 use super::types::{RequestStream, ResponseChunk, StopReason};
 use crate::Result;
@@ -6,11 +7,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub struct PlanExecutor {
-    sink_registry: Arc<super::routing::SinkRegistry>,
+    sink_registry: Arc<SinkRegistry>,
 }
 
 impl PlanExecutor {
-    pub fn new(sink_registry: Arc<super::routing::SinkRegistry>) -> Self {
+    pub fn new(sink_registry: Arc<SinkRegistry>) -> Self {
         Self { sink_registry }
     }
 

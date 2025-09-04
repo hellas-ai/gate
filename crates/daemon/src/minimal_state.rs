@@ -39,11 +39,59 @@ impl MinimalState {
 #[async_trait]
 impl AuthProvider for MinimalState {
     async fn authenticate(&self, parts: &Parts) -> Result<HttpIdentity, HttpError> {
+        // Helper: detect if this is an inference path
+        fn is_inference_path(path: &str) -> bool {
+            matches!(
+                path,
+                "/v1/messages" | "/v1/chat/completions" | "/v1/responses"
+            )
+        }
+
+        // Helper: detect Anthropic API key from headers
+        fn detect_anthropic_key(parts: &Parts) -> Option<String> {
+            // Prefer x-api-key
+            if let Some(val) = parts.headers.get("x-api-key").and_then(|v| v.to_str().ok())
+                && val.starts_with("sk-ant-")
+            {
+                return Some(val.to_string());
+            }
+            // Fallback to Authorization: Bearer sk-ant-...
+            if let Some(auth) = parts
+                .headers
+                .get("Authorization")
+                .and_then(|v| v.to_str().ok())
+                && let Some(token) = auth.strip_prefix("Bearer ")
+                && token.starts_with("sk-ant-")
+            {
+                return Some(token.to_string());
+            }
+            None
+        }
+
+        let path = parts.uri.path();
+        // Provider-token auth bypass for Anthropic, inference endpoints only, loopback only
+        if is_inference_path(path)
+            && let Some(connect_info) = parts.extensions.get::<ConnectInfo<SocketAddr>>()
+            && connect_info.0.ip().is_loopback()
+            && let Some(_anthropic_key) = detect_anthropic_key(parts)
+        {
+            let identity = HttpIdentity::new(
+                "provider:anthropic".to_string(),
+                "anthropic-key".to_string(),
+                HttpContext::new()
+                    .with_attribute("auth_method", "provider-key")
+                    .with_attribute("provider", "anthropic")
+                    .with_attribute("node_id", "local"),
+            );
+            return Ok(identity);
+        }
+
         if let Some(auth_header) = parts
             .headers
             .get("Authorization")
             .and_then(|value| value.to_str().ok())
         {
+            // Default JWT auth
             return self.auth_service.authenticate_from_header(auth_header);
         }
 

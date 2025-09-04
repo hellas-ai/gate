@@ -18,7 +18,7 @@ impl PublicGateClient {
         request: RegisterStartRequest,
     ) -> Result<RegisterStartResponse, ClientError> {
         let req = self
-            .request(reqwest::Method::POST, "/auth/webauthn/register/start")
+            .request(reqwest::Method::POST, "/auth/webauthn/register/start")?
             .json(&request);
         self.execute(req).await
     }
@@ -29,7 +29,7 @@ impl PublicGateClient {
         request: RegisterCompleteRequest,
     ) -> Result<RegisterCompleteResponse, ClientError> {
         let req = self
-            .request(reqwest::Method::POST, "/auth/webauthn/register/complete")
+            .request(reqwest::Method::POST, "/auth/webauthn/register/complete")?
             .json(&request);
         self.execute(req).await
     }
@@ -40,14 +40,14 @@ impl PublicGateClient {
         request: RegisterCompleteRequest,
     ) -> Result<RegisterCompleteResponse, ClientError> {
         let req = self
-            .request(reqwest::Method::POST, "/auth/webauthn/register/bootstrap")
+            .request(reqwest::Method::POST, "/auth/webauthn/register/bootstrap")?
             .json(&request);
         self.execute(req).await
     }
 
     /// Start WebAuthn authentication (public endpoint)
     pub async fn auth_start(&self) -> Result<AuthStartResponse, ClientError> {
-        let req = self.request(reqwest::Method::POST, "/auth/webauthn/authenticate/start");
+        let req = self.request(reqwest::Method::POST, "/auth/webauthn/authenticate/start")?;
         self.execute(req).await
     }
 
@@ -60,7 +60,7 @@ impl PublicGateClient {
             .request(
                 reqwest::Method::POST,
                 "/auth/webauthn/authenticate/complete",
-            )
+            )?
             .json(&request);
         self.execute(req).await
     }
@@ -70,7 +70,7 @@ impl PublicGateClient {
 impl AuthenticatedGateClient {
     /// Get current user info (requires authentication)
     pub async fn get_me(&self) -> Result<UserResponse, ClientError> {
-        let request = self.request(reqwest::Method::GET, "/api/auth/me");
+        let request = self.request(reqwest::Method::GET, "/api/auth/me")?;
         self.execute(request).await
     }
 }

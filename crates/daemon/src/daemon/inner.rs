@@ -1,9 +1,9 @@
-use crate::Settings;
 use crate::bootstrap::BootstrapTokenManager;
 use crate::error::Result;
 use crate::permissions::{LocalIdentity, LocalPermissionManager};
 use crate::services::{AuthService, TlsForwardService, WebAuthnService};
 use crate::types::{DaemonStatus, TlsForwardStatus};
+use crate::{Settings, state_dir::StateDir};
 use gate_core::StateBackend;
 use gate_core::access::{
     Action, ObjectId, ObjectIdentity, ObjectKind, Permissions, TargetNamespace,
@@ -81,13 +81,17 @@ impl DaemonInner {
 
         *self.settings.write().await = config;
 
-        // write to filesystem too
-        // TODO: where to save the config?
-        // self.settings
-        //     .write()
-        //     .await
-        //     .save_to_file(self.config_dir())
-        //     .await?;
+        // Persist to default config path
+        if let Ok(state_dir) = StateDir::new().await {
+            let path = state_dir.config_path();
+            if let Err(e) = self.settings.read().await.save_to_file(&path).await {
+                tracing::warn!("Failed to save settings to {}: {}", path.display(), e);
+            } else {
+                tracing::info!("Saved settings to {}", path.display());
+            }
+        } else {
+            tracing::warn!("Failed to resolve state dir; settings not persisted to disk");
+        }
 
         self.reload_services().await?;
         Ok(())
@@ -155,7 +159,7 @@ impl DaemonInner {
         self.settings.read().await.clone()
     }
 
-    pub async fn get_config(&self, identity: &LocalIdentity) -> Result<serde_json::Value> {
+    pub async fn get_config(&self, identity: &LocalIdentity) -> Result<Settings> {
         // Check permission to read configuration
         let config_object = ObjectIdentity {
             namespace: TargetNamespace::System,
@@ -169,36 +173,7 @@ impl DaemonInner {
 
         // Get the current configuration
         let current_config = self.settings.read().await.clone();
-
-        // Convert to JSON and redact sensitive fields
-        let mut config_json = serde_json::to_value(current_config).map_err(|e| {
-            crate::error::DaemonError::ConfigError(format!("Failed to serialize config: {e}"))
-        })?;
-
-        // Redact sensitive fields
-        if let Some(providers) = config_json
-            .get_mut("providers")
-            .and_then(|v| v.as_array_mut())
-        {
-            for provider in providers {
-                if let Some(api_key) = provider.get_mut("api_key")
-                    && api_key.as_str().is_some()
-                {
-                    *api_key = serde_json::json!("<redacted>");
-                }
-            }
-
-            // Redact JWT secret
-            if let Some(auth) = config_json.get_mut("auth")
-                && let Some(jwt) = auth.get_mut("jwt")
-                && let Some(secret) = jwt.get_mut("secret")
-                && secret.as_str().is_some()
-            {
-                *secret = serde_json::json!("<redacted>");
-            }
-        }
-
-        Ok(config_json)
+        Ok(current_config)
     }
 
     async fn get_tlsforward_status(&self) -> TlsForwardStatus {

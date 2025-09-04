@@ -4,58 +4,22 @@ use super::executor::PlanExecutor;
 use super::index::SinkIndex;
 use super::middleware::Middleware;
 use super::plan::{Route, RoutingPlan};
+use super::registry::SinkRegistry;
 use super::sink::{RequestContext, ResponseStream, Sink, SinkDescription};
-use super::strategy::{RoutingStrategy, ScoredRoute, SinkCandidate};
-use super::types::{Protocol, RequestCapabilities, RequestDescriptor, RequestStream};
+use super::strategy::{RoutingStrategy, ScoredRoute, SimpleStrategy, SinkCandidate};
+use super::types::{Protocol, RequestCapabilities, RequestDescriptor, RequestStream, RetryConfig};
+use super::{SinkHealth, SinkSnapshot};
 use crate::Result;
+use crate::router::SinkCapabilities;
+use crate::router::types::ModelList;
 use crate::state::StateBackend;
 use async_trait::async_trait;
-use std::collections::HashMap;
+use chrono::Utc;
+use futures::future::BoxFuture;
+use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::sync::Arc;
-
-/// Registry for managing sinks
-pub struct SinkRegistry {
-    sinks: Arc<tokio::sync::RwLock<HashMap<String, Arc<dyn Sink>>>>,
-}
-
-impl SinkRegistry {
-    /// Create a new sink registry
-    pub fn new() -> Self {
-        Self {
-            sinks: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-        }
-    }
-
-    /// Register a sink
-    pub async fn register(&self, id: String, sink: Arc<dyn Sink>) {
-        let mut sinks = self.sinks.write().await;
-        sinks.insert(id, sink);
-    }
-
-    /// Get a sink by ID
-    pub async fn get(&self, id: &str) -> Option<Arc<dyn Sink>> {
-        let sinks = self.sinks.read().await;
-        sinks.get(id).cloned()
-    }
-
-    /// List all sink IDs
-    pub async fn list_ids(&self) -> Vec<String> {
-        let sinks = self.sinks.read().await;
-        sinks.keys().cloned().collect()
-    }
-
-    /// Get all sinks
-    pub async fn get_all(&self) -> Vec<Arc<dyn Sink>> {
-        let sinks = self.sinks.read().await;
-        sinks.values().cloned().collect()
-    }
-}
-
-impl Default for SinkRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+use std::time::Duration;
 
 /// Router - makes routing decisions
 pub struct Router {
@@ -98,7 +62,6 @@ impl Router {
 
         // Apply routing strategy
         let scored_routes = self.strategy.evaluate(ctx, desc, candidates).await?;
-
         if scored_routes.is_empty() {
             return Err(crate::Error::NoSinksAvailable);
         }
@@ -116,7 +79,10 @@ impl Router {
         plan: RoutingPlan,
         request: RequestStream,
     ) -> Result<ResponseStream> {
+        tracing::debug!("Executing routing plan: {:?}", self.sink_index);
+
         let executor = PlanExecutor::new(self.sink_registry.clone());
+
         // Build middleware pipeline around the executor
         let middlewares = self.middleware.clone();
         let ctx_arc = Arc::new(plan.context.clone());
@@ -126,7 +92,7 @@ impl Router {
             let executor = executor;
             let plan = plan;
             Box::pin(async move { executor.execute(plan, req).await })
-                as futures::future::BoxFuture<'static, Result<ResponseStream>>
+                as BoxFuture<'static, Result<ResponseStream>>
         };
 
         // Build chain from back to front
@@ -146,7 +112,6 @@ impl Router {
         // Kick off the chain
         next(request).await
     }
-
     /// Refresh the attached sink index from the current registry. Returns number of refreshed sinks.
     pub async fn refresh_index(&self) -> Result<usize> {
         if let Some(index) = &self.sink_index {
@@ -180,12 +145,18 @@ impl Router {
         if let Some(index) = index {
             // Use snapshots for hot path
             let snapshots = index.list().await;
-            for (sink_id, snap) in snapshots {
+            for (
+                sink_id,
+                SinkSnapshot {
+                    description,
+                    health,
+                    ..
+                },
+            ) in snapshots
+            {
                 let Some(sink) = self.sink_registry.get(&sink_id).await else {
                     continue;
                 };
-                let description = snap.description;
-                let health = snap.health;
 
                 // Check if sink is healthy
                 if !health.healthy {
@@ -194,7 +165,6 @@ impl Router {
 
                 // Check if sink supports any of the models
                 let supports_model = models.iter().any(|model| description.supports_model(model));
-
                 if !supports_model {
                     continue;
                 }
@@ -208,21 +178,24 @@ impl Router {
                 if req_caps.needs_streaming && !description.capabilities.supports_streaming {
                     continue;
                 }
+
                 if req_caps.needs_tools && !description.capabilities.supports_tools {
                     continue;
                 }
+
                 // Modalities (must include all requested)
-                let sink_modalities: std::collections::HashSet<_> = description
+                let sink_modalities: HashSet<_> = description
                     .capabilities
                     .modalities
                     .iter()
                     .cloned()
                     .collect();
-                let req_modalities: std::collections::HashSet<_> =
-                    req_caps.modalities.iter().cloned().collect();
+
+                let req_modalities: HashSet<_> = req_caps.modalities.iter().cloned().collect();
                 if !req_modalities.is_subset(&sink_modalities) {
                     continue;
                 }
+
                 // Context length best-effort check
                 if let (Some(max_ctx), Some(input_hint)) =
                     (description.capabilities.max_context_length, context_hint)
@@ -267,14 +240,13 @@ impl Router {
                 if req_caps.needs_tools && !description.capabilities.supports_tools {
                     continue;
                 }
-                let sink_modalities: std::collections::HashSet<_> = description
+                let sink_modalities: HashSet<_> = description
                     .capabilities
                     .modalities
                     .iter()
                     .cloned()
                     .collect();
-                let req_modalities: std::collections::HashSet<_> =
-                    req_caps.modalities.iter().cloned().collect();
+                let req_modalities: HashSet<_> = req_caps.modalities.iter().cloned().collect();
                 if !req_modalities.is_subset(&sink_modalities) {
                     continue;
                 }
@@ -306,18 +278,14 @@ impl Router {
         }
 
         // Sort by score (highest first)
-        scored.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
 
         let primary = scored.remove(0);
         let primary_route = Route {
             sink_id: primary.sink_id,
             protocol_conversion: primary.conversion_needed,
-            timeout: std::time::Duration::from_secs(300),
-            retry_config: super::types::RetryConfig::default(),
+            timeout: Duration::from_secs(300),
+            retry_config: RetryConfig::default(),
         };
 
         let fallback_routes = scored
@@ -326,8 +294,8 @@ impl Router {
             .map(|s| Route {
                 sink_id: s.sink_id,
                 protocol_conversion: s.conversion_needed,
-                timeout: std::time::Duration::from_secs(30),
-                retry_config: super::types::RetryConfig::default(),
+                timeout: Duration::from_secs(30),
+                retry_config: RetryConfig::default(),
             })
             .collect();
 
@@ -354,7 +322,7 @@ impl Sink for Router {
                     all_protocols.push(proto);
                 }
             }
-            if let super::types::ModelList::Static(models) = desc.models {
+            if let ModelList::Static(models) = desc.models {
                 for model in models {
                     if !all_models.contains(&model) {
                         all_models.push(model);
@@ -372,11 +340,11 @@ impl Sink for Router {
             id: "router".to_string(),
             accepted_protocols: all_protocols,
             models: if all_models.is_empty() {
-                super::types::ModelList::Dynamic
+                ModelList::Dynamic
             } else {
-                super::types::ModelList::Static(all_models)
+                ModelList::Static(all_models)
             },
-            capabilities: super::types::SinkCapabilities {
+            capabilities: SinkCapabilities {
                 supports_streaming,
                 supports_batching: false,
                 supports_tools,
@@ -387,7 +355,7 @@ impl Sink for Router {
         }
     }
 
-    async fn probe(&self) -> super::types::SinkHealth {
+    async fn probe(&self) -> SinkHealth {
         // Aggregate health from all sinks
         let sinks = self.sink_registry.get_all().await;
         let mut healthy_count = 0;
@@ -401,7 +369,7 @@ impl Sink for Router {
             }
         }
 
-        super::types::SinkHealth {
+        SinkHealth {
             healthy: healthy_count > 0,
             latency_ms: None,
             error_rate: if total_count > 0 {
@@ -410,7 +378,7 @@ impl Sink for Router {
                 1.0
             },
             last_error: None,
-            last_check: chrono::Utc::now(),
+            last_check: Utc::now(),
         }
     }
 
@@ -487,7 +455,7 @@ impl RouterBuilder {
                 .unwrap_or_else(|| Arc::new(SinkRegistry::new())),
             strategy: self
                 .strategy
-                .unwrap_or_else(|| Box::new(super::strategy::SimpleStrategy::new())),
+                .unwrap_or_else(|| Box::new(SimpleStrategy::new())),
             middleware: self.middleware,
             sink_index: self.sink_index,
         }

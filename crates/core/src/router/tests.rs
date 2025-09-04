@@ -124,7 +124,7 @@ impl StateBackend for MockStateBackend {
 #[tokio::test]
 async fn test_router_creation() {
     let backend = std::sync::Arc::new(MockStateBackend);
-    let registry = std::sync::Arc::new(routing::SinkRegistry::new());
+    let registry = std::sync::Arc::new(super::registry::SinkRegistry::new());
 
     let router = routing::Router::builder()
         .state_backend(backend as std::sync::Arc<dyn crate::StateBackend>)
@@ -170,7 +170,7 @@ async fn test_route_and_execute_with_mock_sink() {
 
     // Backend and registry
     let backend = std::sync::Arc::new(MockStateBackend);
-    let registry = std::sync::Arc::new(routing::SinkRegistry::new());
+    let registry = std::sync::Arc::new(super::registry::SinkRegistry::new());
     registry
         .register(
             "self://mock".to_string(),
@@ -207,6 +207,7 @@ async fn test_route_and_execute_with_mock_sink() {
         ),
         correlation_id: crate::tracing::CorrelationId::new(),
         headers: Default::default(),
+        query: None,
         trace_id: None,
         metadata: Default::default(),
     };
@@ -279,7 +280,7 @@ async fn test_service_route_and_execute_json() {
     use serde_json::json;
 
     let backend = std::sync::Arc::new(MockStateBackend);
-    let registry = std::sync::Arc::new(routing::SinkRegistry::new());
+    let registry = std::sync::Arc::new(super::registry::SinkRegistry::new());
     registry
         .register(
             "self://mock".into(),
@@ -308,6 +309,7 @@ async fn test_service_route_and_execute_json() {
         ),
         correlation_id: crate::tracing::CorrelationId::new(),
         headers: Default::default(),
+        query: None,
         trace_id: None,
         metadata: Default::default(),
     };
@@ -339,7 +341,7 @@ async fn test_sink_index_selects_healthy_candidate() {
     use crate::router::types::{RequestCapabilities, RequestDescriptor};
 
     let backend = std::sync::Arc::new(MockStateBackend);
-    let registry = std::sync::Arc::new(routing::SinkRegistry::new());
+    let registry = std::sync::Arc::new(super::registry::SinkRegistry::new());
 
     // Two sinks: A healthy, B unhealthy
     let sink_a_id = "self://a";
@@ -386,6 +388,7 @@ async fn test_sink_index_selects_healthy_candidate() {
         ),
         correlation_id: crate::tracing::CorrelationId::new(),
         headers: Default::default(),
+        query: None,
         trace_id: None,
         metadata: Default::default(),
     };
@@ -412,7 +415,7 @@ async fn test_sink_index_refresher_lists_all_sinks() {
     use crate::router::index::SinkIndex;
     use crate::router::sinks::mock::MockSink;
 
-    let registry = std::sync::Arc::new(routing::SinkRegistry::new());
+    let registry = std::sync::Arc::new(super::registry::SinkRegistry::new());
     registry
         .register(
             "self://one".into(),

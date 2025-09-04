@@ -21,6 +21,10 @@ impl SinkRegistry {
         let sinks = self.sinks.read().await;
         sinks.get(id).cloned()
     }
+    pub async fn remove(&self, id: &str) {
+        let mut sinks = self.sinks.write().await;
+        sinks.remove(id);
+    }
     pub async fn list_ids(&self) -> Vec<String> {
         let sinks = self.sinks.read().await;
         sinks.keys().cloned().collect()

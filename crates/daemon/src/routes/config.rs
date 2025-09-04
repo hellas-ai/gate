@@ -27,7 +27,7 @@ pub async fn get_config(
     extract::State(state): extract::State<gate_http::AppState<crate::MinimalState>>,
 ) -> Result<response::Json<ConfigResponse>, HttpError> {
     // Use daemon to get config with permission check
-    let config = state
+    let settings = state
         .data
         .daemon
         .clone()
@@ -37,7 +37,8 @@ pub async fn get_config(
         .get_config()
         .await
         .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
-
+    let config = serde_json::to_value(settings)
+        .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
     Ok(response::Json(ConfigResponse { config }))
 }
 
@@ -77,19 +78,8 @@ pub async fn update_config(
         .update_config(new_config.clone())
         .await
         .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
-
-    // Get the redacted config to return
-    let config = state
-        .data
-        .daemon
-        .clone()
-        .with_http_identity(&identity)
-        .await
-        .map_err(|e| HttpError::InternalServerError(e.to_string()))?
-        .get_config()
-        .await
+    let config = serde_json::to_value(new_config)
         .map_err(|e| HttpError::InternalServerError(e.to_string()))?;
-
     Ok(response::Json(ConfigResponse { config }))
 }
 

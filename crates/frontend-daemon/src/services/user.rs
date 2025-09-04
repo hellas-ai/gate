@@ -74,7 +74,7 @@ impl UserService {
         let response: UserListResponse = client
             .execute(
                 client
-                    .request(Method::GET, "/api/admin/users")
+                    .request(Method::GET, "/api/admin/users")?
                     .query(&query_params),
             )
             .await?;
@@ -88,7 +88,7 @@ impl UserService {
             .ok_or_else(|| ClientError::Configuration("Not authenticated".into()))?;
 
         let response: UserInfo = client
-            .execute(client.request(Method::GET, &format!("/api/admin/users/{user_id}")))
+            .execute(client.request(Method::GET, &format!("/api/admin/users/{user_id}"))?)
             .await?;
 
         Ok(response)
@@ -108,7 +108,7 @@ impl UserService {
         let response: UpdateUserStatusResponse = client
             .execute(
                 client
-                    .request(Method::PATCH, &format!("/api/admin/users/{user_id}/status"))
+                    .request(Method::PATCH, &format!("/api/admin/users/{user_id}/status"))?
                     .json(&request_body),
             )
             .await?;
@@ -123,7 +123,7 @@ impl UserService {
 
         // For DELETE with no response body, we expect empty JSON
         let _: serde_json::Value = client
-            .execute(client.request(Method::DELETE, &format!("/api/admin/users/{user_id}")))
+            .execute(client.request(Method::DELETE, &format!("/api/admin/users/{user_id}"))?)
             .await?;
 
         Ok(())
@@ -141,7 +141,7 @@ impl UserService {
             .execute(client.request(
                 Method::GET,
                 &format!("/api/admin/users/{user_id}/permissions"),
-            ))
+            )?)
             .await?;
 
         Ok(response.permissions)
@@ -174,7 +174,7 @@ impl UserService {
                     .request(
                         Method::POST,
                         &format!("/api/admin/users/{user_id}/permissions"),
-                    )
+                    )?
                     .json(&request_body),
             )
             .await?;
@@ -200,7 +200,7 @@ impl UserService {
                     .request(
                         Method::DELETE,
                         &format!("/api/admin/users/{user_id}/permissions"),
-                    )
+                    )?
                     .query(&query_params),
             )
             .await?;

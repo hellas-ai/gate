@@ -1,5 +1,8 @@
 //! SinkIndex: caller-managed snapshots of sink descriptions and health
 
+use tokio::sync::RwLock;
+
+use super::registry::SinkRegistry;
 use super::sink::SinkDescription;
 use super::types::SinkHealth;
 use std::collections::HashMap;
@@ -14,15 +17,15 @@ pub struct SinkSnapshot {
 }
 
 /// Caller-managed index of sink snapshots for fast routing
-#[derive(Default, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct SinkIndex {
-    inner: Arc<tokio::sync::RwLock<HashMap<String, SinkSnapshot>>>,
+    inner: Arc<RwLock<HashMap<String, SinkSnapshot>>>,
 }
 
 impl SinkIndex {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            inner: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -63,7 +66,7 @@ impl SinkIndex {
     }
 
     /// Refresh snapshots from the given registry (all sinks)
-    pub async fn refresh_from_registry(&self, registry: &super::routing::SinkRegistry) -> usize {
+    pub async fn refresh_from_registry(&self, registry: &SinkRegistry) -> usize {
         let ids = registry.list_ids().await;
         self.refresh_subset_from_registry(registry, &ids).await
     }
@@ -71,7 +74,7 @@ impl SinkIndex {
     /// Refresh a subset of sink IDs from the registry
     pub async fn refresh_subset_from_registry(
         &self,
-        registry: &super::routing::SinkRegistry,
+        registry: &SinkRegistry,
         ids: &[String],
     ) -> usize {
         let mut count = 0usize;

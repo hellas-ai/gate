@@ -1,6 +1,11 @@
 //! Extract identity from HTTP headers
 
 use axum::http::HeaderMap;
+use http::HeaderName;
+use http::header::AUTHORIZATION;
+const X_API_KEY: HeaderName = HeaderName::from_static("x-api-key");
+const X_USER_ID: HeaderName = HeaderName::from_static("x-user-id");
+const X_ORG_ID: HeaderName = HeaderName::from_static("x-org-id");
 use gate_core::access::SubjectIdentity;
 use gate_core::router::sink::RouterIdentityContext;
 use sha2::Digest;
@@ -8,25 +13,25 @@ use sha2::Digest;
 /// Extract identity from request headers
 pub fn extract_identity(headers: &HeaderMap) -> SubjectIdentity<RouterIdentityContext> {
     // Check for Authorization header
-    if let Some(auth_header) = headers.get("authorization")
+    if let Some(auth_header) = headers.get(AUTHORIZATION)
         && let Ok(auth_str) = auth_header.to_str()
     {
         return parse_authorization_header(auth_str);
     }
 
     // Check for X-API-Key header
-    if let Some(api_key) = headers.get("x-api-key")
+    if let Some(api_key) = headers.get(X_API_KEY)
         && let Ok(key_str) = api_key.to_str()
     {
         return create_api_key_identity(key_str);
     }
 
     // Check for X-User-ID header (for internal services)
-    if let Some(user_id) = headers.get("x-user-id")
+    if let Some(user_id) = headers.get(X_USER_ID)
         && let Ok(user_str) = user_id.to_str()
     {
         let org_id = headers
-            .get("x-org-id")
+            .get(X_ORG_ID)
             .and_then(|v| v.to_str().ok())
             .map(String::from);
 

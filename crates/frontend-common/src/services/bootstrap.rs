@@ -25,8 +25,10 @@ impl BootstrapService {
     pub async fn check_status(&self) -> Result<BootstrapStatus, String> {
         let client = create_public_client().map_err(|e| format!("Failed to get client: {e}"))?;
 
-        let response = client
+        let request = client
             .request(reqwest::Method::GET, "/auth/bootstrap/status")
+            .map_err(|e| format!("Failed to check bootstrap status: {e}"))?;
+        let response = request
             .send()
             .await
             .map_err(|e| format!("Failed to check bootstrap status: {e}"))?;

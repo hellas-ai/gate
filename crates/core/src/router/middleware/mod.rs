@@ -1,10 +1,12 @@
 //! Middleware system for request/response processing
 
 mod cost_tracker;
+mod key_capture;
 mod monitor;
 mod rate_limit;
 
 pub use cost_tracker::CostTrackerMiddleware;
+pub use key_capture::{KeyCaptureMiddleware, KeyCaptureRegistrar};
 pub use monitor::MonitoringMiddleware;
 pub use rate_limit::RateLimitMiddleware;
 

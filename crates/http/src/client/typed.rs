@@ -1,21 +1,22 @@
 //! Type-safe API clients that enforce authentication requirements at compile time
 
 use super::ClientError;
-use reqwest::{Client, ClientBuilder, header};
+use reqwest::{Client, ClientBuilder, Method, RequestBuilder, header};
 use std::time::Duration;
+use url::Url;
 
 /// Client for public endpoints that don't require authentication
 #[derive(Clone)]
 pub struct PublicGateClient {
     client: Client,
-    base_url: String,
+    base_url: Url,
 }
 
 /// Client for authenticated endpoints that require a valid API key
 #[derive(Clone)]
 pub struct AuthenticatedGateClient {
     client: Client,
-    base_url: String,
+    base_url: Url,
     api_key: String,
 }
 
@@ -30,7 +31,13 @@ impl PublicGateClient {
         base_url: impl Into<String>,
         timeout: Option<Duration>,
     ) -> Result<Self, ClientError> {
-        let base_url = base_url.into().trim_end_matches('/').to_string();
+        let mut base_url = Url::parse(&base_url.into())
+            .map_err(|e| ClientError::Configuration(format!("invalid base_url: {e}")))?;
+        if base_url.path() != "/" && base_url.path().ends_with('/') {
+            base_url = base_url
+                .join(".")
+                .map_err(|e| ClientError::Configuration(format!("invalid base_url path: {e}")))?;
+        }
 
         #[cfg(not(target_arch = "wasm32"))]
         let client = {
@@ -53,14 +60,17 @@ impl PublicGateClient {
     }
 
     /// Get the base URL
-    pub fn base_url(&self) -> &str {
+    pub fn base_url(&self) -> &Url {
         &self.base_url
     }
 
     /// Create a request builder without authentication
-    pub fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-        let url = format!("{}{}", self.base_url, path);
-        self.client.request(method, url)
+    pub fn request(&self, method: Method, path: &str) -> Result<RequestBuilder, ClientError> {
+        let url = self
+            .base_url
+            .join(path.trim_start_matches('/'))
+            .map_err(|e| ClientError::Configuration(format!("invalid path '{path}': {e}")))?;
+        Ok(self.client.request(method, url))
     }
 
     /// Execute a request and handle common errors
@@ -104,7 +114,13 @@ impl AuthenticatedGateClient {
         api_key: impl Into<String>,
         timeout: Option<Duration>,
     ) -> Result<Self, ClientError> {
-        let base_url = base_url.into().trim_end_matches('/').to_string();
+        let mut base_url = Url::parse(&base_url.into())
+            .map_err(|e| ClientError::Configuration(format!("invalid base_url: {e}")))?;
+        if base_url.path() != "/" && base_url.path().ends_with('/') {
+            base_url = base_url
+                .join(".")
+                .map_err(|e| ClientError::Configuration(format!("invalid base_url path: {e}")))?;
+        }
         let api_key = api_key.into();
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -132,16 +148,20 @@ impl AuthenticatedGateClient {
     }
 
     /// Get the base URL
-    pub fn base_url(&self) -> &str {
+    pub fn base_url(&self) -> &Url {
         &self.base_url
     }
 
     /// Create a request builder with authentication
-    pub fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-        let url = format!("{}{}", self.base_url, path);
-        self.client
+    pub fn request(&self, method: Method, path: &str) -> Result<RequestBuilder, ClientError> {
+        let url = self
+            .base_url
+            .join(path.trim_start_matches('/'))
+            .map_err(|e| ClientError::Configuration(format!("invalid path '{path}': {e}")))?;
+        Ok(self
+            .client
             .request(method, url)
-            .header(header::AUTHORIZATION, format!("Bearer {}", self.api_key))
+            .header(header::AUTHORIZATION, format!("Bearer {}", self.api_key)))
     }
 
     /// Execute a request and handle common errors

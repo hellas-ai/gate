@@ -3,11 +3,13 @@
 mod best_of_n;
 mod cost;
 mod latency;
+mod provider_affinity;
 mod weighted;
 
 pub use best_of_n::{BestOfNStrategy, SelectionMethod};
 pub use cost::CostOptimizedStrategy;
 pub use latency::LatencyOptimizedStrategy;
+pub use provider_affinity::ProviderAffinityStrategy;
 pub use weighted::WeightedStrategy;
 
 use super::protocols::ProtocolConversion;

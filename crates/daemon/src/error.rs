@@ -11,6 +11,9 @@ pub enum DaemonError {
     #[error("Configuration error: {0}")]
     ConfigError(String),
 
+    #[error("Serde error: {0}")]
+    Serde(#[from] serde_json::Error),
+
     #[error("Service unavailable: {0}")]
     ServiceUnavailable(String),
 

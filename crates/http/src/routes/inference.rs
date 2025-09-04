@@ -1,9 +1,14 @@
 //! Inference API routes for LLM providers
 
 use crate::{
-    auth::extract_identity, error::HttpError, sinks::response_converter::response_stream_to_axum,
-    state::AppState, types::*,
+    auth::extract_identity,
+    error::HttpError,
+    sinks::response_converter::{response_stream_to_axum, response_stream_to_json},
+    state::AppState,
+    types::*,
 };
+use http::header::HeaderName;
+const X_TRACE_ID: HeaderName = HeaderName::from_static("x-trace-id");
 use axum::{
     Router,
     extract::{Json, State},
@@ -27,6 +32,7 @@ use gate_core::tracing::prelude::*;
 )]
 pub async fn messages_handler<T>(
     State(app_state): State<AppState<T>>,
+    uri: axum::http::Uri,
     headers: HeaderMap,
     axum::Extension(correlation_id): axum::Extension<CorrelationId>,
     Json(request): Json<AnthropicMessagesRequest>,
@@ -41,12 +47,10 @@ where
     let ctx = RequestContext {
         identity: extract_identity(&headers),
         correlation_id,
-        headers: headers
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-            .collect(),
+        headers: headers.clone(),
+        query: uri.query().map(|s| s.to_string()),
         trace_id: headers
-            .get("x-trace-id")
+            .get(X_TRACE_ID)
             .and_then(|v| v.to_str().ok())
             .map(String::from),
         metadata: Default::default(),
@@ -63,7 +67,11 @@ where
     )
     .await?;
 
-    response_stream_to_axum(stream).await
+    if request.stream {
+        response_stream_to_axum(stream).await
+    } else {
+        response_stream_to_json(stream).await
+    }
 }
 
 /// Handle OpenAI chat completions requests
@@ -77,6 +85,7 @@ where
 )]
 pub async fn chat_completions_handler<T>(
     State(app_state): State<AppState<T>>,
+    uri: axum::http::Uri,
     headers: HeaderMap,
     axum::Extension(correlation_id): axum::Extension<CorrelationId>,
     Json(request): Json<OpenAIChatCompletionRequest>,
@@ -91,12 +100,10 @@ where
     let ctx = RequestContext {
         identity: extract_identity(&headers),
         correlation_id,
-        headers: headers
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-            .collect(),
+        headers: headers.clone(),
+        query: uri.query().map(|s| s.to_string()),
         trace_id: headers
-            .get("x-trace-id")
+            .get(X_TRACE_ID)
             .and_then(|v| v.to_str().ok())
             .map(String::from),
         metadata: Default::default(),
@@ -113,7 +120,11 @@ where
     )
     .await?;
 
-    response_stream_to_axum(stream).await
+    if request.stream {
+        response_stream_to_axum(stream).await
+    } else {
+        response_stream_to_json(stream).await
+    }
 }
 
 /// Handle OpenAI responses requests
@@ -127,6 +138,7 @@ where
 )]
 pub async fn responses_handler<T>(
     State(app_state): State<AppState<T>>,
+    uri: axum::http::Uri,
     headers: HeaderMap,
     axum::Extension(correlation_id): axum::Extension<CorrelationId>,
     Json(request): Json<OpenAICompletionRequest>,
@@ -141,12 +153,10 @@ where
     let ctx = RequestContext {
         identity: extract_identity(&headers),
         correlation_id,
-        headers: headers
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-            .collect(),
+        headers: headers.clone(),
+        query: uri.query().map(|s| s.to_string()),
         trace_id: headers
-            .get("x-trace-id")
+            .get(X_TRACE_ID)
             .and_then(|v| v.to_str().ok())
             .map(String::from),
         metadata: Default::default(),
@@ -163,7 +173,11 @@ where
     )
     .await?;
 
-    response_stream_to_axum(stream).await
+    if request.stream {
+        response_stream_to_axum(stream).await
+    } else {
+        response_stream_to_json(stream).await
+    }
 }
 
 /// Create inference router

@@ -40,13 +40,17 @@ impl WrappedAuthClient {
     }
 
     /// Create a request builder with authentication
-    pub fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+    pub fn request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+    ) -> Result<reqwest::RequestBuilder, ClientError> {
         self.inner.request(method, path)
     }
 
     /// List available models (requires authentication)
     pub async fn list_models(&self) -> Result<ModelsResponse, ClientError> {
-        let request = self.request(reqwest::Method::GET, "/v1/models");
+        let request = self.request(reqwest::Method::GET, "/v1/models")?;
         self.execute(request).await
     }
 
@@ -56,7 +60,7 @@ impl WrappedAuthClient {
         req: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse, ClientError> {
         let request = self
-            .request(reqwest::Method::POST, "/v1/chat/completions")
+            .request(reqwest::Method::POST, "/v1/chat/completions")?
             .json(&req);
         self.execute(request).await
     }
@@ -67,7 +71,7 @@ impl WrappedAuthClient {
         req: MessageRequest,
     ) -> Result<MessageResponse, ClientError> {
         let request = self
-            .request(reqwest::Method::POST, "/v1/messages")
+            .request(reqwest::Method::POST, "/v1/messages")?
             .json(&req);
         self.execute(request).await
     }

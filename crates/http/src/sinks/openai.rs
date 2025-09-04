@@ -1,5 +1,7 @@
 //! OpenAI-specific sink factory
 
+use crate::sinks::DEFAULT_SINK_TIMEOUT_SECS;
+
 use super::http_sink::{HttpSink, HttpSinkConfig, Provider};
 use gate_core::Result;
 use gate_core::router::types::{CostStructure, Protocol, SinkCapabilities};
@@ -14,6 +16,8 @@ pub struct OpenAIConfig {
     pub base_url: Option<String>,
     pub models: Option<Vec<String>>,
     pub timeout_seconds: Option<u64>,
+    /// Optional sink ID to use in descriptions/registry keys
+    pub sink_id: Option<String>,
 }
 
 /// Create an OpenAI sink
@@ -55,10 +59,13 @@ pub fn create_sink(config: OpenAIConfig) -> Result<HttpSink> {
         ]
     });
 
-    let timeout = Duration::from_secs(config.timeout_seconds.unwrap_or(30));
+    let timeout = Duration::from_secs(config.timeout_seconds.unwrap_or(DEFAULT_SINK_TIMEOUT_SECS));
 
     let sink_config = HttpSinkConfig {
-        id: "provider://openai".to_string(),
+        id: config
+            .sink_id
+            .clone()
+            .unwrap_or_else(|| "provider://openai".to_string()),
         provider: Provider::OpenAI,
         base_url,
         api_key: Some(config.api_key),
@@ -87,27 +94,4 @@ pub fn create_sink(config: OpenAIConfig) -> Result<HttpSink> {
     };
 
     HttpSink::new(sink_config)
-}
-
-/// Create an OpenAI sink from environment variables
-pub fn create_sink_from_env() -> Result<HttpSink> {
-    let api_key = std::env::var("OPENAI_API_KEY")
-        .map_err(|_| gate_core::Error::InvalidConfig("OPENAI_API_KEY not set".to_string()))?;
-
-    let base_url = std::env::var("OPENAI_BASE_URL").ok();
-
-    let models = std::env::var("OPENAI_MODELS")
-        .ok()
-        .map(|s| s.split(',').map(|m| m.trim().to_string()).collect());
-
-    let timeout_seconds = std::env::var("OPENAI_TIMEOUT")
-        .ok()
-        .and_then(|s| s.parse().ok());
-
-    create_sink(OpenAIConfig {
-        api_key,
-        base_url,
-        models,
-        timeout_seconds,
-    })
 }

@@ -48,6 +48,6 @@ pub enum DaemonRequest {
     },
     GetConfig {
         identity: LocalIdentity,
-        reply: oneshot::Sender<Result<serde_json::Value>>,
+        reply: oneshot::Sender<Result<Settings>>,
     },
 }

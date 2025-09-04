@@ -9,8 +9,9 @@ pub mod inference_typed;
 pub mod typed;
 
 use error::ClientError;
-use reqwest::{Client, ClientBuilder, header};
+use reqwest::{Client, ClientBuilder, Method, RequestBuilder, header};
 use std::time::Duration;
+use url::Url;
 
 pub use typed::{AuthenticatedGateClient, PublicGateClient, TypedClientBuilder};
 
@@ -18,7 +19,7 @@ pub use typed::{AuthenticatedGateClient, PublicGateClient, TypedClientBuilder};
 #[derive(Clone)]
 pub struct GateClient {
     client: Client,
-    base_url: String,
+    base_url: Url,
     api_key: Option<String>,
 }
 
@@ -34,20 +35,23 @@ impl GateClient {
     }
 
     /// Get the base URL
-    pub fn base_url(&self) -> &str {
+    pub fn base_url(&self) -> &Url {
         &self.base_url
     }
 
     /// Create a request builder with authentication
-    pub fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-        let url = format!("{}{}", self.base_url, path);
+    pub fn request(&self, method: Method, path: &str) -> Result<RequestBuilder, ClientError> {
+        let url = self
+            .base_url
+            .join(path.trim_start_matches('/'))
+            .map_err(|e| ClientError::Configuration(format!("invalid path '{path}': {e}")))?;
         let mut request = self.client.request(method, url);
 
         if let Some(api_key) = &self.api_key {
             request = request.header(header::AUTHORIZATION, format!("Bearer {api_key}"));
         }
 
-        request
+        Ok(request)
     }
 
     /// Execute a request and handle common errors
@@ -107,8 +111,15 @@ impl GateClientBuilder {
             .base_url
             .ok_or_else(|| ClientError::Configuration("base_url is required".into()))?;
 
-        // Ensure base_url ends without a trailing slash
-        let base_url = base_url.trim_end_matches('/').to_string();
+        // Parse base_url into Url
+        let mut base_url = Url::parse(&base_url)
+            .map_err(|e| ClientError::Configuration(format!("invalid base_url: {e}")))?;
+        // Normalize path to avoid trailing slash issues
+        if base_url.path() != "/" && base_url.path().ends_with('/') {
+            base_url = base_url
+                .join(".")
+                .map_err(|e| ClientError::Configuration(format!("invalid base_url path: {e}")))?;
+        }
 
         let mut client_builder = ClientBuilder::new();
 

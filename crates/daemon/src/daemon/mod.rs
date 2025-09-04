@@ -4,6 +4,7 @@ pub mod inner;
 pub mod rpc;
 
 pub use builder::DaemonBuilder;
+use gate_http::sinks::anthropic::AnthropicConfig;
 use utoipa_axum::router::OpenApiRouter;
 
 use self::rpc::DaemonRequest;
@@ -188,7 +189,7 @@ impl Daemon {
         Ok(rx.await?)
     }
 
-    pub async fn get_config(&self) -> Result<serde_json::Value> {
+    pub async fn get_config(&self) -> Result<Settings> {
         let identity = self
             .identity
             .clone()
@@ -204,6 +205,12 @@ impl Daemon {
     pub async fn serve(self) -> Result<()> {
         let settings = self.get_settings().await?;
         let addr = format!("{}:{}", settings.server.host, settings.server.port);
+        // Fail fast: bind the listener before heavy initialization (model fetch, sinks, etc.)
+        let listener = tokio::net::TcpListener::bind(&addr)
+            .await
+            .map_err(DaemonError::Io)?;
+        tracing::info!("Server will listen on http://{}", addr);
+
         let auth_service = self.get_auth_service().await?;
         let state_backend = self.get_state_backend().await?;
 
@@ -228,23 +235,20 @@ impl Daemon {
         let mut app_state = gate_http::AppState::new(state_backend.clone(), minimal_state);
 
         // Build sink registry and register all sinks
-        let sink_registry = std::sync::Arc::new(gate_core::router::routing::SinkRegistry::new());
+        let sink_registry = std::sync::Arc::new(gate_core::router::registry::SinkRegistry::new());
 
         // Register provider sinks from configuration
+        let mut has_anthropic = false;
         for provider_config in &settings.providers {
             let sink = match provider_config.provider {
                 crate::config::ProviderType::Anthropic => {
-                    let config = gate_http::sinks::anthropic::AnthropicConfig {
-                        api_key: provider_config.api_key.clone().unwrap_or_default(),
+                    let config = AnthropicConfig {
+                        api_key: provider_config.api_key.clone(),
                         base_url: Some(provider_config.base_url.clone()),
-                        models: if provider_config.models.is_empty() {
-                            None
-                        } else {
-                            Some(provider_config.models.clone())
-                        },
                         timeout_seconds: Some(provider_config.timeout_seconds),
+                        sink_id: Some(format!("provider://anthropic/{}", provider_config.name)),
                     };
-                    match gate_http::sinks::anthropic::create_sink(config) {
+                    match gate_http::sinks::anthropic::create_sink(config).await {
                         Ok(s) => std::sync::Arc::new(s),
                         Err(e) => {
                             tracing::warn!("Failed to create Anthropic sink: {}", e);
@@ -262,6 +266,7 @@ impl Daemon {
                             Some(provider_config.models.clone())
                         },
                         timeout_seconds: Some(provider_config.timeout_seconds),
+                        sink_id: Some(format!("provider://openai/{}", provider_config.name)),
                     };
                     match gate_http::sinks::openai::create_sink(config) {
                         Ok(s) => std::sync::Arc::new(s),
@@ -276,10 +281,47 @@ impl Daemon {
                     continue;
                 }
             };
+            if matches!(
+                provider_config.provider,
+                crate::config::ProviderType::Anthropic
+            ) {
+                has_anthropic = true;
+            }
+
             sink_registry
-                .register(format!("provider://{}", provider_config.name), sink)
+                .register(
+                    match provider_config.provider {
+                        crate::config::ProviderType::Anthropic => {
+                            format!("provider://anthropic/{}", provider_config.name)
+                        }
+                        crate::config::ProviderType::OpenAI => {
+                            format!("provider://openai/{}", provider_config.name)
+                        }
+                        crate::config::ProviderType::Custom => {
+                            format!("provider://{}", provider_config.name)
+                        }
+                    },
+                    sink,
+                )
                 .await;
             tracing::info!("Registered provider sink: {}", provider_config.name);
+        }
+        // If no Anthropic provider was configured, register a fallback Anthropic sink
+        if !has_anthropic {
+            match gate_http::sinks::anthropic::create_fallback_sink().await {
+                Ok(sink) => {
+                    let sink = std::sync::Arc::new(sink);
+                    sink_registry
+                        .register("provider://anthropic/fallback".to_string(), sink)
+                        .await;
+                    tracing::info!(
+                        "Registered fallback Anthropic sink (no API key; will capture on first success)"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create fallback Anthropic sink: {}", e);
+                }
+            }
         }
         // Register Catgrad sink when local inference is enabled
         if let Some(ref inf_cfg) = settings.local_inference {
@@ -300,9 +342,32 @@ impl Daemon {
         }
         let sink_index = std::sync::Arc::new(gate_core::router::index::SinkIndex::new());
         sink_index.refresh_from_registry(&sink_registry).await;
+
+        // Key-capture middleware registrar (daemon + registry + index)
+        let registrar = std::sync::Arc::new(crate::services::key_capture::DaemonKeyRegistrar::new(
+            self.clone(),
+            sink_registry.clone(),
+            sink_index.clone(),
+        ));
+
         let router_core = gate_core::router::routing::Router::builder()
             .state_backend(state_backend)
             .sink_registry(sink_registry)
+            .strategy(Box::new(
+                gate_core::router::strategy::CompositeStrategy::new(vec![
+                    (
+                        Box::new(gate_core::router::strategy::ProviderAffinityStrategy::new()),
+                        1.0,
+                    ),
+                    (
+                        Box::new(gate_core::router::strategy::SimpleStrategy::new()),
+                        0.1,
+                    ),
+                ]),
+            ))
+            .middleware(std::sync::Arc::new(
+                gate_core::router::middleware::KeyCaptureMiddleware::new(registrar),
+            ))
             .sink_index(sink_index)
             .build();
         let router_core = std::sync::Arc::new(router_core);
@@ -362,11 +427,6 @@ impl Daemon {
                 warn!("Static directory not found: {}", static_dir);
             }
         }
-
-        let listener = tokio::net::TcpListener::bind(&addr)
-            .await
-            .map_err(DaemonError::Io)?;
-        tracing::info!("Server listening on http://{}", addr);
 
         // Include peer address in request extensions for middleware
         let make_svc = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
