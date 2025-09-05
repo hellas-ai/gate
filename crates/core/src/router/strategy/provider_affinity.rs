@@ -1,9 +1,9 @@
 use super::{RoutingStrategy, ScoredRoute, SinkCandidate};
 use crate::Result;
+use crate::router::signals::{has_anthropic_signal, has_openai_signal};
 use crate::router::sink::RequestContext;
 use crate::router::types::{Protocol, RequestDescriptor};
 use async_trait::async_trait;
-use http::HeaderName;
 use http::header::AUTHORIZATION;
 
 pub struct ProviderAffinityStrategy;
@@ -42,32 +42,10 @@ impl ProviderAffinityStrategy {
     }
 
     fn provider_prefix_from_headers(headers: &http::HeaderMap) -> Option<&'static str> {
-        // Anthropic signals
-        let anth_version = HeaderName::from_static("anthropic-version");
-        let x_api_key = HeaderName::from_static("x-api-key");
-        if headers.contains_key(&anth_version) {
+        if has_anthropic_signal(headers) {
             return Some("provider://anthropic");
         }
-        if let Some(val) = headers.get(&x_api_key).and_then(|v| v.to_str().ok())
-            && val.starts_with("sk-ant-")
-        {
-            return Some("provider://anthropic");
-        }
-        if let Some(auth) = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok())
-            && let Some(token) = auth.strip_prefix("Bearer ")
-            && token.starts_with("sk-ant-")
-        {
-            return Some("provider://anthropic");
-        }
-
-        // OpenAI signals
-        let openai_beta = HeaderName::from_static("openai-beta");
-        if headers.contains_key(&openai_beta) {
-            return Some("provider://openai");
-        }
-        if let Some(auth) = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok())
-            && auth.starts_with("Bearer ")
-        {
+        if has_openai_signal(headers) {
             return Some("provider://openai");
         }
 

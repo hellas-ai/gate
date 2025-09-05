@@ -13,6 +13,7 @@ pub mod record;
 pub mod registry;
 pub mod routing;
 pub mod service;
+pub mod signals;
 pub mod sink;
 pub mod sinks;
 pub mod strategy;

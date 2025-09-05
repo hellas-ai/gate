@@ -9,8 +9,8 @@ use crate::services::AuthService;
 use async_trait::async_trait;
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::HeaderName;
-use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
+use gate_core::router::signals::{anthropic_key_from, openai_bearer_from};
 use gate_http::error::HttpError;
 use gate_http::middleware::AuthProvider;
 use gate_http::services::{HttpContext, HttpIdentity};
@@ -52,46 +52,19 @@ impl AuthProvider for MinimalState {
     async fn authenticate(&self, parts: &Parts) -> Result<HttpIdentity, HttpError> {
         // Helper: detect Anthropic API key from headers
         fn detect_anthropic_key(parts: &Parts) -> Option<String> {
-            // Prefer x-api-key
-            if let Some(val) = parts
-                .headers
-                .get(HeaderName::from_static("x-api-key"))
-                .and_then(|v| v.to_str().ok())
-                && val.starts_with("sk-ant-")
-            {
-                return Some(val.to_string());
-            }
-            // Fallback to Authorization: Bearer sk-ant-...
-            if let Some(auth) = parts
-                .headers
-                .get(AUTHORIZATION)
-                .and_then(|v| v.to_str().ok())
-                && let Some(token) = auth.strip_prefix("Bearer ")
-                && token.starts_with("sk-ant-")
-            {
-                return Some(token.to_string());
-            }
-            None
+            anthropic_key_from(&parts.headers).map(|s| s.to_string())
         }
 
         // Helper: detect OpenAI API key from headers
         fn detect_openai_key(parts: &Parts) -> Option<String> {
-            // Authorization: Bearer <token> (API key or OAuth token)
-            if let Some(auth) = parts
-                .headers
-                .get(AUTHORIZATION)
-                .and_then(|v| v.to_str().ok())
-                && let Some(token) = auth.strip_prefix("Bearer ")
-                && !token.is_empty()
-            {
-                return Some(token.to_string());
+            if let Some(tok) = openai_bearer_from(&parts.headers) {
+                return Some(tok.to_string());
             }
-            // Some clients may use x-api-key
             if let Some(val) = parts
                 .headers
                 .get(HeaderName::from_static("x-api-key"))
                 .and_then(|v| v.to_str().ok())
-                && val.starts_with("sk-")
+                && !val.is_empty()
             {
                 return Some(val.to_string());
             }

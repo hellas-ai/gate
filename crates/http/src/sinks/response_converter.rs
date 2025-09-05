@@ -8,6 +8,7 @@ use gate_core::router::types::ActualCost;
 use gate_core::router::{ResponseChunk, ResponseStream};
 use http::header::HeaderName;
 use serde::Serialize;
+use serde::ser::{SerializeMap, Serializer};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
@@ -50,18 +51,8 @@ pub async fn response_stream_to_axum(stream: ResponseStream) -> Result<Response,
                         }
                         // Ensure the "type" field appears first in the serialized JSON for consistency
                         let body = if let Some(obj) = json.as_object() {
-                            if let Some(typ) = obj.get(JSON_TYPE_FIELD) {
-                                let mut parts = Vec::with_capacity(obj.len());
-                                parts.push(format!("\"{JSON_TYPE_FIELD}\":{typ}"));
-                                for (k, v) in obj {
-                                    if k != JSON_TYPE_FIELD {
-                                        // Serialize the key properly to ensure escaping
-                                        let key =
-                                            serde_json::to_string(k).unwrap_or_else(|_| k.clone());
-                                        parts.push(format!("{key}:{v}"));
-                                    }
-                                }
-                                format!("{{{}}}", parts.join(","))
+                            if obj.get(JSON_TYPE_FIELD).is_some() {
+                                to_json_string(&TypeFirst { obj })
                             } else {
                                 json.to_string()
                             }
@@ -216,6 +207,29 @@ struct ErrorEvent {
 
 fn to_json_string<T: Serialize>(val: &T) -> String {
     serde_json::to_string(val).unwrap_or_else(|_| "{}".to_string())
+}
+
+struct TypeFirst<'a> {
+    obj: &'a serde_json::Map<String, JsonValue>,
+}
+
+impl<'a> Serialize for TypeFirst<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let len = self.obj.len();
+        let mut map = serializer.serialize_map(Some(len))?;
+        if let Some(typ) = self.obj.get(JSON_TYPE_FIELD) {
+            map.serialize_entry(JSON_TYPE_FIELD, typ)?;
+        }
+        for (k, v) in self.obj.iter() {
+            if k != JSON_TYPE_FIELD {
+                map.serialize_entry(k, v)?;
+            }
+        }
+        map.end()
+    }
 }
 
 #[cfg(test)]

@@ -282,9 +282,10 @@ impl HttpSink {
         let is_sse = if protocol == Protocol::OpenAIResponses {
             true
         } else {
+            use http::header::CONTENT_TYPE;
             response
                 .headers()
-                .get("content-type")
+                .get(CONTENT_TYPE)
                 .and_then(|v| v.to_str().ok())
                 .map(|v| v.contains("text/event-stream"))
                 .unwrap_or(false)
