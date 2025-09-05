@@ -91,6 +91,7 @@ impl IntoResponse for HttpError {
             HttpError::Core(core_err) => {
                 use gate_core::Error;
                 match core_err {
+                    Error::Rejected(status, _) => (*status, "upstream_error"),
                     Error::Unauthorized => (StatusCode::FORBIDDEN, "unauthorized"),
                     Error::ApiKeyNotFound | Error::InvalidApiKey => {
                         (StatusCode::UNAUTHORIZED, "invalid_api_key")

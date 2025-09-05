@@ -228,8 +228,12 @@ impl Daemon {
         let allow_local_bypass =
             settings.server.allow_local_bypass && is_local_host(&settings.server.host);
 
-        let minimal_state =
-            crate::MinimalState::new(auth_service.clone(), self.clone(), allow_local_bypass);
+        let minimal_state = crate::MinimalState::new(
+            auth_service.clone(),
+            self.clone(),
+            allow_local_bypass,
+            settings.auth.provider_passthrough.clone(),
+        );
 
         // Wrap MinimalState in AppState for middleware compatibility
         let mut app_state = gate_http::AppState::new(state_backend.clone(), minimal_state);
@@ -239,6 +243,7 @@ impl Daemon {
 
         // Register provider sinks from configuration
         let mut has_anthropic = false;
+        let mut has_openai = false;
         for provider_config in &settings.providers {
             let sink = match provider_config.provider {
                 crate::config::ProviderType::Anthropic => {
@@ -258,7 +263,7 @@ impl Daemon {
                 }
                 crate::config::ProviderType::OpenAI => {
                     let config = gate_http::sinks::openai::OpenAIConfig {
-                        api_key: provider_config.api_key.clone().unwrap_or_default(),
+                        api_key: provider_config.api_key.clone(),
                         base_url: Some(provider_config.base_url.clone()),
                         models: if provider_config.models.is_empty() {
                             None
@@ -282,11 +287,10 @@ impl Daemon {
                 }
             };
 
-            if matches!(
-                provider_config.provider,
-                crate::config::ProviderType::Anthropic
-            ) {
-                has_anthropic = true;
+            match provider_config.provider {
+                crate::config::ProviderType::Anthropic => has_anthropic = true,
+                crate::config::ProviderType::OpenAI => has_openai = true,
+                crate::config::ProviderType::Custom => {}
             }
 
             sink_registry
@@ -322,6 +326,38 @@ impl Daemon {
                 }
                 Err(e) => {
                     tracing::warn!("Failed to create fallback Anthropic sink: {}", e);
+                }
+            }
+        }
+        // If no OpenAI provider was configured, register fallback OpenAI sinks
+        if !has_openai {
+            match gate_http::sinks::openai::create_fallback_sink() {
+                Ok(sink) => {
+                    let sink = std::sync::Arc::new(sink);
+                    sink_registry
+                        .register("provider://openai/fallback".to_string(), sink)
+                        .await;
+                    tracing::info!(
+                        "Registered fallback OpenAI sink (no API key; will accept client keys)"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create fallback OpenAI sink: {}", e);
+                }
+            }
+            // Also register Codex fallback for OpenAI Responses via ChatGPT backend
+            match gate_http::sinks::openai::create_codex_fallback_sink() {
+                Ok(sink) => {
+                    let sink = std::sync::Arc::new(sink);
+                    sink_registry
+                        .register("provider://openai/codex".to_string(), sink)
+                        .await;
+                    tracing::info!(
+                        "Registered fallback OpenAI Codex sink (OAuth tokens; /backend-api/codex)"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create fallback OpenAI Codex sink: {}", e);
                 }
             }
         }

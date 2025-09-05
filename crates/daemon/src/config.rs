@@ -168,9 +168,41 @@ pub struct AuthConfig {
     /// Registration configuration
     #[serde(default)]
     pub registration: RegistrationConfig,
+    /// Provider API key passthrough (Anthropic/OpenAI) for inference routes
+    #[serde(default)]
+    pub provider_passthrough: ProviderPassthroughConfig,
 }
 
 impl Default for AuthConfig {
+    fn default() -> Self {
+        serde_json::from_value(json!({})).expect("Default settings should always be valid")
+    }
+}
+
+/// Provider passthrough configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderPassthroughConfig {
+    /// Enable passthrough of provider API keys from clients
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Restrict passthrough to loopback peers only
+    #[serde(default = "default_true")]
+    pub loopback_only: bool,
+    /// Allowed HTTP paths for passthrough (exact match)
+    #[serde(default = "default_passthrough_paths")]
+    pub allowed_paths: Vec<String>,
+}
+
+fn default_passthrough_paths() -> Vec<String> {
+    vec![
+        "/v1/messages".to_string(),         // Anthropic
+        "/v1/chat/completions".to_string(), // OpenAI Chat
+        "/v1/responses".to_string(),        // OpenAI Responses
+        "/v1/completions".to_string(),      // OpenAI Completions (legacy)
+    ]
+}
+
+impl Default for ProviderPassthroughConfig {
     fn default() -> Self {
         serde_json::from_value(json!({})).expect("Default settings should always be valid")
     }

@@ -168,7 +168,7 @@ where
     let stream = route_and_execute_json_with_protocol(
         router.as_ref(),
         &ctx,
-        Protocol::OpenAICompletions,
+        Protocol::OpenAIResponses,
         request_json,
     )
     .await?;
@@ -188,5 +188,59 @@ where
     Router::new()
         .route("/v1/chat/completions", post(chat_completions_handler))
         .route("/v1/responses", post(responses_handler))
+        .route("/v1/completions", post(completions_handler))
         .route("/v1/messages", post(messages_handler))
+}
+
+/// Handle OpenAI completions (legacy) requests
+#[instrument(
+    name = "openai_completions",
+    skip(app_state, headers),
+    fields(
+        model = %request.model,
+        stream = %request.stream
+    )
+)]
+pub async fn completions_handler<T>(
+    State(app_state): State<AppState<T>>,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+    axum::Extension(correlation_id): axum::Extension<CorrelationId>,
+    Json(request): Json<OpenAICompletionRequest>,
+) -> Result<Response, HttpError>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    let router = app_state
+        .router
+        .ok_or_else(|| HttpError::InternalServerError("Router not configured".to_string()))?;
+
+    let ctx = RequestContext {
+        identity: extract_identity(&headers),
+        correlation_id,
+        headers: headers.clone(),
+        query: uri.query().map(|s| s.to_string()),
+        trace_id: headers
+            .get(X_TRACE_ID)
+            .and_then(|v| v.to_str().ok())
+            .map(String::from),
+        metadata: Default::default(),
+    };
+
+    let request_json = serde_json::to_value(&request)
+        .map_err(|e| HttpError::InternalServerError(format!("Failed to serialize request: {e}")))?;
+
+    let stream = route_and_execute_json_with_protocol(
+        router.as_ref(),
+        &ctx,
+        Protocol::OpenAICompletions,
+        request_json,
+    )
+    .await?;
+
+    if request.stream {
+        response_stream_to_axum(stream).await
+    } else {
+        response_stream_to_json(stream).await
+    }
 }

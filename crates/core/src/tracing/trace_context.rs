@@ -3,8 +3,15 @@
 //! This module implements the W3C Trace Context specification for distributed tracing.
 //! See: https://www.w3.org/TR/trace-context/
 
-use std::fmt;
-use std::str::FromStr;
+#[cfg(not(target_arch = "wasm32"))]
+use rand::Rng;
+#[cfg(not(target_arch = "wasm32"))]
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    time::{SystemTime, UNIX_EPOCH},
+};
+use std::{fmt, str::FromStr};
 
 use http::{HeaderMap, HeaderName, HeaderValue};
 use thiserror::Error;
@@ -56,7 +63,6 @@ impl TraceContext {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            use rand::Rng;
             let mut rng = rand::thread_rng();
             rng.fill(&mut trace_id);
             rng.fill(&mut span_id);
@@ -72,9 +78,6 @@ impl TraceContext {
 
     /// Create a trace context from a legacy correlation ID
     pub fn from_legacy_id(id: &str) -> Self {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
         // Generate deterministic trace and span IDs from the legacy ID
         let mut hasher = DefaultHasher::new();
         id.hash(&mut hasher);
@@ -136,10 +139,6 @@ impl TraceContext {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            use std::time::{SystemTime, UNIX_EPOCH};
-
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()

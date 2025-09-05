@@ -108,15 +108,17 @@ mod rand {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod rand {
+    use rand::{
+        Rng,
+        distributions::{Distribution, Standard},
+    };
+
     pub fn random<T>() -> T
     where
         Standard: Distribution<T>,
     {
-        use rand::Rng;
         rand::thread_rng().r#gen::<T>()
     }
-
-    use rand::distributions::{Distribution, Standard};
 }
 
 use std::time::Duration;

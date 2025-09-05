@@ -11,12 +11,14 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
+const JSON_TYPE_FIELD: &str = "type";
+
 /// Convert a ResponseStream to an axum Response (SSE stream)
 pub async fn response_stream_to_axum(stream: ResponseStream) -> Result<Response, HttpError> {
     // Peek the first chunk to extract response headers for the HTTP response
     let mut stream = stream;
     let head = stream.next().await;
-    let mut response_headers: Option<std::collections::HashMap<String, String>> = None;
+    let mut response_headers: Option<HashMap<String, String>> = None;
     let head_item = match head {
         Some(Ok(ResponseChunk::Headers(h))) => {
             response_headers = Some(h);
@@ -41,18 +43,18 @@ pub async fn response_stream_to_axum(stream: ResponseStream) -> Result<Response,
                         let mut ev = Event::default();
                         if let Some(event_name) = json
                             .as_object()
-                            .and_then(|o| o.get("type"))
+                            .and_then(|o| o.get(JSON_TYPE_FIELD))
                             .and_then(|v| v.as_str())
                         {
                             ev = ev.event(event_name);
                         }
                         // Ensure the "type" field appears first in the serialized JSON for consistency
                         let body = if let Some(obj) = json.as_object() {
-                            if let Some(typ) = obj.get("type") {
+                            if let Some(typ) = obj.get(JSON_TYPE_FIELD) {
                                 let mut parts = Vec::with_capacity(obj.len());
-                                parts.push(format!("\"type\":{typ}"));
+                                parts.push(format!("\"{JSON_TYPE_FIELD}\":{typ}"));
                                 for (k, v) in obj {
-                                    if k != "type" {
+                                    if k != JSON_TYPE_FIELD {
                                         // Serialize the key properly to ensure escaping
                                         let key =
                                             serde_json::to_string(k).unwrap_or_else(|_| k.clone());
@@ -124,11 +126,9 @@ pub async fn response_stream_to_axum(stream: ResponseStream) -> Result<Response,
 
 /// Convert a ResponseStream representing a non-streaming response to a JSON HTTP response
 pub async fn response_stream_to_json(stream: ResponseStream) -> Result<Response, HttpError> {
-    use futures::StreamExt;
-
     let mut stream = stream;
     let head = stream.next().await;
-    let mut response_headers: Option<std::collections::HashMap<String, String>> = None;
+    let mut response_headers: Option<HashMap<String, String>> = None;
     let mut last_json: Option<serde_json::Value> = None;
 
     // Process head

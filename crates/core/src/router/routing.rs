@@ -79,7 +79,7 @@ impl Router {
         plan: RoutingPlan,
         request: RequestStream,
     ) -> Result<ResponseStream> {
-        tracing::debug!("Executing routing plan: {:?}", self.sink_index);
+        debug!("Executing routing plan: {:?}", self.sink_index);
 
         let executor = PlanExecutor::new(self.sink_registry.clone());
 

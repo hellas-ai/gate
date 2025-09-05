@@ -115,10 +115,9 @@ impl RateLimitMiddleware {
                 QuotaBehavior::WarnOnly => {
                     #[cfg(feature = "tracing")]
                     {
-                        tracing::warn!(
+                        warn!(
                             "Request rate limit exceeded for {}: {} requests",
-                            key,
-                            state.request_count
+                            key, state.request_count
                         );
                     }
                     Ok(true)
@@ -126,7 +125,7 @@ impl RateLimitMiddleware {
                 QuotaBehavior::TrackOverage => {
                     #[cfg(feature = "tracing")]
                     {
-                        tracing::info!(
+                        info!(
                             "Tracking overage for {}: {} requests over limit",
                             key,
                             state.request_count - self.config.requests_per_minute

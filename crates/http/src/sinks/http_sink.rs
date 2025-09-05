@@ -15,7 +15,7 @@ use gate_core::router::types::{
 };
 use gate_core::{Error, Result};
 use http::header::{AUTHORIZATION, USER_AGENT};
-use http::{HeaderName, HeaderValue};
+use http::{HeaderName, HeaderValue, StatusCode};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -30,6 +30,7 @@ use url::{Url, form_urlencoded};
 pub enum Provider {
     Anthropic,
     OpenAI,
+    OpenAICodex,
     Custom,
 }
 
@@ -38,6 +39,7 @@ impl std::fmt::Display for Provider {
         match self {
             Provider::Anthropic => write!(f, "anthropic"),
             Provider::OpenAI => write!(f, "openai"),
+            Provider::OpenAICodex => write!(f, "openai-codex"),
             Provider::Custom => write!(f, "custom"),
         }
     }
@@ -103,7 +105,7 @@ impl HttpSink {
                         HeaderValue::from_str(key).ok().map(|v| (X_API_KEY, v))
                     }
                 }
-                Provider::OpenAI | Provider::Custom => {
+                Provider::OpenAI | Provider::OpenAICodex | Provider::Custom => {
                     HeaderValue::from_str(&format!("Bearer {key}"))
                         .ok()
                         .map(|v| (AUTHORIZATION, v))
@@ -111,30 +113,51 @@ impl HttpSink {
             })
     }
 
-    /// Determine auth header from a client-supplied key (Anthropic only for now)
+    /// Determine auth header from a client-supplied key (Anthropic and OpenAI)
     fn inferred_auth_from_client_headers(
         &self,
         ctx: &RequestContext,
     ) -> Option<(HeaderName, HeaderValue)> {
-        if let Provider::Anthropic = self.config.provider {
-            // Prefer x-api-key when provided
-            if let Some(val) = ctx.headers.get("x-api-key")
-                && let Ok(key) = val.to_str()
-                && !key.is_empty()
-                && let Ok(hv) = HeaderValue::from_str(key)
-            {
-                return Some((X_API_KEY, hv));
+        match self.config.provider {
+            Provider::Anthropic => {
+                // Prefer x-api-key when provided
+                if let Some(val) = ctx.headers.get(HeaderName::from_static("x-api-key"))
+                    && let Ok(key) = val.to_str()
+                    && !key.is_empty()
+                    && let Ok(hv) = HeaderValue::from_str(key)
+                {
+                    return Some((X_API_KEY, hv));
+                }
+                // Fallback to Authorization: Bearer sk-ant-...
+                if let Some(val) = ctx.headers.get(AUTHORIZATION)
+                    && let Ok(auth) = val.to_str()
+                    && auth.starts_with("Bearer sk-ant-")
+                    && let Ok(hv) = HeaderValue::from_str(auth)
+                {
+                    return Some((AUTHORIZATION, hv));
+                }
+                None
             }
-            // Fallback to Authorization: Bearer ...
-            if let Some(val) = ctx.headers.get("authorization")
-                && let Ok(auth) = val.to_str()
-                && auth.starts_with("Bearer sk-ant-")
-                && let Ok(hv) = HeaderValue::from_str(auth)
-            {
-                return Some((AUTHORIZATION, hv));
+            Provider::OpenAI | Provider::OpenAICodex | Provider::Custom => {
+                // OpenAI: Authorization: Bearer <token> (accept API keys or OAuth tokens)
+                if let Some(val) = ctx.headers.get(AUTHORIZATION)
+                    && let Ok(auth) = val.to_str()
+                    && auth.starts_with("Bearer ")
+                    && let Ok(hv) = HeaderValue::from_str(auth)
+                {
+                    return Some((AUTHORIZATION, hv));
+                }
+                // Some clients may pass x-api-key instead; convert to Authorization
+                if let Some(val) = ctx.headers.get(HeaderName::from_static("x-api-key"))
+                    && let Ok(key) = val.to_str()
+                    && !key.is_empty()
+                    && let Ok(hv) = HeaderValue::from_str(&format!("Bearer {key}"))
+                {
+                    return Some((AUTHORIZATION, hv));
+                }
+                None
             }
         }
-        None
     }
 
     /// Get provider-specific headers
@@ -157,6 +180,9 @@ impl HttpSink {
             (Protocol::OpenAIChat, Provider::Anthropic) => Ok("/v1/messages"), // Anthropic uses messages
             (Protocol::Anthropic, Provider::Anthropic) => Ok("/v1/messages"),
             (Protocol::OpenAIMessages, Provider::OpenAI) => Ok("/v1/messages"),
+            (Protocol::OpenAICompletions, Provider::OpenAI) => Ok("/v1/completions"),
+            (Protocol::OpenAIResponses, Provider::OpenAI) => Ok("/v1/responses"),
+            (Protocol::OpenAIResponses, Provider::OpenAICodex) => Ok("/responses"),
             _ => Err(Error::InvalidRoutingConfig(format!(
                 "Provider {} doesn't support protocol {:?}",
                 self.config.provider, protocol
@@ -244,19 +270,25 @@ impl HttpSink {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unable to read error".to_string());
-            return Err(Error::ServiceUnavailable(format!(
-                "{} returned error {}: {}",
-                self.config.provider, status, error_body
-            )));
+            let code: StatusCode =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            return Err(Error::Rejected(
+                code,
+                format!("{} upstream error: {}", self.config.provider, error_body),
+            ));
         }
 
-        // Check if response is SSE stream
-        let is_sse = response
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.contains("text/event-stream"))
-            .unwrap_or(false);
+        // Check if response is SSE stream. Treat OpenAI Responses as streaming regardless of header.
+        let is_sse = if protocol == Protocol::OpenAIResponses {
+            true
+        } else {
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.contains("text/event-stream"))
+                .unwrap_or(false)
+        };
 
         if is_sse {
             // Capture upstream headers to forward
@@ -289,21 +321,28 @@ impl HttpSink {
                 .await
                 .map_err(|e| Error::Internal(format!("Failed to read response: {e}")))?;
             debug!("Non-streaming response: {}", text);
-            let body: JsonValue = serde_json::from_str(&text).map_err(|e| {
-                Error::Internal(format!(
-                    "Failed to parse JSON response from {}: {e}",
-                    self.config.provider
-                ))
-            })?;
-            let chunks = vec![
-                Ok(ResponseChunk::Headers(hdrs)),
-                Ok(ResponseChunk::Content(body)),
-                Ok(ResponseChunk::Stop {
-                    reason: StopReason::Complete,
-                    error: None,
-                    cost: None,
-                }),
-            ];
+            let chunks = if let Ok(body) = serde_json::from_str::<JsonValue>(&text) {
+                vec![
+                    Ok(ResponseChunk::Headers(hdrs)),
+                    Ok(ResponseChunk::Content(body)),
+                    Ok(ResponseChunk::Stop {
+                        reason: StopReason::Complete,
+                        error: None,
+                        cost: None,
+                    }),
+                ]
+            } else {
+                // Fallback: return raw text as content rather than failing
+                vec![
+                    Ok(ResponseChunk::Headers(hdrs)),
+                    Ok(ResponseChunk::Content(JsonValue::String(text))),
+                    Ok(ResponseChunk::Stop {
+                        reason: StopReason::Complete,
+                        error: None,
+                        cost: None,
+                    }),
+                ]
+            };
 
             Ok(Box::pin(futures::stream::iter(chunks)))
         }

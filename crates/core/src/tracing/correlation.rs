@@ -3,9 +3,7 @@
 //! This module provides a correlation ID that wraps W3C TraceContext
 //! for distributed tracing while supporting legacy string-based correlation IDs.
 
-use std::fmt;
-use std::str::FromStr;
-use std::sync::Arc;
+use std::{fmt, str::FromStr, sync::Arc};
 
 use crate::tracing::trace_context::{TraceContext, TraceContextError};
 
@@ -95,18 +93,16 @@ impl CorrelationId {
         doc(cfg(all(feature = "tracing-otlp", not(target_arch = "wasm32"))))
     )]
     pub fn to_span_context(&self) -> opentelemetry::trace::SpanContext {
-        use opentelemetry::trace::{SpanContext, SpanId, TraceFlags, TraceId, TraceState};
-
-        SpanContext::new(
-            TraceId::from_bytes(*self.trace_context.trace_id()),
-            SpanId::from_bytes(*self.trace_context.span_id()),
+        opentelemetry::trace::SpanContext::new(
+            opentelemetry::trace::TraceId::from_bytes(*self.trace_context.trace_id()),
+            opentelemetry::trace::SpanId::from_bytes(*self.trace_context.span_id()),
             if self.trace_context.is_sampled() {
-                TraceFlags::SAMPLED
+                opentelemetry::trace::TraceFlags::SAMPLED
             } else {
-                TraceFlags::default()
+                opentelemetry::trace::TraceFlags::default()
             },
             false,
-            TraceState::default(),
+            opentelemetry::trace::TraceState::default(),
         )
     }
 

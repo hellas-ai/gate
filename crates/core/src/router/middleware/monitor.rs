@@ -43,7 +43,7 @@ impl Middleware for MonitoringMiddleware {
         // Log request start
         #[cfg(feature = "tracing")]
         {
-            tracing::info!(
+            info!(
                 service = %self.service_name,
                 trace_id = %trace_id,
                 user_id = ?ctx.identity.context.user_id,
@@ -59,7 +59,7 @@ impl Middleware for MonitoringMiddleware {
                 let duration = start_time.elapsed();
                 #[cfg(feature = "tracing")]
                 {
-                    tracing::info!(
+                    info!(
                         service = %self.service_name,
                         trace_id = %trace_id,
                         duration_ms = %duration.as_millis(),
@@ -87,7 +87,7 @@ impl Middleware for MonitoringMiddleware {
                                     total_tokens = prompt_tokens + completion_tokens;
                                     #[cfg(feature = "tracing")]
                                     {
-                                        tracing::debug!(
+                                        debug!(
                                             service = %service_name,
                                             trace_id = %trace_id_clone,
                                             prompt_tokens = %prompt_tokens,
@@ -102,7 +102,7 @@ impl Middleware for MonitoringMiddleware {
                                     has_error = true;
                                     #[cfg(feature = "tracing")]
                                     {
-                                        tracing::error!(
+                                        error!(
                                             service = %service_name,
                                             trace_id = %trace_id_clone,
                                             error = %err,
@@ -117,7 +117,7 @@ impl Middleware for MonitoringMiddleware {
                                 has_error = true;
                                 #[cfg(feature = "tracing")]
                                 {
-                                    tracing::error!(
+                                    error!(
                                         service = %service_name,
                                         trace_id = %trace_id_clone,
                                         error = %e,
@@ -133,7 +133,7 @@ impl Middleware for MonitoringMiddleware {
                     let total_duration = start_time.elapsed();
                     #[cfg(feature = "tracing")]
                     {
-                        tracing::info!(
+                        info!(
                             service = %service_name,
                             trace_id = %trace_id_clone,
                             chunks = %chunk_count,
@@ -151,7 +151,7 @@ impl Middleware for MonitoringMiddleware {
                 let duration = start_time.elapsed();
                 #[cfg(feature = "tracing")]
                 {
-                    tracing::error!(
+                    error!(
                         service = %self.service_name,
                         trace_id = %trace_id,
                         duration_ms = %duration.as_millis(),

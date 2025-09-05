@@ -89,7 +89,7 @@ impl<S: StateBackend + 'static> Middleware for CostTrackerMiddleware<S> {
                 if let Err(e) = state_backend.record_usage(&usage).await {
                     #[cfg(feature = "tracing")]
                     {
-                        tracing::error!("Failed to record usage: {}", e);
+                        error!("Failed to record usage: {}", e);
                     }
                     let _ = e; // Suppress unused warning when tracing is disabled
                 }

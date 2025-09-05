@@ -2,6 +2,7 @@
 
 use iroh::{
     Endpoint, SecretKey,
+    discovery::ConcurrentDiscovery,
     protocol::{ProtocolHandler, Router, RouterBuilder},
 };
 use std::net::SocketAddr;
@@ -61,8 +62,7 @@ pub async fn create_router(config: RouterConfig) -> Result<RouterBuilder> {
 
     // Configure discovery
     if config.enable_discovery {
-        // In v0.90.0, use ConcurrentDiscovery for local network discovery
-        let discovery = iroh::discovery::ConcurrentDiscovery::default();
+        let discovery = ConcurrentDiscovery::default();
         builder = builder.discovery(discovery);
     }
 

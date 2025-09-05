@@ -12,7 +12,7 @@ use std::time::Duration;
 /// Configuration for OpenAI provider
 #[derive(Debug, Clone)]
 pub struct OpenAIConfig {
-    pub api_key: String,
+    pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub models: Option<Vec<String>>,
     pub timeout_seconds: Option<u64>,
@@ -26,38 +26,9 @@ pub fn create_sink(config: OpenAIConfig) -> Result<HttpSink> {
         .base_url
         .unwrap_or_else(|| "https://api.openai.com".to_string());
 
-    // Default OpenAI models if not specified
-    let models = config.models.unwrap_or_else(|| {
-        vec![
-            // GPT-4 models
-            "gpt-4-turbo-preview".to_string(),
-            "gpt-4-turbo".to_string(),
-            "gpt-4-turbo-2024-04-09".to_string(),
-            "gpt-4-0125-preview".to_string(),
-            "gpt-4-1106-preview".to_string(),
-            "gpt-4-vision-preview".to_string(),
-            "gpt-4".to_string(),
-            "gpt-4-0613".to_string(),
-            "gpt-4-32k".to_string(),
-            "gpt-4-32k-0613".to_string(),
-            // GPT-4o models
-            "gpt-4o".to_string(),
-            "gpt-4o-2024-05-13".to_string(),
-            "gpt-4o-2024-08-06".to_string(),
-            "gpt-4o-mini".to_string(),
-            "gpt-4o-mini-2024-07-18".to_string(),
-            // GPT-3.5 models
-            "gpt-3.5-turbo".to_string(),
-            "gpt-3.5-turbo-0125".to_string(),
-            "gpt-3.5-turbo-1106".to_string(),
-            "gpt-3.5-turbo-16k".to_string(),
-            // O1 models
-            "o1-preview".to_string(),
-            "o1-preview-2024-09-12".to_string(),
-            "o1-mini".to_string(),
-            "o1-mini-2024-09-12".to_string(),
-        ]
-    });
+    // No hardcoded model list; rely on configured list or dynamic discovery.
+    // Empty list means dynamic support (accept unknown models for routing intent).
+    let models = config.models.unwrap_or_default();
 
     let timeout = Duration::from_secs(config.timeout_seconds.unwrap_or(DEFAULT_SINK_TIMEOUT_SECS));
 
@@ -68,7 +39,7 @@ pub fn create_sink(config: OpenAIConfig) -> Result<HttpSink> {
             .unwrap_or_else(|| "provider://openai".to_string()),
         provider: Provider::OpenAI,
         base_url,
-        api_key: Some(config.api_key),
+        api_key: config.api_key,
         models,
         timeout,
         max_retries: 3,
@@ -76,6 +47,7 @@ pub fn create_sink(config: OpenAIConfig) -> Result<HttpSink> {
             Protocol::OpenAIChat,
             Protocol::OpenAIMessages,
             Protocol::OpenAICompletions,
+            Protocol::OpenAIResponses,
         ],
         capabilities: SinkCapabilities {
             supports_streaming: true,
@@ -94,4 +66,46 @@ pub fn create_sink(config: OpenAIConfig) -> Result<HttpSink> {
     };
 
     HttpSink::new(sink_config)
+}
+
+/// Create a fallback OpenAI sink with no API key and default base URL.
+/// This sink will accept client-supplied API keys via Authorization headers.
+pub fn create_fallback_sink() -> Result<HttpSink> {
+    let config = OpenAIConfig {
+        api_key: None,
+        base_url: None,
+        models: None,
+        timeout_seconds: Some(DEFAULT_SINK_TIMEOUT_SECS),
+        sink_id: Some("provider://openai/fallback".to_string()),
+    };
+    create_sink(config)
+}
+
+/// Create a fallback Codex sink (ChatGPT Codex backend) with no API key and default base URL.
+/// Accepts OpenAI Responses protocol with dynamic models; expects OAuth Bearer tokens.
+pub fn create_codex_fallback_sink() -> Result<HttpSink> {
+    // Ensure trailing slash so URL::join appends endpoint under codex/
+    let base_url = "https://chatgpt.com/backend-api/codex/".to_string();
+    let timeout = std::time::Duration::from_secs(DEFAULT_SINK_TIMEOUT_SECS);
+
+    let sink_config = super::http_sink::HttpSinkConfig {
+        id: "provider://openai/codex".to_string(),
+        provider: super::http_sink::Provider::OpenAICodex,
+        base_url,
+        api_key: None,
+        models: Vec::new(),
+        timeout,
+        max_retries: 3,
+        accepted_protocols: vec![Protocol::OpenAIResponses],
+        capabilities: SinkCapabilities {
+            supports_streaming: true,
+            supports_batching: false,
+            supports_tools: true,
+            max_context_length: None,
+            modalities: vec!["text".to_string()],
+        },
+        cost_structure: None,
+    };
+
+    super::http_sink::HttpSink::new(sink_config)
 }

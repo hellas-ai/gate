@@ -4,9 +4,12 @@
 //! It contains just the auth service (for middleware) and the daemon handle (for business logic).
 
 use crate::Daemon;
+use crate::config::ProviderPassthroughConfig;
 use crate::services::AuthService;
 use async_trait::async_trait;
 use axum::extract::connect_info::ConnectInfo;
+use axum::http::HeaderName;
+use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
 use gate_http::error::HttpError;
 use gate_http::middleware::AuthProvider;
@@ -23,14 +26,22 @@ pub struct MinimalState {
     pub daemon: Daemon,
     /// Whether to allow localhost peer to bypass auth
     pub allow_local_bypass: bool,
+    /// Provider passthrough configuration
+    pub provider_passthrough: ProviderPassthroughConfig,
 }
 
 impl MinimalState {
-    pub fn new(auth_service: Arc<AuthService>, daemon: Daemon, allow_local_bypass: bool) -> Self {
+    pub fn new(
+        auth_service: Arc<AuthService>,
+        daemon: Daemon,
+        allow_local_bypass: bool,
+        provider_passthrough: ProviderPassthroughConfig,
+    ) -> Self {
         Self {
             auth_service,
             daemon,
             allow_local_bypass,
+            provider_passthrough,
         }
     }
 }
@@ -39,18 +50,13 @@ impl MinimalState {
 #[async_trait]
 impl AuthProvider for MinimalState {
     async fn authenticate(&self, parts: &Parts) -> Result<HttpIdentity, HttpError> {
-        // Helper: detect if this is an inference path
-        fn is_inference_path(path: &str) -> bool {
-            matches!(
-                path,
-                "/v1/messages" | "/v1/chat/completions" | "/v1/responses"
-            )
-        }
-
         // Helper: detect Anthropic API key from headers
         fn detect_anthropic_key(parts: &Parts) -> Option<String> {
             // Prefer x-api-key
-            if let Some(val) = parts.headers.get("x-api-key").and_then(|v| v.to_str().ok())
+            if let Some(val) = parts
+                .headers
+                .get(HeaderName::from_static("x-api-key"))
+                .and_then(|v| v.to_str().ok())
                 && val.starts_with("sk-ant-")
             {
                 return Some(val.to_string());
@@ -58,7 +64,7 @@ impl AuthProvider for MinimalState {
             // Fallback to Authorization: Bearer sk-ant-...
             if let Some(auth) = parts
                 .headers
-                .get("Authorization")
+                .get(AUTHORIZATION)
                 .and_then(|v| v.to_str().ok())
                 && let Some(token) = auth.strip_prefix("Bearer ")
                 && token.starts_with("sk-ant-")
@@ -68,22 +74,68 @@ impl AuthProvider for MinimalState {
             None
         }
 
+        // Helper: detect OpenAI API key from headers
+        fn detect_openai_key(parts: &Parts) -> Option<String> {
+            // Authorization: Bearer <token> (API key or OAuth token)
+            if let Some(auth) = parts
+                .headers
+                .get(AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                && let Some(token) = auth.strip_prefix("Bearer ")
+                && !token.is_empty()
+            {
+                return Some(token.to_string());
+            }
+            // Some clients may use x-api-key
+            if let Some(val) = parts
+                .headers
+                .get(HeaderName::from_static("x-api-key"))
+                .and_then(|v| v.to_str().ok())
+                && val.starts_with("sk-")
+            {
+                return Some(val.to_string());
+            }
+            None
+        }
+
         let path = parts.uri.path();
-        // Provider-token auth bypass for Anthropic, inference endpoints only, loopback only
-        if is_inference_path(path)
-            && let Some(connect_info) = parts.extensions.get::<ConnectInfo<SocketAddr>>()
-            && connect_info.0.ip().is_loopback()
-            && let Some(_anthropic_key) = detect_anthropic_key(parts)
+        // Provider-token auth bypass for Anthropic/OpenAI, gated by config
+        let passthrough_allowed_path = self
+            .provider_passthrough
+            .allowed_paths
+            .iter()
+            .any(|p| p == path);
+        let is_loopback = parts
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|c| c.0.ip().is_loopback())
+            .unwrap_or(false);
+        if self.provider_passthrough.enabled
+            && passthrough_allowed_path
+            && (!self.provider_passthrough.loopback_only || is_loopback)
         {
-            let identity = HttpIdentity::new(
-                "provider:anthropic".to_string(),
-                "anthropic-key".to_string(),
-                HttpContext::new()
-                    .with_attribute("auth_method", "provider-key")
-                    .with_attribute("provider", "anthropic")
-                    .with_attribute("node_id", "local"),
-            );
-            return Ok(identity);
+            if let Some(_anthropic_key) = detect_anthropic_key(parts) {
+                let identity = HttpIdentity::new(
+                    "provider:anthropic".to_string(),
+                    "anthropic-key".to_string(),
+                    HttpContext::new()
+                        .with_attribute("auth_method", "provider-key")
+                        .with_attribute("provider", "anthropic")
+                        .with_attribute("node_id", "local"),
+                );
+                return Ok(identity);
+            }
+            if let Some(_openai_key) = detect_openai_key(parts) {
+                let identity = HttpIdentity::new(
+                    "provider:openai".to_string(),
+                    "openai-key".to_string(),
+                    HttpContext::new()
+                        .with_attribute("auth_method", "provider-key")
+                        .with_attribute("provider", "openai")
+                        .with_attribute("node_id", "local"),
+                );
+                return Ok(identity);
+            }
         }
 
         if let Some(auth_header) = parts
@@ -171,7 +223,12 @@ mod tests {
         let (tx, _rx) = mpsc::channel::<DaemonRequest>(1);
         let daemon = crate::daemon::Daemon::new(tx, None);
 
-        MinimalState::new(auth_service, daemon, allow_local_bypass)
+        MinimalState::new(
+            auth_service,
+            daemon,
+            allow_local_bypass,
+            crate::config::ProviderPassthroughConfig::default(),
+        )
     }
 
     #[tokio::test]

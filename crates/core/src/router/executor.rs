@@ -28,10 +28,9 @@ impl PlanExecutor {
             Err(primary_err) => {
                 #[cfg(feature = "tracing")]
                 {
-                    tracing::warn!(
+                    warn!(
                         "Primary route failed: {} - {}",
-                        plan.primary_route.sink_id,
-                        primary_err
+                        plan.primary_route.sink_id, primary_err
                     );
                 }
                 Err(primary_err)

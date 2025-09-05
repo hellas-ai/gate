@@ -14,6 +14,7 @@ pub enum Protocol {
     OpenAIMessages,    // v1/chat/messages
     OpenAIChat,        // v1/chat/completions
     OpenAICompletions, // v1/completions
+    OpenAIResponses,   // v1/responses
     Anthropic,         // v1/messages
     Unknown,           // Escape hatch
 }
@@ -24,6 +25,7 @@ impl std::fmt::Display for Protocol {
             Protocol::OpenAIMessages => write!(f, "OpenAI Messages"),
             Protocol::OpenAIChat => write!(f, "OpenAI Chat"),
             Protocol::OpenAICompletions => write!(f, "OpenAI Completions"),
+            Protocol::OpenAIResponses => write!(f, "OpenAI Responses"),
             Protocol::Anthropic => write!(f, "Anthropic"),
             Protocol::Unknown => write!(f, "Unknown"),
         }

@@ -19,7 +19,7 @@ fn chunk_to_payload(chunk: ResponseChunk, protocol: Protocol) -> JsonValue {
             prompt_tokens,
             completion_tokens,
         } => match protocol {
-            Protocol::OpenAIChat => json!({
+            Protocol::OpenAIChat | Protocol::OpenAIResponses => json!({
                 "usage": {
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
