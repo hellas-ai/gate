@@ -58,7 +58,7 @@ utoipa-scalar.workspace = true
 futures.workspace = true
 uuid.workspace = true
 webauthn-rs.workspace = true
-catgrad-llm = { git = "https://github.com/hellas-ai/catgrad", branch = "grw/fix/error-handling"}
+catgrad-llm = { git = "https://github.com/hellas-ai/catgrad"}
 
 [dev-dependencies]
 futures = "0.3"

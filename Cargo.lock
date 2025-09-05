@@ -991,7 +991,7 @@ dependencies = [
 [[package]]
 name = "catgrad"
 version = "0.1.1"
-source = "git+https://github.com/hellas-ai/catgrad?branch=grw%2Ffix%2Ferror-handling#5d2de11e7f8ec1ecc48b531f4b147deb6a8a7726"
+source = "git+https://github.com/hellas-ai/catgrad#8fbb54613bee537ed71e83d7341f5129f2ed0545"
 dependencies = [
  "gemm",
  "half 2.6.0",
@@ -1009,7 +1009,7 @@ dependencies = [
 [[package]]
 name = "catgrad-llm"
 version = "0.1.1"
-source = "git+https://github.com/hellas-ai/catgrad?branch=grw%2Ffix%2Ferror-handling#5d2de11e7f8ec1ecc48b531f4b147deb6a8a7726"
+source = "git+https://github.com/hellas-ai/catgrad#8fbb54613bee537ed71e83d7341f5129f2ed0545"
 dependencies = [
  "catgrad",
  "half 2.6.0",
@@ -1019,6 +1019,7 @@ dependencies = [
  "minijinja",
  "minijinja-contrib",
  "open-hypergraphs",
+ "rayon",
  "safetensors",
  "serde",
  "serde_json",
