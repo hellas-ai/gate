@@ -26,7 +26,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 )]
 #[instrument(name = "get_bootstrap_status", skip(state))]
 pub async fn get_bootstrap_status(
-    State(state): State<gate_http::AppState<crate::MinimalState>>,
+    State(state): State<gate_http::AppState<crate::State>>,
 ) -> Result<Json<BootstrapStatusResponse>, HttpError> {
     let bootstrap_manager = state
         .data
@@ -94,7 +94,7 @@ impl From<User> for CurrentUser {
     )
 )]
 pub async fn register_with_bootstrap(
-    State(state): State<gate_http::AppState<crate::MinimalState>>,
+    State(state): State<gate_http::AppState<crate::State>>,
     Json(request): Json<RegisterCompleteRequest>,
 ) -> Result<Json<RegisterCompleteResponse>, HttpError> {
     // Get services from daemon
@@ -215,7 +215,7 @@ pub async fn register_with_bootstrap(
     )
 )]
 pub async fn register_start(
-    State(state): State<gate_http::AppState<crate::MinimalState>>,
+    State(state): State<gate_http::AppState<crate::State>>,
     Json(request): Json<RegisterStartRequest>,
 ) -> Result<Json<RegisterStartResponse>, HttpError> {
     let webauthn_service = state
@@ -257,7 +257,7 @@ pub async fn register_start(
     )
 )]
 pub async fn register_complete(
-    State(state): State<gate_http::AppState<crate::MinimalState>>,
+    State(state): State<gate_http::AppState<crate::State>>,
     Json(request): Json<RegisterCompleteRequest>,
 ) -> Result<Json<RegisterCompleteResponse>, HttpError> {
     let webauthn_service = state
@@ -306,7 +306,7 @@ pub async fn register_complete(
 )]
 #[instrument(name = "webauthn_auth_start", skip(state))]
 pub async fn auth_start(
-    State(state): State<gate_http::AppState<crate::MinimalState>>,
+    State(state): State<gate_http::AppState<crate::State>>,
 ) -> Result<Json<AuthStartResponse>, HttpError> {
     let webauthn_service = state
         .data
@@ -345,7 +345,7 @@ pub async fn auth_start(
     )
 )]
 pub async fn auth_complete(
-    State(state): State<gate_http::AppState<crate::MinimalState>>,
+    State(state): State<gate_http::AppState<crate::State>>,
     Json(request): Json<AuthCompleteRequest>,
 ) -> Result<Json<AuthCompleteResponse>, HttpError> {
     let webauthn_service = state
@@ -389,7 +389,7 @@ pub async fn auth_complete(
     )
 )]
 async fn get_current_user(
-    State(state): State<gate_http::AppState<crate::MinimalState>>,
+    State(state): State<gate_http::AppState<crate::State>>,
     identity: HttpIdentity,
 ) -> Result<Json<CurrentUser>, HttpError> {
     // Get user from database via daemon
@@ -411,8 +411,8 @@ async fn get_current_user(
 
 /// Add custom auth routes
 pub fn add_routes(
-    router: OpenApiRouter<gate_http::AppState<crate::MinimalState>>,
-) -> OpenApiRouter<gate_http::AppState<crate::MinimalState>> {
+    router: OpenApiRouter<gate_http::AppState<crate::State>>,
+) -> OpenApiRouter<gate_http::AppState<crate::State>> {
     router
         .routes(routes!(get_bootstrap_status))
         .routes(routes!(get_current_user))

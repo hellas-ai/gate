@@ -24,7 +24,7 @@ use gate_http::{
 )]
 pub async fn get_config(
     identity: HttpIdentity,
-    extract::State(state): extract::State<gate_http::AppState<crate::MinimalState>>,
+    extract::State(state): extract::State<gate_http::AppState<crate::State>>,
 ) -> Result<response::Json<ConfigResponse>, HttpError> {
     // Use daemon to get config with permission check
     let settings = state
@@ -60,7 +60,7 @@ pub async fn get_config(
 )]
 pub async fn update_config(
     identity: HttpIdentity,
-    extract::State(state): extract::State<gate_http::AppState<crate::MinimalState>>,
+    extract::State(state): extract::State<gate_http::AppState<crate::State>>,
     extract::Json(request): extract::Json<ConfigUpdateRequest>,
 ) -> Result<response::Json<ConfigResponse>, HttpError> {
     // Deserialize the new configuration
@@ -85,8 +85,8 @@ pub async fn update_config(
 
 /// Add config routes to an OpenAPI router
 pub fn add_routes(
-    mut router: utoipa_axum::router::OpenApiRouter<gate_http::AppState<crate::MinimalState>>,
-) -> utoipa_axum::router::OpenApiRouter<gate_http::AppState<crate::MinimalState>> {
+    mut router: utoipa_axum::router::OpenApiRouter<gate_http::AppState<crate::State>>,
+) -> utoipa_axum::router::OpenApiRouter<gate_http::AppState<crate::State>> {
     router = router
         .routes(utoipa_axum::routes!(get_config))
         .routes(utoipa_axum::routes!(update_config));
