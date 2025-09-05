@@ -2,6 +2,7 @@ pub mod actor;
 pub mod builder;
 pub mod inner;
 pub mod rpc;
+pub mod server;
 
 pub use builder::DaemonBuilder;
 use gate_http::sinks::anthropic::AnthropicConfig;
@@ -202,279 +203,45 @@ impl Daemon {
         rx.await?
     }
 
+    /// Serve the daemon - uses ServerBuilder to reduce complexity
     pub async fn serve(self) -> Result<()> {
+        // Get settings and create builder
         let settings = self.get_settings().await?;
-        let addr = format!("{}:{}", settings.server.host, settings.server.port);
-        // Fail fast: bind the listener before heavy initialization (model fetch, sinks, etc.)
-        let listener = tokio::net::TcpListener::bind(&addr)
-            .await
-            .map_err(DaemonError::Io)?;
-        tracing::info!("Server will listen on http://{}", addr);
-
-        let auth_service = self.get_auth_service().await?;
+        let builder = server::ServerBuilder::new(self.clone(), settings.clone());
+        
+        // Step 1: Bind listener early to fail fast
+        let listener = builder.bind_listener().await?;
+        
+        // Step 2: Get core services
         let state_backend = self.get_state_backend().await?;
-
-        // Build router with MinimalState containing daemon handle
-        let router = OpenApiRouter::new();
-        let router = crate::routes::auth::add_routes(router);
-        let router = crate::routes::config::add_routes(router);
-        let router = crate::routes::admin::add_routes(router);
-
-        // Compute whether to allow local bypass: requires config enabled and server bound to localhost
-        fn is_local_host(host: &str) -> bool {
-            matches!(host, "localhost" | "127.0.0.1" | "::1")
-        }
-
-        let allow_local_bypass =
-            settings.server.allow_local_bypass && is_local_host(&settings.server.host);
-
-        let minimal_state = crate::MinimalState::new(
-            auth_service.clone(),
-            self.clone(),
-            allow_local_bypass,
-            settings.auth.provider_passthrough.clone(),
-        );
-
-        // Wrap MinimalState in AppState for middleware compatibility
-        let mut app_state = gate_http::AppState::new(state_backend.clone(), minimal_state);
-
-        // Build sink registry and register all sinks
+        
+        // Step 3: Initialize router and state
+        let router = builder.init_router();
+        let state = builder.create_state().await?;
+        let mut app_state = gate_http::AppState::new(state_backend.clone(), state);
+        
+        // Step 4: Setup sink registry and register all sinks
         let sink_registry = std::sync::Arc::new(gate_core::router::registry::SinkRegistry::new());
-
-        // Register provider sinks from configuration
-        let mut has_anthropic = false;
-        let mut has_openai = false;
-        for provider_config in &settings.providers {
-            let sink = match provider_config.provider {
-                crate::config::ProviderType::Anthropic => {
-                    let config = AnthropicConfig {
-                        api_key: provider_config.api_key.clone(),
-                        base_url: Some(provider_config.base_url.clone()),
-                        timeout_seconds: Some(provider_config.timeout_seconds),
-                        sink_id: Some(format!("provider://anthropic/{}", provider_config.name)),
-                    };
-                    match gate_http::sinks::anthropic::create_sink(config).await {
-                        Ok(s) => std::sync::Arc::new(s),
-                        Err(e) => {
-                            tracing::warn!("Failed to create Anthropic sink: {}", e);
-                            continue;
-                        }
-                    }
-                }
-                crate::config::ProviderType::OpenAI => {
-                    let config = gate_http::sinks::openai::OpenAIConfig {
-                        api_key: provider_config.api_key.clone(),
-                        base_url: Some(provider_config.base_url.clone()),
-                        models: if provider_config.models.is_empty() {
-                            None
-                        } else {
-                            Some(provider_config.models.clone())
-                        },
-                        timeout_seconds: Some(provider_config.timeout_seconds),
-                        sink_id: Some(format!("provider://openai/{}", provider_config.name)),
-                    };
-                    match gate_http::sinks::openai::create_sink(config) {
-                        Ok(s) => std::sync::Arc::new(s),
-                        Err(e) => {
-                            tracing::warn!("Failed to create OpenAI sink: {}", e);
-                            continue;
-                        }
-                    }
-                }
-                crate::config::ProviderType::Custom => {
-                    tracing::warn!("Custom provider type not yet implemented");
-                    continue;
-                }
-            };
-
-            match provider_config.provider {
-                crate::config::ProviderType::Anthropic => has_anthropic = true,
-                crate::config::ProviderType::OpenAI => has_openai = true,
-                crate::config::ProviderType::Custom => {}
-            }
-
-            sink_registry
-                .register(
-                    match provider_config.provider {
-                        crate::config::ProviderType::Anthropic => {
-                            format!("provider://anthropic/{}", provider_config.name)
-                        }
-                        crate::config::ProviderType::OpenAI => {
-                            format!("provider://openai/{}", provider_config.name)
-                        }
-                        crate::config::ProviderType::Custom => {
-                            format!("provider://{}", provider_config.name)
-                        }
-                    },
-                    sink,
-                )
-                .await;
-            tracing::info!("Registered provider sink: {}", provider_config.name);
-        }
-
-        // If no Anthropic provider was configured, register a fallback Anthropic sink
-        if !has_anthropic {
-            match gate_http::sinks::anthropic::create_fallback_sink().await {
-                Ok(sink) => {
-                    let sink = std::sync::Arc::new(sink);
-                    sink_registry
-                        .register("provider://anthropic/fallback".to_string(), sink)
-                        .await;
-                    tracing::info!(
-                        "Registered fallback Anthropic sink (no API key; will capture on first success)"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to create fallback Anthropic sink: {}", e);
-                }
-            }
-        }
-        // If no OpenAI provider was configured, register fallback OpenAI sinks
-        if !has_openai {
-            match gate_http::sinks::openai::create_fallback_sink() {
-                Ok(sink) => {
-                    let sink = std::sync::Arc::new(sink);
-                    sink_registry
-                        .register("provider://openai/fallback".to_string(), sink)
-                        .await;
-                    tracing::info!(
-                        "Registered fallback OpenAI sink (no API key; will accept client keys)"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to create fallback OpenAI sink: {}", e);
-                }
-            }
-            // Also register Codex fallback for OpenAI Responses via ChatGPT backend
-            match gate_http::sinks::openai::create_codex_fallback_sink() {
-                Ok(sink) => {
-                    let sink = std::sync::Arc::new(sink);
-                    sink_registry
-                        .register("provider://openai/codex".to_string(), sink)
-                        .await;
-                    tracing::info!(
-                        "Registered fallback OpenAI Codex sink (OAuth tokens; /backend-api/codex)"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to create fallback OpenAI Codex sink: {}", e);
-                }
-            }
-        }
-        // Register Catgrad sink when local inference is enabled
-        if let Some(ref inf_cfg) = settings.local_inference {
-            match crate::services::LocalInferenceService::new(inf_cfg.clone()) {
-                Ok(_service) => {
-                    let sink = std::sync::Arc::new(crate::sinks::catgrad_sink::CatgradSink::new(
-                        "self://catgrad",
-                        inf_cfg.models.clone(),
-                    ));
-                    sink_registry
-                        .register("self://catgrad".to_string(), sink)
-                        .await;
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to initialize LocalInferenceService: {}", e);
-                }
-            }
-        }
+        builder.register_sinks(&sink_registry).await?;
+        
+        // Step 5: Setup sink index
         let sink_index = std::sync::Arc::new(gate_core::router::index::SinkIndex::new());
         sink_index.refresh_from_registry(&sink_registry).await;
-
-        // Key-capture middleware registrar (daemon + registry + index)
-        let registrar = std::sync::Arc::new(crate::services::key_capture::DaemonKeyRegistrar::new(
-            self.clone(),
-            sink_registry.clone(),
-            sink_index.clone(),
-        ));
-
-        let router_core = gate_core::router::routing::Router::builder()
-            .state_backend(state_backend)
-            .sink_registry(sink_registry)
-            .strategy(Box::new(
-                gate_core::router::strategy::CompositeStrategy::new(vec![
-                    (
-                        Box::new(gate_core::router::strategy::ProviderAffinityStrategy::new()),
-                        1.0,
-                    ),
-                    (
-                        Box::new(gate_core::router::strategy::SimpleStrategy::new()),
-                        0.1,
-                    ),
-                ]),
-            ))
-            .middleware(std::sync::Arc::new(
-                gate_core::router::middleware::KeyCaptureMiddleware::new(registrar),
-            ))
-            .sink_index(sink_index)
-            .build();
-        let router_core = std::sync::Arc::new(router_core);
+        
+        // Step 6: Build core router with strategies and middleware
+        let router_core = builder.build_router_core(state_backend, sink_registry, sink_index).await;
         app_state = app_state.with_router(router_core);
-
-        // Build the full axum app with middleware
-        let mut app = router
-            .split_for_parts()
-            .0
-            // Merge routes that need state
-            .merge(gate_http::routes::models::router())
-            .merge(gate_http::routes::inference::router())
-            // Apply state to the merged router
-            .with_state(app_state.clone())
-            // Merge routes that don't need state
-            .merge(gate_http::routes::observability::router())
-            .route_layer(axum::middleware::from_fn_with_state(
-                app_state.clone(),
-                gate_http::middleware::auth::auth_middleware::<crate::MinimalState>,
-            ))
-            .layer(
-                tower_http::cors::CorsLayer::new()
-                    .allow_origin(tower_http::cors::Any)
-                    .allow_methods(tower_http::cors::Any)
-                    .allow_headers(vec![
-                        axum::http::header::CONTENT_TYPE,
-                        axum::http::header::AUTHORIZATION,
-                        axum::http::HeaderName::from_static("x-correlation-id"),
-                        axum::http::HeaderName::from_static("x-api-key"),
-                        axum::http::HeaderName::from_static("traceparent"),
-                        axum::http::HeaderName::from_static("tracestate"),
-                    ])
-                    .expose_headers(vec![
-                        axum::http::HeaderName::from_static("x-correlation-id"),
-                        axum::http::HeaderName::from_static("traceparent"),
-                        axum::http::HeaderName::from_static("tracestate"),
-                    ]),
-            )
-            .layer(axum::middleware::from_fn(
-                gate_http::middleware::correlation_id_middleware,
-            ));
-
-        // Add static file serving if configured
-        if let Some(static_dir) = &self.static_dir {
-            if std::path::Path::new(static_dir).exists() {
-                info!("Serving static files from: {}", static_dir);
-
-                // Create static file service with SPA fallback
-                // This serves files normally, but falls back to index.html for client-side routing
-                let index_path = format!("{static_dir}/index.html");
-                let serve_dir = tower_http::services::ServeDir::new(static_dir)
-                    .fallback(tower_http::services::ServeFile::new(index_path));
-
-                // Add catch-all route for static files and SPA
-                app = app.fallback_service(serve_dir);
-            } else {
-                warn!("Static directory not found: {}", static_dir);
-            }
-        }
-
-        // Apply request tracing/logging as the outermost layer so it sees final statuses (including 404/405)
-        let app = gate_http::middleware::with_request_tracing(app);
-
-        // Include peer address in request extensions for middleware
+        
+        // Step 7: Build complete application with all middleware
+        let app = builder.build_app(router, app_state).await;
+        
+        // Step 8: Serve the application
         let make_svc = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
         axum::serve(listener, make_svc)
             .await
             .map_err(DaemonError::Io)?;
-
+        
         Ok(())
     }
 }
+
