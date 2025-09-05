@@ -6,12 +6,13 @@
 #[cfg(not(target_arch = "wasm32"))]
 use rand::Rng;
 #[cfg(not(target_arch = "wasm32"))]
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     collections::hash_map::DefaultHasher,
+    fmt,
     hash::{Hash, Hasher},
-    time::{SystemTime, UNIX_EPOCH},
+    str::FromStr,
 };
-use std::{fmt, str::FromStr};
 
 use http::{HeaderMap, HeaderName, HeaderValue};
 use thiserror::Error;
