@@ -42,5 +42,9 @@ fn app() -> Html {
 
 fn main() {
     wasm_logger::init(wasm_logger::Config::default());
+
+    // Initialize favicon observer for theme changes
+    utils::favicon::init_favicon_observer();
+
     yew::Renderer::<App>::new().render();
 }

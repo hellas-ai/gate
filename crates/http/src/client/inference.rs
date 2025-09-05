@@ -13,7 +13,7 @@ impl GateClient {
         request: AnthropicMessagesRequest,
     ) -> Result<JsonValue, ClientError> {
         let req = self
-            .request(reqwest::Method::POST, "/v1/messages")
+            .request(reqwest::Method::POST, "/v1/messages")?
             .json(&request);
         self.execute(req).await
     }
@@ -24,7 +24,7 @@ impl GateClient {
         request: OpenAIChatCompletionRequest,
     ) -> Result<JsonValue, ClientError> {
         let req = self
-            .request(reqwest::Method::POST, "/v1/chat/completions")
+            .request(reqwest::Method::POST, "/v1/chat/completions")?
             .json(&request);
         self.execute(req).await
     }
@@ -35,7 +35,7 @@ impl GateClient {
         request: OpenAICompletionRequest,
     ) -> Result<JsonValue, ClientError> {
         let req = self
-            .request(reqwest::Method::POST, "/v1/completions")
+            .request(reqwest::Method::POST, "/v1/completions")?
             .json(&request);
         self.execute(req).await
     }

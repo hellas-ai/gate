@@ -12,6 +12,6 @@ pub use correlation::{
     CORRELATION_ID_HEADER, CorrelationIdExt, correlation_id_middleware, extract_correlation_id,
 };
 pub use metrics::metrics_middleware;
-pub use trace::TraceMiddleware;
+pub use trace::with_request_tracing;
 #[cfg(not(target_arch = "wasm32"))]
 pub use webauthn::{WebAuthnConfig, WebAuthnState};

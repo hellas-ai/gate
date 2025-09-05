@@ -1,7 +1,7 @@
 use yew::prelude::*;
 
-use super::container::ServerConfig;
-use super::shared::{ConfigField, ConfigInput, ConfigSection};
+use super::shared::{ConfigField, ConfigInput, ConfigSection, ConfigToggle};
+use super::types::ServerConfig;
 
 #[derive(Properties, PartialEq)]
 pub struct ServerConfigSectionProps {
@@ -49,6 +49,21 @@ pub fn server_config_section(props: &ServerConfigSectionProps) -> Html {
         })
     };
 
+    let is_host_loopback = {
+        let host = props.config.host.to_lowercase();
+        host == "127.0.0.1" || host == "localhost" || host == "::1"
+    };
+
+    let on_allow_local_bypass_change = {
+        let config = config.clone();
+        let on_change = props.on_change.clone();
+        Callback::from(move |value: bool| {
+            let mut new_config = config.clone();
+            new_config.allow_local_bypass = value;
+            on_change.emit(new_config);
+        })
+    };
+
     html! {
         <ConfigSection title="Server Configuration">
             <ConfigField
@@ -85,6 +100,18 @@ pub fn server_config_section(props: &ServerConfigSectionProps) -> Html {
                     placeholder="9090"
                 />
             </ConfigField>
+
+            <ConfigToggle
+                label="Allow Localhost Bypass"
+                checked={props.config.allow_local_bypass && is_host_loopback}
+                on_change={on_allow_local_bypass_change}
+                disabled={!is_host_loopback}
+                help_text={Some(if is_host_loopback {
+                    "Allow requests from 127.0.0.1/localhost to skip auth"
+                } else {
+                    "Enable only when server host is localhost/127.0.0.1/::1"
+                }.to_string())}
+            />
         </ConfigSection>
     }
 }

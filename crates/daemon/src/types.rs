@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct DaemonStatus {
     pub running: bool,
     pub listen_address: String,
-    pub upstream_count: usize,
+    pub provider_count: usize,
     pub user_count: usize,
     pub tlsforward_enabled: bool,
     pub tlsforward_status: TlsForwardStatus,

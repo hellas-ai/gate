@@ -13,7 +13,7 @@ gloo = { workspace = true, features = ["timers"] }
 wasm-logger = { workspace = true }
 yew = { workspace = true, features = ["csr"] }
 yew-router = { workspace = true }
-web-sys = { workspace = true, features = ["HtmlTextAreaElement"] }
+web-sys = { workspace = true, features = ["HtmlTextAreaElement", "HtmlLinkElement", "Element", "HtmlHeadElement", "DomTokenList", "Node", "NodeList"] }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 serde = { version = "1", features = ["derive"] }

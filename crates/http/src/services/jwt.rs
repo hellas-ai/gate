@@ -86,7 +86,6 @@ impl JwtService {
     pub fn validate_token(&self, token: &str) -> Result<Claims, HttpError> {
         let mut validation = Validation::new(Algorithm::HS256);
         validation.set_issuer(std::slice::from_ref(&self.config.issuer));
-
         decode::<Claims>(token, &self.decoding_key, &validation)
             .map(|token_data| token_data.claims)
             .map_err(|e| match e.kind() {

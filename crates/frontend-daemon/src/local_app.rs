@@ -61,12 +61,10 @@ fn local_app_content() -> Html {
     // Show loading state while auth is being restored from sessionStorage
     if auth.is_loading {
         html! {
-            <div class="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900 flex items-center justify-center">
+            <div class="min-h-screen bg-gray-950 flex items-center justify-center">
                 <div class="text-center">
-                    <div class="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full mb-4 shadow-lg animate-pulse">
-                        <svg class="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
-                        </svg>
+                    <div class="inline-flex items-center justify-center w-20 h-20 rounded-full mb-4 animate-pulse">
+                        <img src="/assets/hellas-token-white.svg" alt="Hellas" class="w-16 h-16" />
                     </div>
                     <p class="text-white text-lg">{"Loading..."}</p>
                 </div>
@@ -76,12 +74,11 @@ fn local_app_content() -> Html {
         // Show tabbed interface when authenticated
         html! {
             <div class="h-screen flex flex-col bg-white dark:bg-gray-900">
-                <div class="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+                <div class="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
                     <div class="p-4 flex justify-between items-center">
                         <div class="flex items-center gap-3">
-                            <h1 class="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                                {"Gate"}
-                            </h1>
+                            <img src="/assets/Hellas_Logotype_Black.svg" class="h-6 block dark:hidden" alt="hellas" />
+                            <img src="/assets/Hellas_Logotype_White.svg" class="h-6 hidden dark:block" alt="hellas" />
                             <span class="text-sm text-gray-500 dark:text-gray-400">{"Local Daemon"}</span>
                         </div>
                         <div class="flex items-center gap-3">
@@ -174,18 +171,13 @@ fn local_app_content() -> Html {
     } else {
         // Show minimal auth screen
         html! {
-            <div class="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900 flex items-center justify-center px-4">
+            <div class="min-h-screen bg-gray-950 flex items-center justify-center px-4">
                 <div class="max-w-md w-full">
                     <div class="text-center mb-8">
-                        <div class="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full mb-4 shadow-lg animate-pulse">
-                            <svg class="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
-                            </svg>
+                        <div class="inline-flex items-center justify-center w-auto h-auto mb-4">
+                            <img src="/assets/Hellas_Logotype_White.svg" alt="hellas" class="w-40" />
                         </div>
-                        <h1 class="text-3xl font-bold text-white mb-2">
-                            {"Gate Local"}
-                        </h1>
-                        <p class="text-blue-200">{"Secure AI Gateway"}</p>
+                        <p class="text-gray-300">{"Secure AI Gateway"}</p>
                     </div>
                     <div class="bg-white/10 backdrop-blur-md rounded-2xl shadow-2xl p-8 border border-white/20">
                         <LocalAuth />

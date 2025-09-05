@@ -1,6 +1,9 @@
 @import "tailwindcss";
 @config "./tailwind.config.js";
+@source "index.html";
 @source "src/**/*.rs";
+@source "../frontend-common/src/**/*.rs";
+@source "../chat-ui/src/**/*.rs";
 
 @theme {
   --color-gray-50: #f9fafb;

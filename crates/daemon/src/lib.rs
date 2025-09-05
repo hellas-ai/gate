@@ -10,6 +10,7 @@ pub mod minimal_state;
 pub mod permissions;
 pub mod routes;
 pub mod services;
+pub mod sinks;
 pub mod state_dir;
 pub mod tls_reload;
 pub mod types;

@@ -51,6 +51,10 @@ pub enum HttpError {
     /// Not implemented
     #[error("Not implemented: {0}")]
     NotImplemented(String),
+
+    /// Core error
+    #[error(transparent)]
+    Core(#[from] gate_core::Error),
 }
 
 /// Error response body
@@ -84,6 +88,25 @@ impl IntoResponse for HttpError {
                 (StatusCode::UNPROCESSABLE_ENTITY, "unprocessable_entity")
             }
             HttpError::NotImplemented(_) => (StatusCode::from_u16(501).unwrap(), "not_implemented"),
+            HttpError::Core(core_err) => {
+                use gate_core::Error;
+                match core_err {
+                    Error::Rejected(status, _) => (*status, "upstream_error"),
+                    Error::Unauthorized => (StatusCode::FORBIDDEN, "unauthorized"),
+                    Error::ApiKeyNotFound | Error::InvalidApiKey => {
+                        (StatusCode::UNAUTHORIZED, "invalid_api_key")
+                    }
+                    Error::ModelNotFound(_) | Error::ProviderNotFound(_) => {
+                        (StatusCode::NOT_FOUND, "not_found")
+                    }
+                    Error::QuotaExceeded(_) => (StatusCode::TOO_MANY_REQUESTS, "quota_exceeded"),
+                    Error::InvalidRequest(_) => (StatusCode::BAD_REQUEST, "invalid_request"),
+                    Error::ServiceUnavailable(_) => {
+                        (StatusCode::SERVICE_UNAVAILABLE, "service_unavailable")
+                    }
+                    _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal_server_error"),
+                }
+            }
         };
 
         let body = ErrorResponse {

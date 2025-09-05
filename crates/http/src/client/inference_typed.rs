@@ -7,13 +7,13 @@ use serde::{Deserialize, Serialize};
 impl AuthenticatedGateClient {
     /// List available models (requires authentication)
     pub async fn list_models(&self) -> Result<ModelsResponse, ClientError> {
-        let request = self.request(reqwest::Method::GET, "/v1/models");
+        let request = self.request(reqwest::Method::GET, "/v1/models")?;
         self.execute(request).await
     }
 
     /// Get model details (requires authentication)
     pub async fn get_model(&self, model_id: &str) -> Result<ModelResponse, ClientError> {
-        let request = self.request(reqwest::Method::GET, &format!("/v1/models/{model_id}"));
+        let request = self.request(reqwest::Method::GET, &format!("/v1/models/{model_id}"))?;
         self.execute(request).await
     }
 
@@ -23,7 +23,7 @@ impl AuthenticatedGateClient {
         request: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse, ClientError> {
         let req = self
-            .request(reqwest::Method::POST, "/v1/chat/completions")
+            .request(reqwest::Method::POST, "/v1/chat/completions")?
             .json(&request);
         self.execute(req).await
     }
@@ -34,7 +34,7 @@ impl AuthenticatedGateClient {
         request: MessageRequest,
     ) -> Result<MessageResponse, ClientError> {
         let req = self
-            .request(reqwest::Method::POST, "/v1/messages")
+            .request(reqwest::Method::POST, "/v1/messages")?
             .json(&request);
         self.execute(req).await
     }

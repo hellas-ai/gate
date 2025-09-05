@@ -36,15 +36,20 @@ impl IdentityContext for LocalContext {
 impl LocalContext {
     /// Convert from HTTP identity to local context
     pub async fn from_http_identity(identity: &HttpIdentity, backend: &dyn StateBackend) -> Self {
-        // Check if this is the first user (owner)
-        let is_owner = backend
-            .has_permission(
-                &identity.id,
-                &Action::GrantPermission,
-                &ObjectIdentity::wildcard(),
-            )
-            .await
-            .unwrap_or(false);
+        // Honor explicit owner attribute if present
+        let is_owner = if matches!(identity.context.get("is_owner"), Some("true")) {
+            true
+        } else {
+            // Check if this is the first user (owner) via backend permission
+            backend
+                .has_permission(
+                    &identity.id,
+                    &Action::GrantPermission,
+                    &ObjectIdentity::wildcard(),
+                )
+                .await
+                .unwrap_or(false)
+        };
 
         Self {
             is_owner,

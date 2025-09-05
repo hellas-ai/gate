@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 
 use config::{Config, ConfigError, Environment, File};
-use gate_http::forwarding::UpstreamProvider;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -91,6 +90,7 @@ fn default_local_inference() -> Option<LocalInferenceConfig> {
         max_concurrent_inferences: 1,
         default_temperature: 0.7,
         default_max_tokens: 1024,
+        models: vec![],
     })
 }
 
@@ -110,9 +110,9 @@ pub struct Settings {
     /// Authentication settings
     #[serde(default)]
     pub auth: AuthConfig,
-    /// Upstream provider settings (supports multiple)
+    /// Provider configurations
     #[serde(default)]
-    pub upstreams: Vec<UpstreamConfig>,
+    pub providers: Vec<ProviderConfig>,
     /// Relay configuration
     #[serde(default)]
     pub tlsforward: TlsForwardConfig,
@@ -145,6 +145,9 @@ pub struct ServerConfig {
     /// Prometheus metrics endpoint port (if enabled)
     #[serde(default)]
     pub metrics_port: Option<u16>,
+    /// Allow localhost clients to bypass auth (effective only when host is loopback)
+    #[serde(default = "default_true")]
+    pub allow_local_bypass: bool,
 }
 
 impl Default for ServerConfig {
@@ -165,6 +168,9 @@ pub struct AuthConfig {
     /// Registration configuration
     #[serde(default)]
     pub registration: RegistrationConfig,
+    /// Provider API key passthrough (Anthropic/OpenAI) for inference routes
+    #[serde(default)]
+    pub provider_passthrough: ProviderPassthroughConfig,
 }
 
 impl Default for AuthConfig {
@@ -173,13 +179,51 @@ impl Default for AuthConfig {
     }
 }
 
-/// Upstream provider configuration
+/// Provider passthrough configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpstreamConfig {
-    /// Name identifier for this upstream
+pub struct ProviderPassthroughConfig {
+    /// Enable passthrough of provider API keys from clients
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Restrict passthrough to loopback peers only
+    #[serde(default = "default_true")]
+    pub loopback_only: bool,
+    /// Allowed HTTP paths for passthrough (exact match)
+    #[serde(default = "default_passthrough_paths")]
+    pub allowed_paths: Vec<String>,
+}
+
+fn default_passthrough_paths() -> Vec<String> {
+    vec![
+        "/v1/messages".to_string(),         // Anthropic
+        "/v1/chat/completions".to_string(), // OpenAI Chat
+        "/v1/responses".to_string(),        // OpenAI Responses
+        "/v1/completions".to_string(),      // OpenAI Completions (legacy)
+    ]
+}
+
+impl Default for ProviderPassthroughConfig {
+    fn default() -> Self {
+        serde_json::from_value(json!({})).expect("Default settings should always be valid")
+    }
+}
+
+/// Provider type
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderType {
+    Anthropic,
+    OpenAI,
+    Custom,
+}
+
+/// Provider configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderConfig {
+    /// Name identifier for this provider
     pub name: String,
-    /// LLM Provider type
-    pub provider: UpstreamProvider,
+    /// Provider type
+    pub provider: ProviderType,
     /// Base URL for the upstream API
     pub base_url: String,
     /// API key for authentication (can be set via env var)
@@ -193,7 +237,7 @@ pub struct UpstreamConfig {
     pub models: Vec<String>,
 }
 
-impl Default for UpstreamConfig {
+impl Default for ProviderConfig {
     fn default() -> Self {
         serde_json::from_value(json!({})).expect("Default settings should always be valid")
     }
@@ -318,6 +362,9 @@ pub struct LocalInferenceConfig {
     /// Default max tokens for inference when not specified
     #[serde(default = "default_max_tokens")]
     pub default_max_tokens: u32,
+    /// List of available models for local inference
+    #[serde(default)]
+    pub models: Vec<String>,
 }
 
 impl Default for LocalInferenceConfig {

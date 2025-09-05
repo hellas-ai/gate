@@ -69,7 +69,7 @@ pub struct TlsForwardConfig {
 pub struct DaemonRuntimeStatus {
     pub running: bool,
     pub listen_address: Option<String>,
-    pub has_upstreams: bool,
+    pub has_providers: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -88,7 +88,7 @@ pub enum TlsForwardState {
 pub struct DaemonRuntimeConfig {
     pub listen_address: String,
     pub database_url: String,
-    pub upstream_count: usize,
+    pub provider_count: usize,
     pub auth_enabled: bool,
     pub webauthn_enabled: bool,
     pub p2p_node_id: Option<String>,

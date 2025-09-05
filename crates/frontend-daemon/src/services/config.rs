@@ -34,7 +34,7 @@ impl ConfigApiService {
         }
 
         let response: ConfigResponse = client
-            .execute(client.request(Method::GET, "/api/config"))
+            .execute(client.request(Method::GET, "/api/config")?)
             .await?;
 
         Ok(response.config)
@@ -58,7 +58,7 @@ impl ConfigApiService {
         let response: ConfigResponse = client
             .execute(
                 client
-                    .request(Method::PUT, "/api/config")
+                    .request(Method::PUT, "/api/config")?
                     .json(&UpdateRequest { config }),
             )
             .await?;

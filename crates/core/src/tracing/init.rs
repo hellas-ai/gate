@@ -102,7 +102,7 @@ fn init_with_otlp(
         .with(env_filter)
         .init();
 
-    tracing::warn!("OTLP export requested but tracing-otlp feature is not enabled");
+    warn!("OTLP export requested but tracing-otlp feature is not enabled");
     Ok(())
 }
 

@@ -197,6 +197,8 @@ pub struct ConfigToggleProps {
     pub on_change: Callback<bool>,
     #[prop_or_default]
     pub help_text: Option<String>,
+    #[prop_or(false)]
+    pub disabled: bool,
 }
 
 #[function_component(ConfigToggle)]
@@ -204,7 +206,12 @@ pub fn config_toggle(props: &ConfigToggleProps) -> Html {
     let onclick = {
         let on_change = props.on_change.clone();
         let checked = props.checked;
-        Callback::from(move |_| on_change.emit(!checked))
+        let disabled = props.disabled;
+        Callback::from(move |_| {
+            if !disabled {
+                on_change.emit(!checked)
+            }
+        })
     };
 
     html! {
@@ -221,6 +228,7 @@ pub fn config_toggle(props: &ConfigToggleProps) -> Html {
                     role="switch"
                     aria-checked={props.checked.to_string()}
                     onclick={onclick}
+                    disabled={props.disabled}
                     class={classes!(
                         "relative", "inline-flex", "h-6", "w-11", "items-center", "rounded-full",
                         "transition-colors", "focus:outline-none", "focus:ring-2",
@@ -229,7 +237,8 @@ pub fn config_toggle(props: &ConfigToggleProps) -> Html {
                             "bg-blue-600"
                         } else {
                             "bg-gray-200 dark:bg-gray-700"
-                        }
+                        },
+                        if props.disabled { "opacity-50 cursor-not-allowed" } else { "" }
                     )}
                 >
                     <span

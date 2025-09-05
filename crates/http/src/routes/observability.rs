@@ -2,24 +2,16 @@
 
 use crate::types::HealthCheckResponse;
 use axum::{
-    Json,
+    Json, Router,
     http::StatusCode,
     response::{IntoResponse, Response},
+    routing::get,
 };
 #[cfg(all(feature = "otlp", not(target_arch = "wasm32")))]
 use gate_core::tracing::prometheus::prometheus_format;
-use utoipa_axum::{router::OpenApiRouter, routes};
+use tracing::instrument;
 
 /// Health check endpoint
-#[utoipa::path(
-    get,
-    path = "/health",
-    responses(
-        (status = 200, description = "Service is healthy", body = serde_json::Value),
-        (status = 503, description = "Service is unhealthy", body = serde_json::Value)
-    ),
-    tag = "observability"
-)]
 #[instrument(name = "health_check")]
 pub async fn health_handler() -> Response {
     // TODO: Add more sophisticated health checks (database, upstream connectivity, etc.)
@@ -35,14 +27,6 @@ pub async fn health_handler() -> Response {
 
 /// Prometheus metrics endpoint
 #[cfg(feature = "otlp")]
-#[utoipa::path(
-    get,
-    path = "/metrics",
-    responses(
-        (status = 200, description = "Prometheus metrics", content_type = "text/plain")
-    ),
-    tag = "observability"
-)]
 pub async fn metrics_handler() -> Response {
     let metrics = prometheus_format();
 
@@ -59,14 +43,6 @@ pub async fn metrics_handler() -> Response {
 
 /// Prometheus metrics endpoint (stub when otlp is disabled)
 #[cfg(not(feature = "otlp"))]
-#[utoipa::path(
-    get,
-    path = "/metrics",
-    responses(
-        (status = 200, description = "Prometheus metrics", content_type = "text/plain")
-    ),
-    tag = "observability"
-)]
 pub async fn metrics_handler() -> Response {
     (
         StatusCode::OK,
@@ -79,12 +55,12 @@ pub async fn metrics_handler() -> Response {
         .into_response()
 }
 
-/// Add observability routes to the router
-pub fn add_routes<T>(router: OpenApiRouter<T>) -> OpenApiRouter<T>
+/// Create observability router
+pub fn router<T>() -> Router<T>
 where
     T: Clone + Send + Sync + 'static,
 {
-    router
-        .routes(routes!(health_handler))
-        .routes(routes!(metrics_handler))
+    Router::new()
+        .route("/health", get(health_handler))
+        .route("/metrics", get(metrics_handler))
 }

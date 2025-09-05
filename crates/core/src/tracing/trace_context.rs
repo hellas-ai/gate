@@ -3,8 +3,16 @@
 //! This module implements the W3C Trace Context specification for distributed tracing.
 //! See: https://www.w3.org/TR/trace-context/
 
-use std::fmt;
-use std::str::FromStr;
+#[cfg(not(target_arch = "wasm32"))]
+use rand::Rng;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::hash_map::DefaultHasher,
+    fmt,
+    hash::{Hash, Hasher},
+    str::FromStr,
+};
 
 use http::{HeaderMap, HeaderName, HeaderValue};
 use thiserror::Error;
@@ -56,29 +64,9 @@ impl TraceContext {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            use std::time::{SystemTime, UNIX_EPOCH};
-
-            // Generate pseudo-random bytes using system time and thread ID
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-
-            let mut hasher = DefaultHasher::new();
-            now.hash(&mut hasher);
-            std::thread::current().id().hash(&mut hasher);
-            let hash1 = hasher.finish();
-
-            hasher = DefaultHasher::new();
-            hash1.hash(&mut hasher);
-            now.wrapping_add(1).hash(&mut hasher);
-            let hash2 = hasher.finish();
-
-            trace_id[..8].copy_from_slice(&hash1.to_be_bytes());
-            trace_id[8..].copy_from_slice(&hash2.to_be_bytes());
-            span_id.copy_from_slice(&hash1.to_le_bytes());
+            let mut rng = rand::thread_rng();
+            rng.fill(&mut trace_id);
+            rng.fill(&mut span_id);
         }
 
         Self {
@@ -91,9 +79,6 @@ impl TraceContext {
 
     /// Create a trace context from a legacy correlation ID
     pub fn from_legacy_id(id: &str) -> Self {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
         // Generate deterministic trace and span IDs from the legacy ID
         let mut hasher = DefaultHasher::new();
         id.hash(&mut hasher);
@@ -155,10 +140,6 @@ impl TraceContext {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            use std::time::{SystemTime, UNIX_EPOCH};
-
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()

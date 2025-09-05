@@ -2,7 +2,7 @@
   description = "Gate - Free and open source components";
 
   inputs = {
-    nixpkgs.url = "github:RossComputerGuy/nixpkgs/fix/rustc-llvm";
+    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -71,6 +71,13 @@
           ];
         };
 
+      # Shared toolset for frontend builds (DRY)
+      frontendTools = with pkgs; [
+        trunk
+        wasm-bindgen-cli
+        tailwindcss_4
+      ];
+
       # Frontend sources for each variant
       frontendDaemonSource = mkFrontendSource "frontend-daemon";
       frontendTauriSource = mkFrontendSource "frontend-tauri";
@@ -108,11 +115,8 @@
 
       devShells.default = pkgs.mkShell {
         nativeBuildInputs = with pkgs; [
-          trunk
           pkg-config
-          wasm-bindgen-cli
-          nodePackages.tailwindcss
-        ];
+        ] ++ frontendTools;
 
         buildInputs = with pkgs;
           [
@@ -169,10 +173,6 @@
 
             # Wasm tools
             wasm-pack
-            wasm-bindgen-cli
-
-            trunk
-            nodePackages.tailwindcss
 
             # Tauri tools
             cargo-tauri
@@ -180,9 +180,9 @@
             # github
             act
             gh
-            
+
             # Image conversion tools
-            librsvg  # provides rsvg-convert
+            librsvg # provides rsvg-convert
             imagemagick
           ]
           ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
@@ -224,12 +224,9 @@
             inherit outputHashes;
           };
 
-          nativeBuildInputs = with pkgs; [
-            openssl
-            trunk
-            wasm-bindgen-cli
-            nodePackages.tailwindcss
-          ];
+          nativeBuildInputs = [
+            pkgs.openssl
+          ] ++ frontendTools;
 
           # Skip normal cargo build
           buildPhase = ''
@@ -264,12 +261,9 @@
             inherit outputHashes;
           };
 
-          nativeBuildInputs = with pkgs; [
-            openssl
-            trunk
-            wasm-bindgen-cli
-            nodePackages.tailwindcss
-          ];
+          nativeBuildInputs = [
+            pkgs.openssl
+          ] ++ frontendTools;
 
           # Skip normal cargo build
           buildPhase = ''
@@ -304,12 +298,9 @@
             inherit outputHashes;
           };
 
-          nativeBuildInputs = with pkgs; [
-            openssl
-            trunk
-            wasm-bindgen-cli
-            nodePackages.tailwindcss
-          ];
+          nativeBuildInputs = [
+            pkgs.openssl
+          ] ++ frontendTools;
 
           # Skip normal cargo build
           buildPhase = ''
@@ -484,11 +475,9 @@
               pkg-config
               cargo-tauri.hook
               nodePackages.nodejs
-              trunk
-              wasm-bindgen-cli
-              nodePackages.tailwindcss
               makeWrapper
             ]
+            ++ frontendTools
             ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
               darwin.apple_sdk.frameworks.WebKit
               darwin.apple_sdk.frameworks.AppKit

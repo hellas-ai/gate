@@ -1,7 +1,7 @@
 use yew::prelude::*;
 
-use super::container::TlsForwardConfig;
 use super::shared::{ConfigField, ConfigInput, ConfigSection};
+use super::types::TlsForwardConfig;
 
 #[derive(Properties, PartialEq)]
 pub struct TlsForwardConfigSectionProps {

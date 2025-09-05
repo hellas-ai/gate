@@ -1,7 +1,7 @@
 use yew::prelude::*;
 
-use super::container::LetsEncryptConfig;
 use super::shared::{ConfigField, ConfigInput, ConfigSection, ConfigToggle};
+use super::types::LetsEncryptConfig;
 
 #[derive(Properties, PartialEq)]
 pub struct LetsEncryptConfigSectionProps {

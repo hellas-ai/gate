@@ -17,7 +17,7 @@ async fn test_client_builder() {
 
     assert!(client.is_ok());
     let client = client.unwrap();
-    assert_eq!(client.base_url(), "http://localhost:8080");
+    assert_eq!(client.base_url().as_str(), "http://localhost:8080/");
 }
 
 #[tokio::test]
