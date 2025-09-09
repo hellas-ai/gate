@@ -219,14 +219,13 @@ impl HttpSink {
         let request = self.get_first_request(&mut request_stream).await?;
         let protocol = request_stream.protocol();
         let url = self.build_url(ctx, protocol)?;
-        
+
         let req = self.prepare_http_request(url, &request, ctx);
         let response = self.send_http_request(req).await?;
-        
-        self.validate_response_status(&response).await?;
+        let response = self.validate_response_status(response).await?;
         self.process_response(response, protocol).await
     }
-    
+
     /// Get and validate the first request from the stream
     async fn get_first_request(&self, stream: &mut RequestStream) -> Result<JsonValue> {
         stream
@@ -234,7 +233,7 @@ impl HttpSink {
             .await
             .ok_or_else(|| Error::InvalidRequest("Empty request stream".to_string()))?
     }
-    
+
     /// Prepare the HTTP request with all necessary headers
     fn prepare_http_request(
         &self,
@@ -243,33 +242,41 @@ impl HttpSink {
         ctx: &RequestContext,
     ) -> reqwest::RequestBuilder {
         let mut req = self.client.post(url).json(request);
-        
+
         // Add authentication
         if let Some((header_name, header_value)) = self.auth_header() {
             req = req.header(header_name, header_value);
         } else if let Some((hn, hv)) = self.inferred_auth_from_client_headers(ctx) {
             req = req.header(hn, hv);
         }
-        
+
         // Add provider headers
         for (name, value) in self.provider_headers() {
             req = req.header(name, value);
         }
-        
+
         // Add trace headers from context (filtering restricted ones)
         use http::header::{CONTENT_LENGTH, CONTENT_TYPE, HOST};
         for (name, value) in ctx.headers.iter() {
-            if name == HOST || name == CONTENT_LENGTH || name == CONTENT_TYPE || name == AUTHORIZATION || name == X_API_KEY {
+            if name == HOST
+                || name == CONTENT_LENGTH
+                || name == CONTENT_TYPE
+                || name == AUTHORIZATION
+                || name == X_API_KEY
+            {
                 continue;
             }
             req = req.header(name, value);
         }
-        
+
         req
     }
-    
+
     /// Send the HTTP request and handle network errors
-    async fn send_http_request(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+    async fn send_http_request(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response> {
         request.send().await.map_err(|e| {
             Error::ServiceUnavailable(format!(
                 "Failed to send request to {}: {}",
@@ -277,29 +284,31 @@ impl HttpSink {
             ))
         })
     }
-    
+
     /// Validate response status and handle errors
-    async fn validate_response_status(&self, response: &reqwest::Response) -> Result<()> {
+    async fn validate_response_status(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<reqwest::Response> {
         let status = response.status();
         if status.is_success() {
-            return Ok(());
+            return Ok(response);
         }
-        
+
+        let code =
+            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+
         let error_body = response
             .text()
             .await
             .unwrap_or_else(|_| "Unable to read error".to_string());
-        
-        let code = StatusCode::from_u16(status.as_u16())
-            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        
+
         Err(Error::Rejected(
             code,
             format!("{} upstream error: {}", self.config.provider, error_body),
         ))
     }
 
-    
     /// Process response based on whether it's streaming or not
     async fn process_response(
         &self,
@@ -308,16 +317,20 @@ impl HttpSink {
     ) -> Result<ResponseStream> {
         let headers = self.extract_response_headers(&response);
         let is_streaming = self.is_streaming_response(&response, protocol);
-        
+
         if is_streaming {
-            self.process_streaming_response(response, protocol, headers).await
+            self.process_streaming_response(response, protocol, headers)
+                .await
         } else {
             self.process_non_streaming_response(response, headers).await
         }
     }
-    
+
     /// Extract headers from response
-    fn extract_response_headers(&self, response: &reqwest::Response) -> std::collections::HashMap<String, String> {
+    fn extract_response_headers(
+        &self,
+        response: &reqwest::Response,
+    ) -> std::collections::HashMap<String, String> {
         let mut headers = std::collections::HashMap::new();
         for (name, value) in response.headers().iter() {
             if let Ok(v) = value.to_str() {
@@ -326,14 +339,14 @@ impl HttpSink {
         }
         headers
     }
-    
+
     /// Check if response is a streaming response
     fn is_streaming_response(&self, response: &reqwest::Response, protocol: Protocol) -> bool {
         // OpenAI Responses are always treated as streaming
         if protocol == Protocol::OpenAIResponses {
             return true;
         }
-        
+
         // Check Content-Type header for SSE
         use http::header::CONTENT_TYPE;
         response
@@ -343,7 +356,7 @@ impl HttpSink {
             .map(|v| v.contains("text/event-stream"))
             .unwrap_or(false)
     }
-    
+
     /// Process a streaming SSE response
     async fn process_streaming_response(
         &self,
@@ -352,15 +365,14 @@ impl HttpSink {
         headers: std::collections::HashMap<String, String>,
     ) -> Result<ResponseStream> {
         let sse_stream = self.parse_sse_stream(response, protocol).await?;
-        
+
         // Prepend headers chunk to the stream
-        let stream = futures::stream::once(async move { 
-            Ok(ResponseChunk::Headers(headers)) 
-        }).chain(sse_stream);
-        
+        let stream = futures::stream::once(async move { Ok(ResponseChunk::Headers(headers)) })
+            .chain(sse_stream);
+
         Ok(Box::pin(stream))
     }
-    
+
     /// Process a non-streaming response
     async fn process_non_streaming_response(
         &self,
@@ -371,16 +383,16 @@ impl HttpSink {
             .text()
             .await
             .map_err(|e| Error::Internal(format!("Failed to read response: {e}")))?;
-        
+
         debug!("Non-streaming response: {}", text);
-        
+
         let content = if let Ok(body) = serde_json::from_str::<JsonValue>(&text) {
             body
         } else {
             // Fallback: return raw text as content rather than failing
             JsonValue::String(text)
         };
-        
+
         let chunks = vec![
             Ok(ResponseChunk::Headers(headers)),
             Ok(ResponseChunk::Content(content)),
@@ -390,9 +402,8 @@ impl HttpSink {
                 cost: None,
             }),
         ];
-        
+
         Ok(Box::pin(futures::stream::iter(chunks)))
-    }
     }
 
     /// Parse SSE stream into ResponseChunks

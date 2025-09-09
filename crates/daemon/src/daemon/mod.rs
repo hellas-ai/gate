@@ -5,8 +5,6 @@ pub mod rpc;
 pub mod server;
 
 pub use builder::DaemonBuilder;
-use gate_http::sinks::anthropic::AnthropicConfig;
-use utoipa_axum::router::OpenApiRouter;
 
 use self::rpc::DaemonRequest;
 use crate::Settings;
@@ -207,41 +205,42 @@ impl Daemon {
     pub async fn serve(self) -> Result<()> {
         // Get settings and create builder
         let settings = self.get_settings().await?;
-        let builder = server::ServerBuilder::new(self.clone(), settings.clone());
-        
+        let builder = server::ServerBuilder::new(self.clone(), Arc::new(settings));
+
         // Step 1: Bind listener early to fail fast
         let listener = builder.bind_listener().await?;
-        
+
         // Step 2: Get core services
         let state_backend = self.get_state_backend().await?;
-        
-        // Step 3: Initialize router and state
-        let router = builder.init_router();
+
+        // Step 3: Initialize state and router
         let state = builder.create_state().await?;
         let mut app_state = gate_http::AppState::new(state_backend.clone(), state);
-        
+        let router = builder.init_router(app_state.clone());
+
         // Step 4: Setup sink registry and register all sinks
         let sink_registry = std::sync::Arc::new(gate_core::router::registry::SinkRegistry::new());
         builder.register_sinks(&sink_registry).await?;
-        
+
         // Step 5: Setup sink index
         let sink_index = std::sync::Arc::new(gate_core::router::index::SinkIndex::new());
         sink_index.refresh_from_registry(&sink_registry).await;
-        
+
         // Step 6: Build core router with strategies and middleware
-        let router_core = builder.build_router_core(state_backend, sink_registry, sink_index).await;
+        let router_core = builder
+            .build_router_core(state_backend, sink_registry, sink_index)
+            .await;
         app_state = app_state.with_router(router_core);
-        
+
         // Step 7: Build complete application with all middleware
         let app = builder.build_app(router, app_state).await;
-        
+
         // Step 8: Serve the application
         let make_svc = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
         axum::serve(listener, make_svc)
             .await
             .map_err(DaemonError::Io)?;
-        
+
         Ok(())
     }
 }
-

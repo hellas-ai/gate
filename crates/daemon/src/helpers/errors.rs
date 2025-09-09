@@ -7,7 +7,7 @@ use std::fmt::Display;
 pub trait ErrorMapExt<T> {
     /// Map any error to an InternalServerError with a formatted message
     fn map_internal_error(self) -> Result<T, HttpError>;
-    
+
     /// Map any error to an InternalServerError with a custom context
     fn map_internal_error_with_context(self, context: &str) -> Result<T, HttpError>;
 }
@@ -19,7 +19,7 @@ where
     fn map_internal_error(self) -> Result<T, HttpError> {
         self.map_err(|e| HttpError::InternalServerError(e.to_string()))
     }
-    
+
     fn map_internal_error_with_context(self, context: &str) -> Result<T, HttpError> {
         self.map_err(|e| HttpError::InternalServerError(format!("{}: {}", context, e)))
     }
@@ -35,7 +35,7 @@ pub fn bad_request(message: impl Into<String>) -> HttpError {
     HttpError::BadRequest(message.into())
 }
 
-/// Helper function to create a Forbidden error  
-pub fn forbidden(message: impl Into<String>) -> HttpError {
-    HttpError::Forbidden(message.into())
+/// Helper function to create an AuthorizationFailed error  
+pub fn authorization_failed(message: impl Into<String>) -> HttpError {
+    HttpError::AuthorizationFailed(message.into())
 }

@@ -172,7 +172,7 @@ mod tests {
     use gate_sqlx::SqliteStateBackend;
     use tokio::sync::mpsc;
 
-    async fn make_minimal_state(allow_local_bypass: bool) -> MinimalState {
+    async fn make_minimal_state(allow_local_bypass: bool) -> State {
         // Build a lightweight AuthService stack (will not be exercised in these tests)
         let jwt_service = Arc::new(JwtService::new(JwtSvcConfig::new(
             "test-secret".to_string(),
@@ -196,7 +196,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel::<DaemonRequest>(1);
         let daemon = crate::daemon::Daemon::new(tx, None);
 
-        MinimalState::new(
+        State::new(
             auth_service,
             daemon,
             allow_local_bypass,

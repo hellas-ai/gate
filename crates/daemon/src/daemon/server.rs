@@ -1,15 +1,15 @@
 //! Server-related functionality extracted from daemon/mod.rs
 
 use crate::{
-    config::{ProviderType, Settings},
+    State,
+    config::{ProviderConfig, ProviderType, Settings},
     daemon::{Daemon, Result},
     error::DaemonError,
-    helpers::errors::ErrorMapExt,
-    services::key_capture::DaemonKeyRegistrar,
     services::LocalInferenceService,
+    services::key_capture::DaemonKeyRegistrar,
     sinks::catgrad_sink::CatgradSink,
-    State,
 };
+use axum::http::HeaderName;
 use gate_core::{
     router::{
         index::SinkIndex,
@@ -21,13 +21,20 @@ use gate_core::{
     state::StateBackend,
 };
 use gate_http::{
-    sinks::{
-        anthropic::{create_fallback_sink as create_anthropic_fallback, create_sink as create_anthropic_sink, AnthropicConfig},
-        openai::{create_codex_fallback_sink, create_fallback_sink as create_openai_fallback, create_sink as create_openai_sink, OpenAIConfig},
-    },
     AppState,
+    sinks::{
+        anthropic::{
+            AnthropicConfig, create_fallback_sink as create_anthropic_fallback,
+            create_sink as create_anthropic_sink,
+        },
+        openai::{
+            OpenAIConfig, create_codex_fallback_sink,
+            create_fallback_sink as create_openai_fallback, create_sink as create_openai_sink,
+        },
+    },
 };
 use std::sync::Arc;
+use tower_http::services::{ServeDir, ServeFile};
 use tracing::{info, warn};
 use utoipa_axum::router::OpenApiRouter;
 
@@ -44,7 +51,10 @@ impl ServerBuilder {
 
     /// Build and bind TCP listener
     pub async fn bind_listener(&self) -> Result<tokio::net::TcpListener> {
-        let addr = format!("{}:{}", self.settings.server.host, self.settings.server.port);
+        let addr = format!(
+            "{}:{}",
+            self.settings.server.host, self.settings.server.port
+        );
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
             .map_err(DaemonError::Io)?;
@@ -53,8 +63,8 @@ impl ServerBuilder {
     }
 
     /// Initialize base router with authentication routes
-    pub fn init_router(&self) -> OpenApiRouter {
-        let router = OpenApiRouter::new();
+    pub fn init_router(&self, app_state: AppState<State>) -> OpenApiRouter<AppState<State>> {
+        let router = OpenApiRouter::new().with_state(app_state);
         let router = crate::routes::auth::add_routes(router);
         let router = crate::routes::config::add_routes(router);
         crate::routes::admin::add_routes(router)
@@ -63,9 +73,9 @@ impl ServerBuilder {
     /// Create state for the application
     pub async fn create_state(&self) -> Result<State> {
         let auth_service = self.daemon.get_auth_service().await?;
-        let allow_local_bypass = self.settings.server.allow_local_bypass 
-            && is_local_host(&self.settings.server.host);
-        
+        let allow_local_bypass =
+            self.settings.server.allow_local_bypass && is_local_host(&self.settings.server.host);
+
         Ok(State::new(
             auth_service,
             self.daemon.clone(),
@@ -117,7 +127,10 @@ impl ServerBuilder {
     }
 
     /// Create a provider sink based on configuration
-    async fn create_provider_sink(&self, config: &ProviderConfig) -> Result<Arc<dyn gate_core::router::sink::Sink>> {
+    async fn create_provider_sink(
+        &self,
+        config: &ProviderConfig,
+    ) -> Result<Arc<dyn gate_core::router::sink::Sink>> {
         match config.provider {
             ProviderType::Anthropic => {
                 let anthropic_config = AnthropicConfig {
@@ -128,24 +141,28 @@ impl ServerBuilder {
                 };
                 create_anthropic_sink(anthropic_config)
                     .await
-                    .map(Arc::new)
-                    .map_err(|e| DaemonError::Other(e.to_string()))
+                    .map(|sink| Arc::new(sink) as Arc<dyn gate_core::router::sink::Sink>)
+                    .map_err(|e| DaemonError::ServiceUnavailable(e.to_string()))
             }
             ProviderType::OpenAI => {
                 let openai_config = OpenAIConfig {
                     api_key: config.api_key.clone(),
                     base_url: Some(config.base_url.clone()),
-                    models: if config.models.is_empty() { None } else { Some(config.models.clone()) },
+                    models: if config.models.is_empty() {
+                        None
+                    } else {
+                        Some(config.models.clone())
+                    },
                     timeout_seconds: Some(config.timeout_seconds),
                     sink_id: Some(format!("provider://openai/{}", config.name)),
                 };
                 create_openai_sink(openai_config)
-                    .map(Arc::new)
-                    .map_err(|e| DaemonError::Other(e.to_string()))
+                    .map(|sink| Arc::new(sink) as Arc<dyn gate_core::router::sink::Sink>)
+                    .map_err(|e| DaemonError::ServiceUnavailable(e.to_string()))
             }
-            ProviderType::Custom => {
-                Err(DaemonError::Other("Custom provider type not yet implemented".to_string()))
-            }
+            ProviderType::Custom => Err(DaemonError::ConfigError(
+                "Custom provider type not yet implemented".to_string(),
+            )),
         }
     }
 
@@ -153,8 +170,12 @@ impl ServerBuilder {
     async fn register_anthropic_fallback(&self, registry: &Arc<SinkRegistry>) {
         match create_anthropic_fallback().await {
             Ok(sink) => {
-                registry.register("provider://anthropic/fallback".to_string(), Arc::new(sink)).await;
-                info!("Registered fallback Anthropic sink (no API key; will capture on first success)");
+                registry
+                    .register("provider://anthropic/fallback".to_string(), Arc::new(sink))
+                    .await;
+                info!(
+                    "Registered fallback Anthropic sink (no API key; will capture on first success)"
+                );
             }
             Err(e) => warn!("Failed to create fallback Anthropic sink: {}", e),
         }
@@ -165,7 +186,9 @@ impl ServerBuilder {
         // Standard OpenAI fallback
         match create_openai_fallback() {
             Ok(sink) => {
-                registry.register("provider://openai/fallback".to_string(), Arc::new(sink)).await;
+                registry
+                    .register("provider://openai/fallback".to_string(), Arc::new(sink))
+                    .await;
                 info!("Registered fallback OpenAI sink (no API key; will accept client keys)");
             }
             Err(e) => warn!("Failed to create fallback OpenAI sink: {}", e),
@@ -174,7 +197,9 @@ impl ServerBuilder {
         // Codex fallback for ChatGPT backend
         match create_codex_fallback_sink() {
             Ok(sink) => {
-                registry.register("provider://openai/codex".to_string(), Arc::new(sink)).await;
+                registry
+                    .register("provider://openai/codex".to_string(), Arc::new(sink))
+                    .await;
                 info!("Registered fallback OpenAI Codex sink (OAuth tokens; /backend-api/codex)");
             }
             Err(e) => warn!("Failed to create fallback OpenAI Codex sink: {}", e),
@@ -182,7 +207,11 @@ impl ServerBuilder {
     }
 
     /// Register Catgrad sink for local inference
-    async fn register_catgrad_sink(&self, registry: &Arc<SinkRegistry>, inf_cfg: &crate::config::LocalInferenceConfig) {
+    async fn register_catgrad_sink(
+        &self,
+        registry: &Arc<SinkRegistry>,
+        inf_cfg: &crate::config::LocalInferenceConfig,
+    ) {
         match LocalInferenceService::new(inf_cfg.clone()) {
             Ok(_) => {
                 let sink = Arc::new(CatgradSink::new("self://catgrad", inf_cfg.models.clone()));
@@ -227,7 +256,7 @@ impl ServerBuilder {
                 .allow_origin(tower_http::cors::Any)
                 .allow_methods(tower_http::cors::Any)
                 .allow_headers(vec![
-                    axum::http::CONTENT_TYPE,
+                    axum::http::header::CONTENT_TYPE,
                     axum::http::header::AUTHORIZATION,
                     HeaderName::from_static("x-correlation-id"),
                     HeaderName::from_static("x-api-key"),
@@ -240,7 +269,9 @@ impl ServerBuilder {
                     HeaderName::from_static("tracestate"),
                 ]),
         )
-        .layer(axum::middleware::from_fn(gate_http::middleware::correlation_id_middleware))
+        .layer(axum::middleware::from_fn(
+            gate_http::middleware::correlation_id_middleware,
+        ))
     }
 
     /// Add static file serving if configured
@@ -249,8 +280,7 @@ impl ServerBuilder {
             if std::path::Path::new(static_dir).exists() {
                 info!("Serving static files from: {}", static_dir);
                 let index_path = format!("{static_dir}/index.html");
-                let serve_dir = ServeDir::new(static_dir)
-                    .fallback(ServeFile::new(index_path));
+                let serve_dir = ServeDir::new(static_dir).fallback(ServeFile::new(index_path));
                 return app.fallback_service(serve_dir);
             } else {
                 warn!("Static directory not found: {}", static_dir);
@@ -260,14 +290,21 @@ impl ServerBuilder {
     }
 
     /// Build the complete application
-    pub async fn build_app(&self, router: OpenApiRouter, app_state: AppState<State>) -> axum::Router {
-        let app = router
-            .split_for_parts()
-            .0
+    pub async fn build_app(
+        &self,
+        router: OpenApiRouter<AppState<State>>,
+        app_state: AppState<State>,
+    ) -> axum::Router {
+        // Convert OpenApiRouter with state to regular Router
+        let app: axum::Router = router.into();
+
+        let app = app
+            // Merge routes that need state
             .merge(gate_http::routes::models::router())
             .merge(gate_http::routes::inference::router())
-            .with_state(app_state.clone())
+            // Merge routes that don't need state
             .merge(gate_http::routes::observability::router())
+            // Apply auth middleware
             .route_layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 gate_http::middleware::auth::auth_middleware::<State>,
