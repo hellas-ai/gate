@@ -21,14 +21,14 @@ impl<'a> ServiceAccessor<'a> {
         &self,
     ) -> Result<Arc<crate::permissions::LocalPermissionManager>, HttpError> {
         self.daemon.get_permission_manager().await.map_err(|e| {
-            HttpError::InternalServerError(format!("Failed to get permission manager: {}", e))
+            HttpError::InternalServerError(format!("Failed to get permission manager: {e}"))
         })
     }
 
     /// Get the state backend with standard error handling
     pub async fn state_backend(&self) -> Result<Arc<dyn StateBackend>, HttpError> {
         self.daemon.get_state_backend().await.map_err(|e| {
-            HttpError::InternalServerError(format!("Failed to get state backend: {}", e))
+            HttpError::InternalServerError(format!("Failed to get state backend: {e}"))
         })
     }
 

@@ -7,7 +7,6 @@ HTTP layer for Gate, providing OpenAI/Anthropic-compatible API routing, middlewa
 - **API Routes**: OpenAI/Anthropic compatible endpoints (`/v1/chat/completions`, `/v1/messages`)
 - **Middleware**: Authentication, tracing, WebAuthn support
 - **Request Forwarding**: Routes requests to upstream providers (OpenAI, Anthropic, etc.)
-- **OpenAPI Documentation**: Auto-generated API docs via Utoipa
 - **Client Library**: Type-safe client for Gate APIs
 
 ## Organization
@@ -74,7 +73,6 @@ let response = client.chat_completion(request).await?;
 
 Server (heavy):
 - `axum`, `tower`, `hyper`: HTTP server stack
-- `utoipa`: OpenAPI generation
 - `webauthn-rs`: Hardware auth (native only)
 - `jsonwebtoken`: JWT handling
 

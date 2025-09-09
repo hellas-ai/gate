@@ -58,7 +58,7 @@ impl AdminPermissionHelper {
                     object,
                     e
                 );
-                HttpError::AuthorizationFailed(format!("Insufficient permissions: {}", e))
+                HttpError::AuthorizationFailed(format!("Insufficient permissions: {e}"))
             })
     }
 

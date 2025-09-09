@@ -5,7 +5,6 @@ use serde_json::Value as JsonValue;
 
 /// Anthropic Messages request
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct AnthropicMessagesRequest {
     pub model: String,
     #[serde(default)]
@@ -16,7 +15,6 @@ pub struct AnthropicMessagesRequest {
 
 /// OpenAI Chat Completion request
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct OpenAIChatCompletionRequest {
     pub model: String,
     #[serde(default)]
@@ -27,7 +25,6 @@ pub struct OpenAIChatCompletionRequest {
 
 /// OpenAI Completion request (legacy)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct OpenAICompletionRequest {
     pub model: String,
     #[serde(default)]
@@ -38,7 +35,6 @@ pub struct OpenAICompletionRequest {
 
 /// Registration start request
 #[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct RegisterStartRequest {
     /// Display name for the account
     pub name: String,
@@ -46,7 +42,6 @@ pub struct RegisterStartRequest {
 
 /// Registration start response
 #[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct RegisterStartResponse {
     /// WebAuthn challenge data (as JSON)
     pub challenge: JsonValue,
@@ -56,7 +51,6 @@ pub struct RegisterStartResponse {
 
 /// Registration complete request
 #[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct RegisterCompleteRequest {
     /// Session ID from registration start
     pub session_id: String,
@@ -72,7 +66,6 @@ pub struct RegisterCompleteRequest {
 
 /// Registration complete response
 #[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct RegisterCompleteResponse {
     /// User ID (same as credential ID)
     pub user_id: String,
@@ -86,7 +79,6 @@ pub struct RegisterCompleteResponse {
 
 /// Authentication start response
 #[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct AuthStartResponse {
     /// WebAuthn challenge data (as JSON)
     pub challenge: JsonValue,
@@ -96,7 +88,6 @@ pub struct AuthStartResponse {
 
 /// Authentication complete request
 #[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct AuthCompleteRequest {
     /// Session ID from auth start
     pub session_id: String,
@@ -106,7 +97,6 @@ pub struct AuthCompleteRequest {
 
 /// Authentication complete response
 #[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct AuthCompleteResponse {
     /// User ID
     pub user_id: String,
@@ -118,7 +108,6 @@ pub struct AuthCompleteResponse {
 
 /// Configuration response
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct ConfigResponse {
     /// The configuration data as JSON
     pub config: JsonValue,
@@ -126,7 +115,6 @@ pub struct ConfigResponse {
 
 /// Configuration update request
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct ConfigUpdateRequest {
     /// The new configuration data as JSON
     pub config: JsonValue,
@@ -134,7 +122,6 @@ pub struct ConfigUpdateRequest {
 
 /// Configuration patch request for updating specific paths
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct ConfigPatchRequest {
     /// The value to set at the specified path
     pub value: JsonValue,
@@ -142,7 +129,6 @@ pub struct ConfigPatchRequest {
 
 /// Health check response
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct HealthCheckResponse {
     /// Health status (e.g., "healthy", "degraded", "unhealthy")
     pub status: String,
@@ -156,7 +142,6 @@ pub struct HealthCheckResponse {
 
 /// Model information in OpenAI format
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct ModelInfo {
     /// Model identifier
     pub id: String,
@@ -173,7 +158,6 @@ pub struct ModelInfo {
 
 /// OpenAI-compatible models list response
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct ModelsListResponse {
     /// Object type (always "list")
     pub object: String,

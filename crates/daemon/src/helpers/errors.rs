@@ -21,13 +21,13 @@ where
     }
 
     fn map_internal_error_with_context(self, context: &str) -> Result<T, HttpError> {
-        self.map_err(|e| HttpError::InternalServerError(format!("{}: {}", context, e)))
+        self.map_err(|e| HttpError::InternalServerError(format!("{context}: {e}")))
     }
 }
 
 /// Helper function to create a NotFound error
 pub fn not_found(entity: &str, id: &str) -> HttpError {
-    HttpError::NotFound(format!("{} '{}' not found", entity, id))
+    HttpError::NotFound(format!("{entity} '{id}' not found"))
 }
 
 /// Helper function to create a BadRequest error

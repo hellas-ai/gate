@@ -2,8 +2,10 @@
 
 use crate::helpers::{admin::AdminPermissionHelper, errors::ErrorMapExt};
 use axum::{
+    Router,
     extract::{Path, State},
     response::Json,
+    routing::{delete, get, patch, post},
 };
 use gate_core::access::{
     Action, ObjectId, ObjectIdentity, ObjectKind, PermissionManager, TargetNamespace,
@@ -11,10 +13,9 @@ use gate_core::access::{
 use gate_core::types::User;
 use gate_http::{AppState, error::HttpError, services::HttpIdentity};
 use serde::{Deserialize, Serialize};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 // Re-use existing type definitions
-#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct UserListResponse {
     pub users: Vec<UserInfo>,
     pub total: usize,
@@ -22,7 +23,7 @@ pub struct UserListResponse {
     pub page_size: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct UserInfo {
     pub id: String,
     pub name: Option<String>,
@@ -46,7 +47,7 @@ impl From<User> for UserInfo {
     }
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
+#[derive(Debug, Deserialize)]
 pub struct ListUsersQuery {
     #[serde(default = "default_page")]
     pub page: usize,
@@ -62,48 +63,35 @@ fn default_page_size() -> usize {
     20
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize)]
 pub struct UpdateUserStatusRequest {
     pub enabled: bool,
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct UpdateUserStatusResponse {
     pub user: UserInfo,
 }
 
-#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct UserPermission {
     pub action: String,
     pub object: String,
     pub granted_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct UserPermissionsResponse {
     pub permissions: Vec<UserPermission>,
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize)]
 pub struct GrantPermissionRequest {
     pub action: String,
     pub object: String,
 }
 
 /// List all users (admin only)
-#[utoipa::path(
-    get,
-    path = "/api/admin/users",
-    params(ListUsersQuery),
-    responses(
-        (status = 200, description = "List of users", body = UserListResponse),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden - admin access required"),
-        (status = 500, description = "Internal server error"),
-    ),
-    security(("bearer" = [])),
-    tag = "admin"
-)]
 #[instrument(name = "list_users", skip(app_state), fields(page = %query.page, page_size = %query.page_size))]
 pub async fn list_users(
     identity: HttpIdentity,
@@ -137,7 +125,7 @@ pub async fn list_users(
             u.id.to_lowercase().contains(&search_lower)
                 || u.name
                     .as_ref()
-                    .map_or(false, |n| n.to_lowercase().contains(&search_lower))
+                    .is_some_and(|n| n.to_lowercase().contains(&search_lower))
         });
     }
 
@@ -162,20 +150,6 @@ pub async fn list_users(
 }
 
 /// Get a specific user (admin only)
-#[utoipa::path(
-    get,
-    path = "/api/admin/users/{user_id}",
-    params(("user_id" = String, Path, description = "User ID")),
-    responses(
-        (status = 200, description = "User details", body = UserInfo),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden - admin access required"),
-        (status = 404, description = "User not found"),
-        (status = 500, description = "Internal server error"),
-    ),
-    security(("bearer" = [])),
-    tag = "admin"
-)]
 #[instrument(name = "get_user", skip(app_state), fields(target_user_id = %user_id))]
 pub async fn get_user(
     identity: HttpIdentity,
@@ -207,21 +181,6 @@ pub async fn get_user(
 }
 
 /// Delete a user (admin only)
-#[utoipa::path(
-    delete,
-    path = "/api/admin/users/{user_id}",
-    params(("user_id" = String, Path, description = "User ID")),
-    responses(
-        (status = 204, description = "User deleted"),
-        (status = 400, description = "Bad request - cannot delete self"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden - admin access required"),
-        (status = 404, description = "User not found"),
-        (status = 500, description = "Internal server error"),
-    ),
-    security(("bearer" = [])),
-    tag = "admin"
-)]
 #[instrument(name = "delete_user", skip(app_state), fields(target_user_id = %user_id))]
 pub async fn delete_user(
     identity: HttpIdentity,
@@ -269,22 +228,6 @@ pub async fn delete_user(
 }
 
 /// Update user status (enable/disable)
-#[utoipa::path(
-    patch,
-    path = "/api/admin/users/{user_id}/status",
-    params(("user_id" = String, Path, description = "User ID")),
-    request_body = UpdateUserStatusRequest,
-    responses(
-        (status = 200, description = "User status updated", body = UpdateUserStatusResponse),
-        (status = 400, description = "Bad request"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden - admin access required"),
-        (status = 404, description = "User not found"),
-        (status = 500, description = "Internal server error"),
-    ),
-    security(("bearer" = [])),
-    tag = "admin"
-)]
 #[instrument(name = "update_user_status", skip(app_state), fields(target_user_id = %user_id, enabled = %request.enabled))]
 pub async fn update_user_status(
     identity: HttpIdentity,
@@ -351,20 +294,6 @@ pub async fn update_user_status(
 }
 
 /// Get user permissions
-#[utoipa::path(
-    get,
-    path = "/api/admin/users/{user_id}/permissions",
-    params(("user_id" = String, Path, description = "User ID")),
-    responses(
-        (status = 200, description = "User permissions", body = UserPermissionsResponse),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden - admin access required"),
-        (status = 404, description = "User not found"),
-        (status = 500, description = "Internal server error"),
-    ),
-    security(("bearer" = [])),
-    tag = "admin"
-)]
 #[instrument(name = "get_user_permissions", skip(app_state), fields(target_user_id = %user_id))]
 pub async fn get_user_permissions(
     identity: HttpIdentity,
@@ -409,22 +338,6 @@ pub async fn get_user_permissions(
 }
 
 /// Grant permission to user
-#[utoipa::path(
-    post,
-    path = "/api/admin/users/{user_id}/permissions",
-    params(("user_id" = String, Path, description = "User ID")),
-    request_body = GrantPermissionRequest,
-    responses(
-        (status = 201, description = "Permission granted"),
-        (status = 400, description = "Bad request - invalid permission"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden - admin access required"),
-        (status = 404, description = "User not found"),
-        (status = 500, description = "Internal server error"),
-    ),
-    security(("bearer" = [])),
-    tag = "admin"
-)]
 #[instrument(name = "grant_user_permission", skip(app_state), fields(target_user_id = %user_id, action = %request.action, object = %request.object))]
 pub async fn grant_user_permission(
     identity: HttpIdentity,
@@ -467,14 +380,14 @@ pub async fn grant_user_permission(
         .get_user(&user_id)
         .await
         .map_internal_error()?
-        .ok_or_else(|| HttpError::NotFound(format!("User {} not found", user_id)))?;
+        .ok_or_else(|| HttpError::NotFound(format!("User {user_id} not found")))?;
 
     let grantee_identity = gate_core::access::SubjectIdentity::new(
         grantee_user.id.clone(),
         "user",
         crate::permissions::LocalContext {
             is_owner: false,
-            node_id: None,
+            node_id: "local".to_string(),
         },
     );
 
@@ -493,25 +406,6 @@ pub async fn grant_user_permission(
 }
 
 /// Revoke permission from user
-#[utoipa::path(
-    delete,
-    path = "/api/admin/users/{user_id}/permissions",
-    params(
-        ("user_id" = String, Path, description = "User ID"),
-        ("action" = String, Query, description = "Action to revoke"),
-        ("object" = String, Query, description = "Object to revoke permission on")
-    ),
-    responses(
-        (status = 204, description = "Permission revoked"),
-        (status = 400, description = "Bad request - invalid permission"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden - admin access required"),
-        (status = 404, description = "User not found"),
-        (status = 500, description = "Internal server error"),
-    ),
-    security(("bearer" = [])),
-    tag = "admin"
-)]
 #[instrument(name = "revoke_user_permission", skip(app_state))]
 pub async fn revoke_user_permission(
     identity: HttpIdentity,
@@ -548,11 +442,11 @@ pub async fn revoke_user_permission(
         .ok_or_else(|| HttpError::NotFound(format!("User {user_id} not found")))?;
 
     // Parse action and object
-    let action_enum = parse_action(&action)
-        .ok_or_else(|| HttpError::BadRequest(format!("Invalid action: {}", action)))?;
+    let action_enum = parse_action(action)
+        .ok_or_else(|| HttpError::BadRequest(format!("Invalid action: {action}")))?;
 
     let object_identity = parse_object_identity(object)
-        .ok_or_else(|| HttpError::BadRequest(format!("Invalid object format: {}", object)))?;
+        .ok_or_else(|| HttpError::BadRequest(format!("Invalid object format: {object}")))?;
 
     // Create identity for the user losing the permission
     let subject_identity = gate_core::access::SubjectIdentity::new(
@@ -560,7 +454,7 @@ pub async fn revoke_user_permission(
         "user",
         crate::permissions::LocalContext {
             is_owner: false,
-            node_id: None,
+            node_id: "local".to_string(),
         },
     );
 
@@ -634,14 +528,26 @@ fn parse_object_identity(s: &str) -> Option<ObjectIdentity> {
 
 /// Add admin routes
 pub fn add_routes(
-    router: OpenApiRouter<gate_http::AppState<crate::State>>,
-) -> OpenApiRouter<gate_http::AppState<crate::State>> {
+    router: Router<gate_http::AppState<crate::State>>,
+) -> Router<gate_http::AppState<crate::State>> {
     router
-        .routes(routes!(list_users))
-        .routes(routes!(get_user))
-        .routes(routes!(delete_user))
-        .routes(routes!(update_user_status))
-        .routes(routes!(get_user_permissions))
-        .routes(routes!(grant_user_permission))
-        .routes(routes!(revoke_user_permission))
+        .route("/api/admin/users", get(list_users))
+        .route("/api/admin/users/:user_id", get(get_user))
+        .route("/api/admin/users/:user_id", delete(delete_user))
+        .route(
+            "/api/admin/users/:user_id/status",
+            patch(update_user_status),
+        )
+        .route(
+            "/api/admin/users/:user_id/permissions",
+            get(get_user_permissions),
+        )
+        .route(
+            "/api/admin/users/:user_id/permissions",
+            post(grant_user_permission),
+        )
+        .route(
+            "/api/admin/users/:user_id/permissions",
+            delete(revoke_user_permission),
+        )
 }

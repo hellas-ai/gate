@@ -36,9 +36,7 @@ use gate_http::{
 use std::sync::Arc;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::{info, warn};
-use utoipa_axum::router::OpenApiRouter;
 
-/// Server builder to reduce complexity of serve() method
 pub struct ServerBuilder {
     daemon: Daemon,
     settings: Arc<Settings>,
@@ -63,8 +61,11 @@ impl ServerBuilder {
     }
 
     /// Initialize base router with authentication routes
-    pub fn init_router(&self, app_state: AppState<State>) -> OpenApiRouter<AppState<State>> {
-        let router = OpenApiRouter::new().with_state(app_state);
+    ///
+    /// Returns a router that is missing `AppState<State>`.
+    /// The actual state value is supplied at the end before serving.
+    pub fn init_router(&self) -> axum::Router<AppState<State>> {
+        let router: axum::Router<AppState<State>> = axum::Router::new();
         let router = crate::routes::auth::add_routes(router);
         let router = crate::routes::config::add_routes(router);
         crate::routes::admin::add_routes(router)
@@ -250,7 +251,10 @@ impl ServerBuilder {
     }
 
     /// Configure middleware layers
-    pub fn configure_middleware(&self, app: axum::Router) -> axum::Router {
+    pub fn configure_middleware<S>(&self, app: axum::Router<S>) -> axum::Router<S>
+    where
+        S: Clone + Send + Sync + 'static,
+    {
         app.layer(
             tower_http::cors::CorsLayer::new()
                 .allow_origin(tower_http::cors::Any)
@@ -275,7 +279,10 @@ impl ServerBuilder {
     }
 
     /// Add static file serving if configured
-    pub fn add_static_serving(&self, app: axum::Router) -> axum::Router {
+    pub fn add_static_serving<S>(&self, app: axum::Router<S>) -> axum::Router<S>
+    where
+        S: Clone + Send + Sync + 'static,
+    {
         if let Some(static_dir) = &self.daemon.static_dir {
             if std::path::Path::new(static_dir).exists() {
                 info!("Serving static files from: {}", static_dir);
@@ -292,11 +299,10 @@ impl ServerBuilder {
     /// Build the complete application
     pub async fn build_app(
         &self,
-        router: OpenApiRouter<AppState<State>>,
+        router: axum::Router<AppState<State>>,
         app_state: AppState<State>,
-    ) -> axum::Router {
-        // Convert OpenApiRouter with state to regular Router
-        let app: axum::Router = router.into();
+    ) -> axum::Router<AppState<State>> {
+        let app: axum::Router<AppState<State>> = router;
 
         let app = app
             // Merge routes that need state
@@ -324,8 +330,8 @@ fn is_local_host(host: &str) -> bool {
 /// Format provider sink ID
 fn format_provider_sink_id(provider: &ProviderType, name: &str) -> String {
     match provider {
-        ProviderType::Anthropic => format!("provider://anthropic/{}", name),
-        ProviderType::OpenAI => format!("provider://openai/{}", name),
-        ProviderType::Custom => format!("provider://{}", name),
+        ProviderType::Anthropic => format!("provider://anthropic/{name}"),
+        ProviderType::OpenAI => format!("provider://openai/{name}"),
+        ProviderType::Custom => format!("provider://{name}"),
     }
 }

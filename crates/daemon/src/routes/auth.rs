@@ -1,6 +1,10 @@
 //! Custom authentication routes with registration control
 
 use crate::types::BootstrapStatusResponse;
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use axum::{extract::State, response::Json};
 use chrono::{DateTime, Utc};
 use gate_core::User;
@@ -12,18 +16,8 @@ use gate_http::{
         RegisterCompleteResponse, RegisterStartRequest, RegisterStartResponse,
     },
 };
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 /// Check bootstrap status
-#[utoipa::path(
-    get,
-    path = "/auth/bootstrap/status",
-    responses(
-        (status = 200, description = "Bootstrap status", body = BootstrapStatusResponse),
-        (status = 500, description = "Internal server error"),
-    ),
-    tag = "authentication"
-)]
 #[instrument(name = "get_bootstrap_status", skip(state))]
 pub async fn get_bootstrap_status(
     State(state): State<gate_http::AppState<crate::State>>,
@@ -52,7 +46,7 @@ pub async fn get_bootstrap_status(
     }))
 }
 
-#[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct CurrentUser {
     pub id: String,
     pub name: Option<String>,
@@ -73,18 +67,7 @@ impl From<User> for CurrentUser {
 
 /// Complete WebAuthn registration with bootstrap token validation
 /// This endpoint is specifically for the first-time setup with a bootstrap token
-#[utoipa::path(
-    post,
-    path = "/auth/webauthn/register/bootstrap",
-    request_body = RegisterCompleteRequest,
-    responses(
-        (status = 200, description = "Bootstrap registration completed", body = RegisterCompleteResponse),
-        (status = 400, description = "Bad request"),
-        (status = 403, description = "Invalid or missing bootstrap token"),
-        (status = 500, description = "Internal server error"),
-    ),
-    tag = "authentication"
-)]
+/// Complete WebAuthn registration with bootstrap token validation (first-time setup)
 #[instrument(
     name = "bootstrap_register",
     skip(state, request),
@@ -196,17 +179,6 @@ pub async fn register_with_bootstrap(
 }
 
 /// Start WebAuthn registration
-#[utoipa::path(
-    post,
-    path = "/auth/webauthn/register/start",
-    request_body = RegisterStartRequest,
-    responses(
-        (status = 200, description = "Registration started", body = RegisterStartResponse),
-        (status = 400, description = "Bad request"),
-        (status = 500, description = "Internal server error"),
-    ),
-    tag = "authentication"
-)]
 #[instrument(
     name = "webauthn_register_start",
     skip(state),
@@ -235,18 +207,6 @@ pub async fn register_start(
 }
 
 /// Complete WebAuthn registration
-#[utoipa::path(
-    post,
-    path = "/auth/webauthn/register/complete",
-    request_body = RegisterCompleteRequest,
-    responses(
-        (status = 200, description = "Registration completed", body = RegisterCompleteResponse),
-        (status = 400, description = "Bad request"),
-        (status = 403, description = "Registration not allowed"),
-        (status = 500, description = "Internal server error"),
-    ),
-    tag = "authentication"
-)]
 #[instrument(
     name = "webauthn_register_complete",
     skip(state, request),
@@ -294,16 +254,6 @@ pub async fn register_complete(
 }
 
 /// Start WebAuthn authentication
-#[utoipa::path(
-    post,
-    path = "/auth/webauthn/authenticate/start",
-    responses(
-        (status = 200, description = "Authentication started", body = AuthStartResponse),
-        (status = 404, description = "No credentials found"),
-        (status = 500, description = "Internal server error"),
-    ),
-    tag = "authentication"
-)]
 #[instrument(name = "webauthn_auth_start", skip(state))]
 pub async fn auth_start(
     State(state): State<gate_http::AppState<crate::State>>,
@@ -325,18 +275,6 @@ pub async fn auth_start(
 }
 
 /// Complete WebAuthn authentication
-#[utoipa::path(
-    post,
-    path = "/auth/webauthn/authenticate/complete",
-    request_body = AuthCompleteRequest,
-    responses(
-        (status = 200, description = "Authentication completed", body = AuthCompleteResponse),
-        (status = 401, description = "Authentication failed"),
-        (status = 404, description = "User not found"),
-        (status = 500, description = "Internal server error"),
-    ),
-    tag = "authentication"
-)]
 #[instrument(
     name = "webauthn_auth_complete",
     skip(state, request),
@@ -375,19 +313,6 @@ pub async fn auth_complete(
 }
 
 /// Get current user information
-#[utoipa::path(
-    get,
-    path = "/api/auth/me",
-    operation_id = "get_current_user",
-    description = "Get current user information",
-    responses(
-        (status = 200, description = "User information", body = CurrentUser),
-        (status = 401, description = "Unauthorized")
-    ),
-    security(
-        ("BearerAuth" = [])
-    )
-)]
 async fn get_current_user(
     State(state): State<gate_http::AppState<crate::State>>,
     identity: HttpIdentity,
@@ -411,14 +336,17 @@ async fn get_current_user(
 
 /// Add custom auth routes
 pub fn add_routes(
-    router: OpenApiRouter<gate_http::AppState<crate::State>>,
-) -> OpenApiRouter<gate_http::AppState<crate::State>> {
+    router: Router<gate_http::AppState<crate::State>>,
+) -> Router<gate_http::AppState<crate::State>> {
     router
-        .routes(routes!(get_bootstrap_status))
-        .routes(routes!(get_current_user))
-        .routes(routes!(register_with_bootstrap))
-        .routes(routes!(register_start))
-        .routes(routes!(register_complete))
-        .routes(routes!(auth_start))
-        .routes(routes!(auth_complete))
+        .route("/auth/bootstrap/status", get(get_bootstrap_status))
+        .route(
+            "/auth/webauthn/register/bootstrap",
+            post(register_with_bootstrap),
+        )
+        .route("/auth/webauthn/register/start", post(register_start))
+        .route("/auth/webauthn/register/complete", post(register_complete))
+        .route("/auth/webauthn/authenticate/start", post(auth_start))
+        .route("/auth/webauthn/authenticate/complete", post(auth_complete))
+        .route("/api/auth/me", get(get_current_user))
 }
