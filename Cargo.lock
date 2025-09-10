@@ -3905,7 +3905,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -4398,7 +4398,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6787,7 +6787,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "thiserror 2.0.16",
  "tokio",
  "tracing",
@@ -6824,7 +6824,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -7328,7 +7328,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7409,7 +7409,7 @@ dependencies = [
  "security-framework 3.3.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -11132,7 +11132,7 @@ dependencies = [
 [[package]]
 name = "yew"
 version = "0.21.0"
-source = "git+https://github.com/yewstack/yew#b246e0d5ed13afcb0b3874b6f70b2c9ac98b8a1b"
+source = "git+https://github.com/yewstack/yew#b7a599b9e4879fce18d0a3f3cbbe7c0d526e9f2d"
 dependencies = [
  "console_error_panic_hook",
  "futures",
@@ -11156,7 +11156,7 @@ dependencies = [
 [[package]]
 name = "yew-macro"
 version = "0.21.0"
-source = "git+https://github.com/yewstack/yew#b246e0d5ed13afcb0b3874b6f70b2c9ac98b8a1b"
+source = "git+https://github.com/yewstack/yew#b7a599b9e4879fce18d0a3f3cbbe7c0d526e9f2d"
 dependencies = [
  "once_cell",
  "prettyplease",
@@ -11170,7 +11170,7 @@ dependencies = [
 [[package]]
 name = "yew-router"
 version = "0.18.0"
-source = "git+https://github.com/yewstack/yew#b246e0d5ed13afcb0b3874b6f70b2c9ac98b8a1b"
+source = "git+https://github.com/yewstack/yew#b7a599b9e4879fce18d0a3f3cbbe7c0d526e9f2d"
 dependencies = [
  "gloo",
  "js-sys",
@@ -11188,7 +11188,7 @@ dependencies = [
 [[package]]
 name = "yew-router-macro"
 version = "0.18.0"
-source = "git+https://github.com/yewstack/yew#b246e0d5ed13afcb0b3874b6f70b2c9ac98b8a1b"
+source = "git+https://github.com/yewstack/yew#b7a599b9e4879fce18d0a3f3cbbe7c0d526e9f2d"
 dependencies = [
  "proc-macro2",
  "quote",
