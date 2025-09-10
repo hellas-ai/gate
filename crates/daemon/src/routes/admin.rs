@@ -5,7 +5,7 @@ use axum::{
     Router,
     extract::{Path, State},
     response::Json,
-    routing::{delete, get, patch, post},
+    routing::{get, patch},
 };
 use gate_core::access::{
     Action, ObjectId, ObjectIdentity, ObjectKind, PermissionManager, TargetNamespace,
@@ -532,22 +532,18 @@ pub fn add_routes(
 ) -> Router<gate_http::AppState<crate::State>> {
     router
         .route("/api/admin/users", get(list_users))
-        .route("/api/admin/users/:user_id", get(get_user))
-        .route("/api/admin/users/:user_id", delete(delete_user))
         .route(
-            "/api/admin/users/:user_id/status",
+            "/api/admin/users/{user_id}",
+            get(get_user).delete(delete_user),
+        )
+        .route(
+            "/api/admin/users/{user_id}/status",
             patch(update_user_status),
         )
         .route(
-            "/api/admin/users/:user_id/permissions",
-            get(get_user_permissions),
-        )
-        .route(
-            "/api/admin/users/:user_id/permissions",
-            post(grant_user_permission),
-        )
-        .route(
-            "/api/admin/users/:user_id/permissions",
-            delete(revoke_user_permission),
+            "/api/admin/users/{user_id}/permissions",
+            get(get_user_permissions)
+                .post(grant_user_permission)
+                .delete(revoke_user_permission),
         )
 }

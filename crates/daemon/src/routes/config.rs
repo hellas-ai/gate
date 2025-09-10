@@ -1,10 +1,7 @@
 //! Configuration management routes
 
 use crate::Settings;
-use axum::{
-    Router, extract, response,
-    routing::{get, put},
-};
+use axum::{Router, extract, response, routing::get};
 use gate_http::{
     error::HttpError,
     services::HttpIdentity,
@@ -62,7 +59,5 @@ pub async fn update_config(
 pub fn add_routes(
     router: Router<gate_http::AppState<crate::State>>,
 ) -> Router<gate_http::AppState<crate::State>> {
-    router
-        .route("/api/config", get(get_config))
-        .route("/api/config", put(update_config))
+    router.route("/api/config", get(get_config).put(update_config))
 }

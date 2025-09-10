@@ -2,16 +2,16 @@
 
 use crate::{
     State,
-    config::{ProviderConfig, ProviderType, Settings},
+    config::{LocalInferenceConfig, ProviderConfig, ProviderType, Settings},
     daemon::{Daemon, Result},
     error::DaemonError,
-    services::LocalInferenceService,
-    services::key_capture::DaemonKeyRegistrar,
+    services::{LocalInferenceService, key_capture::DaemonKeyRegistrar},
     sinks::catgrad_sink::CatgradSink,
 };
 use axum::http::HeaderName;
 use gate_core::{
     router::{
+        Sink,
         index::SinkIndex,
         middleware::KeyCaptureMiddleware,
         registry::SinkRegistry,
@@ -23,14 +23,8 @@ use gate_core::{
 use gate_http::{
     AppState,
     sinks::{
-        anthropic::{
-            AnthropicConfig, create_fallback_sink as create_anthropic_fallback,
-            create_sink as create_anthropic_sink,
-        },
-        openai::{
-            OpenAIConfig, create_codex_fallback_sink,
-            create_fallback_sink as create_openai_fallback, create_sink as create_openai_sink,
-        },
+        anthropic::{self, AnthropicConfig},
+        openai::{self, OpenAIConfig},
     },
 };
 use std::sync::Arc;
@@ -128,10 +122,7 @@ impl ServerBuilder {
     }
 
     /// Create a provider sink based on configuration
-    async fn create_provider_sink(
-        &self,
-        config: &ProviderConfig,
-    ) -> Result<Arc<dyn gate_core::router::sink::Sink>> {
+    async fn create_provider_sink(&self, config: &ProviderConfig) -> Result<Arc<dyn Sink>> {
         match config.provider {
             ProviderType::Anthropic => {
                 let anthropic_config = AnthropicConfig {
@@ -140,9 +131,9 @@ impl ServerBuilder {
                     timeout_seconds: Some(config.timeout_seconds),
                     sink_id: Some(format!("provider://anthropic/{}", config.name)),
                 };
-                create_anthropic_sink(anthropic_config)
+                anthropic::create_sink(anthropic_config)
                     .await
-                    .map(|sink| Arc::new(sink) as Arc<dyn gate_core::router::sink::Sink>)
+                    .map(|sink| Arc::new(sink) as Arc<dyn Sink>)
                     .map_err(|e| DaemonError::ServiceUnavailable(e.to_string()))
             }
             ProviderType::OpenAI => {
@@ -157,8 +148,8 @@ impl ServerBuilder {
                     timeout_seconds: Some(config.timeout_seconds),
                     sink_id: Some(format!("provider://openai/{}", config.name)),
                 };
-                create_openai_sink(openai_config)
-                    .map(|sink| Arc::new(sink) as Arc<dyn gate_core::router::sink::Sink>)
+                openai::create_sink(openai_config)
+                    .map(|sink| Arc::new(sink) as Arc<dyn Sink>)
                     .map_err(|e| DaemonError::ServiceUnavailable(e.to_string()))
             }
             ProviderType::Custom => Err(DaemonError::ConfigError(
@@ -169,7 +160,7 @@ impl ServerBuilder {
 
     /// Register Anthropic fallback sink
     async fn register_anthropic_fallback(&self, registry: &Arc<SinkRegistry>) {
-        match create_anthropic_fallback().await {
+        match anthropic::create_fallback_sink().await {
             Ok(sink) => {
                 registry
                     .register("provider://anthropic/fallback".to_string(), Arc::new(sink))
@@ -185,7 +176,7 @@ impl ServerBuilder {
     /// Register OpenAI fallback sinks
     async fn register_openai_fallbacks(&self, registry: &Arc<SinkRegistry>) {
         // Standard OpenAI fallback
-        match create_openai_fallback() {
+        match openai::create_fallback_sink() {
             Ok(sink) => {
                 registry
                     .register("provider://openai/fallback".to_string(), Arc::new(sink))
@@ -196,7 +187,7 @@ impl ServerBuilder {
         }
 
         // Codex fallback for ChatGPT backend
-        match create_codex_fallback_sink() {
+        match openai::create_codex_fallback_sink() {
             Ok(sink) => {
                 registry
                     .register("provider://openai/codex".to_string(), Arc::new(sink))
@@ -211,11 +202,11 @@ impl ServerBuilder {
     async fn register_catgrad_sink(
         &self,
         registry: &Arc<SinkRegistry>,
-        inf_cfg: &crate::config::LocalInferenceConfig,
+        config: &LocalInferenceConfig,
     ) {
-        match LocalInferenceService::new(inf_cfg.clone()) {
+        match LocalInferenceService::new(config.clone()) {
             Ok(_) => {
-                let sink = Arc::new(CatgradSink::new("self://catgrad", inf_cfg.models.clone()));
+                let sink = Arc::new(CatgradSink::new("self://catgrad", config.models.clone()));
                 registry.register("self://catgrad".to_string(), sink).await;
                 info!("Registered Catgrad sink for local inference");
             }
@@ -305,11 +296,8 @@ impl ServerBuilder {
         let app: axum::Router<AppState<State>> = router;
 
         let app = app
-            // Merge routes that need state
-            .merge(gate_http::routes::models::router())
-            .merge(gate_http::routes::inference::router())
-            // Merge routes that don't need state
-            .merge(gate_http::routes::observability::router())
+            // Merge common HTTP routes (health, inference, models, observability)
+            .merge(gate_http::routes::router::<State>())
             // Apply auth middleware
             .route_layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
