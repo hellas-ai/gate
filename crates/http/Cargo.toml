@@ -11,7 +11,6 @@ categories.workspace = true
 [features]
 default = ["server"]
 otlp = ["gate-core/tracing-otlp", "gate-core/tracing-prometheus"]
-schema = ["dep:utoipa"]
 server = [
     "dep:anyhow",
     "dep:async-trait",
@@ -70,7 +69,6 @@ tokio = { workspace = true, optional = true }
 tower = { workspace = true, features = ["util"], optional = true }
 tower-http = { workspace = true, optional = true }
 tracing = { workspace = true }
-utoipa = { workspace = true, optional = true }
 uuid = { version = "1", features = ["v4", "serde", "js"], optional = true }
 url = { workspace = true }
 

@@ -82,6 +82,7 @@ sha2 = "0.10"
 
 # Error handling
 thiserror = "2.0"
+
 # Core async runtime
 tokio = { version = "1", default-features = false, features = ["sync", "time", "macros"] }
 tokio-util = "0.7"
@@ -94,15 +95,7 @@ tower-service = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-# OpenTelemetry - removed from workspace, each crate manages its own version
 url = { version = "2.5", features = ["serde"] }
-
-# OpenAPI documentation
-utoipa = { version = "5.0", features = ["axum_extras", "chrono", "uuid"] }
-utoipa-axum = { version = "0.2" }
-utoipa-rapidoc = { version = "4.0", features = ["axum"] }
-utoipa-redoc = { version = "6.0", features = ["axum"] }
-utoipa-scalar = { version = "0.3", features = ["axum"] }
 
 # Frontend
 yew = { git = "https://github.com/yewstack/yew", default-features = false }
@@ -119,7 +112,6 @@ gloo-net = { version = "0.6", default-features = false }
 wasm-logger = { version = "0.2", default-features = false }
 tracing-web = { version = "0.1", default-features = false }
 serde-wasm-bindgen = { version = "0.6", default-features = false }
-utoipa-swagger-ui = { version = "8.0", features = ["axum"] }
 
 # Utilities
 uuid = { version = "1.18", features = ["v4", "serde", "js"] }
@@ -151,6 +143,6 @@ debug = false         # Ensure no debug info (strip should handle this too)
 # Optional: Create a profile for maximum size optimization (useful for WASM)
 [profile.release-min-size]
 inherits = "release"
-opt-level = "z"       # Optimize for size instead of speed
+opt-level = "z"      # Optimize for size instead of speed
 lto = "fat"          # Still use LTO for size reduction
 strip = true         # Strip all symbols

@@ -216,27 +216,38 @@ impl HttpSink {
         ctx: &RequestContext,
         mut request_stream: RequestStream,
     ) -> Result<ResponseStream> {
-        // Get the first request chunk
-        let request = request_stream
-            .next()
-            .await
-            .ok_or_else(|| Error::InvalidRequest("Empty request stream".to_string()))??;
-
+        let request = self.get_first_request(&mut request_stream).await?;
         let protocol = request_stream.protocol();
         let url = self.build_url(ctx, protocol)?;
 
-        // Build the HTTP request
-        let mut req = self.client.post(url).json(&request);
+        let req = self.prepare_http_request(url, &request, ctx);
+        let response = self.send_http_request(req).await?;
+        let response = self.validate_response_status(response).await?;
+        self.process_response(response, protocol).await
+    }
+
+    /// Get and validate the first request from the stream
+    async fn get_first_request(&self, stream: &mut RequestStream) -> Result<JsonValue> {
+        stream
+            .next()
+            .await
+            .ok_or_else(|| Error::InvalidRequest("Empty request stream".to_string()))?
+    }
+
+    /// Prepare the HTTP request with all necessary headers
+    fn prepare_http_request(
+        &self,
+        url: Url,
+        request: &JsonValue,
+        ctx: &RequestContext,
+    ) -> reqwest::RequestBuilder {
+        let mut req = self.client.post(url).json(request);
 
         // Add authentication
         if let Some((header_name, header_value)) = self.auth_header() {
-            // Use configured API key
             req = req.header(header_name, header_value);
-        } else {
-            // Use client-supplied key when no configured key exists
-            if let Some((hn, hv)) = self.inferred_auth_from_client_headers(ctx) {
-                req = req.header(hn, hv);
-            }
+        } else if let Some((hn, hv)) = self.inferred_auth_from_client_headers(ctx) {
+            req = req.header(hn, hv);
         }
 
         // Add provider headers
@@ -244,109 +255,155 @@ impl HttpSink {
             req = req.header(name, value);
         }
 
-        // Add trace headers from context (typed)
+        // Add trace headers from context (filtering restricted ones)
+        use http::header::{CONTENT_LENGTH, CONTENT_TYPE, HOST};
         for (name, value) in ctx.headers.iter() {
-            let n = name.as_str();
-            if matches!(
-                n,
-                "host" | "content-length" | "content-type" | "authorization" | "x-api-key"
-            ) {
+            if name == HOST
+                || name == CONTENT_LENGTH
+                || name == CONTENT_TYPE
+                || name == AUTHORIZATION
+                || name == X_API_KEY
+            {
                 continue;
             }
             req = req.header(name, value);
         }
 
-        // Send the request
-        let response = req.send().await.map_err(|e| {
+        req
+    }
+
+    /// Send the HTTP request and handle network errors
+    async fn send_http_request(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response> {
+        request.send().await.map_err(|e| {
             Error::ServiceUnavailable(format!(
                 "Failed to send request to {}: {}",
                 self.config.provider, e
             ))
-        })?;
+        })
+    }
 
+    /// Validate response status and handle errors
+    async fn validate_response_status(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<reqwest::Response> {
         let status = response.status();
-        if !status.is_success() {
-            let error_body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unable to read error".to_string());
-            let code: StatusCode =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            return Err(Error::Rejected(
-                code,
-                format!("{} upstream error: {}", self.config.provider, error_body),
-            ));
+        if status.is_success() {
+            return Ok(response);
         }
 
-        // Check if response is SSE stream. Treat OpenAI Responses as streaming regardless of header.
-        let is_sse = if protocol == Protocol::OpenAIResponses {
-            true
+        let code =
+            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unable to read error".to_string());
+
+        Err(Error::Rejected(
+            code,
+            format!("{} upstream error: {}", self.config.provider, error_body),
+        ))
+    }
+
+    /// Process response based on whether it's streaming or not
+    async fn process_response(
+        &self,
+        response: reqwest::Response,
+        protocol: Protocol,
+    ) -> Result<ResponseStream> {
+        let headers = self.extract_response_headers(&response);
+        let is_streaming = self.is_streaming_response(&response, protocol);
+
+        if is_streaming {
+            self.process_streaming_response(response, protocol, headers)
+                .await
         } else {
-            use http::header::CONTENT_TYPE;
-            response
-                .headers()
-                .get(CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .map(|v| v.contains("text/event-stream"))
-                .unwrap_or(false)
+            self.process_non_streaming_response(response, headers).await
+        }
+    }
+
+    /// Extract headers from response
+    fn extract_response_headers(
+        &self,
+        response: &reqwest::Response,
+    ) -> std::collections::HashMap<String, String> {
+        let mut headers = std::collections::HashMap::new();
+        for (name, value) in response.headers().iter() {
+            if let Ok(v) = value.to_str() {
+                headers.insert(name.to_string(), v.to_string());
+            }
+        }
+        headers
+    }
+
+    /// Check if response is a streaming response
+    fn is_streaming_response(&self, response: &reqwest::Response, protocol: Protocol) -> bool {
+        // OpenAI Responses are always treated as streaming
+        if protocol == Protocol::OpenAIResponses {
+            return true;
+        }
+
+        // Check Content-Type header for SSE
+        use http::header::CONTENT_TYPE;
+        response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.contains("text/event-stream"))
+            .unwrap_or(false)
+    }
+
+    /// Process a streaming SSE response
+    async fn process_streaming_response(
+        &self,
+        response: reqwest::Response,
+        protocol: Protocol,
+        headers: std::collections::HashMap<String, String>,
+    ) -> Result<ResponseStream> {
+        let sse_stream = self.parse_sse_stream(response, protocol).await?;
+
+        // Prepend headers chunk to the stream
+        let stream = futures::stream::once(async move { Ok(ResponseChunk::Headers(headers)) })
+            .chain(sse_stream);
+
+        Ok(Box::pin(stream))
+    }
+
+    /// Process a non-streaming response
+    async fn process_non_streaming_response(
+        &self,
+        response: reqwest::Response,
+        headers: std::collections::HashMap<String, String>,
+    ) -> Result<ResponseStream> {
+        let text = response
+            .text()
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to read response: {e}")))?;
+
+        debug!("Non-streaming response: {}", text);
+
+        let content = if let Ok(body) = serde_json::from_str::<JsonValue>(&text) {
+            body
+        } else {
+            // Fallback: return raw text as content rather than failing
+            JsonValue::String(text)
         };
 
-        if is_sse {
-            // Capture upstream headers to forward
-            let mut hdrs = std::collections::HashMap::new();
-            for (name, value) in response.headers().iter() {
-                if let Ok(v) = value.to_str() {
-                    hdrs.insert(name.to_string(), v.to_string());
-                }
-            }
+        let chunks = vec![
+            Ok(ResponseChunk::Headers(headers)),
+            Ok(ResponseChunk::Content(content)),
+            Ok(ResponseChunk::Stop {
+                reason: StopReason::Complete,
+                error: None,
+                cost: None,
+            }),
+        ];
 
-            // Parse SSE stream into ResponseChunks
-            let sse_stream = self.parse_sse_stream(response, protocol).await?;
-
-            // Prepend headers chunk
-            let stream = futures::stream::once(async move { Ok(ResponseChunk::Headers(hdrs)) })
-                .chain(sse_stream);
-            Ok(Box::pin(stream))
-        } else {
-            // Capture upstream headers to forward
-            let mut hdrs = std::collections::HashMap::new();
-            for (name, value) in response.headers().iter() {
-                if let Ok(v) = value.to_str() {
-                    hdrs.insert(name.to_string(), v.to_string());
-                }
-            }
-
-            // Non-streaming response - convert to single chunk
-            let text = response
-                .text()
-                .await
-                .map_err(|e| Error::Internal(format!("Failed to read response: {e}")))?;
-            debug!("Non-streaming response: {}", text);
-            let chunks = if let Ok(body) = serde_json::from_str::<JsonValue>(&text) {
-                vec![
-                    Ok(ResponseChunk::Headers(hdrs)),
-                    Ok(ResponseChunk::Content(body)),
-                    Ok(ResponseChunk::Stop {
-                        reason: StopReason::Complete,
-                        error: None,
-                        cost: None,
-                    }),
-                ]
-            } else {
-                // Fallback: return raw text as content rather than failing
-                vec![
-                    Ok(ResponseChunk::Headers(hdrs)),
-                    Ok(ResponseChunk::Content(JsonValue::String(text))),
-                    Ok(ResponseChunk::Stop {
-                        reason: StopReason::Complete,
-                        error: None,
-                        cost: None,
-                    }),
-                ]
-            };
-
-            Ok(Box::pin(futures::stream::iter(chunks)))
-        }
+        Ok(Box::pin(futures::stream::iter(chunks)))
     }
 
     /// Parse SSE stream into ResponseChunks

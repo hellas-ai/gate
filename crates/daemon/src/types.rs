@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonStatus {
     pub running: bool,
     pub listen_address: String,
@@ -11,7 +11,7 @@ pub struct DaemonStatus {
     pub needs_bootstrap: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TlsForwardStatus {
     Disabled,
     Disconnected,
@@ -21,7 +21,7 @@ pub enum TlsForwardStatus {
 }
 
 /// Response for bootstrap status endpoint
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootstrapStatusResponse {
     /// Whether the system needs bootstrap (no users exist)
     pub needs_bootstrap: bool,
@@ -32,7 +32,7 @@ pub struct BootstrapStatusResponse {
 }
 
 /// Response for daemon runtime configuration
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonRuntimeConfigResponse {
     /// Server address the daemon is listening on
     pub server_address: String,

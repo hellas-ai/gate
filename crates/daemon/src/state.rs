@@ -1,7 +1,7 @@
-//! Minimal state for HTTP routes
+//! State for HTTP routes
 //!
-//! This module provides the minimal state required for HTTP routes to function.
-//! It contains just the auth service (for middleware) and the daemon handle (for business logic).
+//! This module provides the state required for HTTP routes to function.
+//! It contains the auth service (for middleware) and the daemon handle (for business logic).
 
 use crate::Daemon;
 use crate::config::ProviderPassthroughConfig;
@@ -17,9 +17,9 @@ use gate_http::services::{HttpContext, HttpIdentity};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-/// Minimal state for HTTP routes
+/// State for HTTP routes
 #[derive(Clone)]
-pub struct MinimalState {
+pub struct State {
     /// Auth service for middleware authentication
     pub auth_service: Arc<AuthService>,
     /// Daemon handle for all business logic
@@ -30,7 +30,7 @@ pub struct MinimalState {
     pub provider_passthrough: ProviderPassthroughConfig,
 }
 
-impl MinimalState {
+impl State {
     pub fn new(
         auth_service: Arc<AuthService>,
         daemon: Daemon,
@@ -46,9 +46,9 @@ impl MinimalState {
     }
 }
 
-// Implement AuthProvider directly for MinimalState
+// Implement AuthProvider directly for State
 #[async_trait]
-impl AuthProvider for MinimalState {
+impl AuthProvider for State {
     async fn authenticate(&self, parts: &Parts) -> Result<HttpIdentity, HttpError> {
         // Helper: detect Anthropic API key from headers
         fn detect_anthropic_key(parts: &Parts) -> Option<String> {
@@ -172,7 +172,7 @@ mod tests {
     use gate_sqlx::SqliteStateBackend;
     use tokio::sync::mpsc;
 
-    async fn make_minimal_state(allow_local_bypass: bool) -> MinimalState {
+    async fn make_minimal_state(allow_local_bypass: bool) -> State {
         // Build a lightweight AuthService stack (will not be exercised in these tests)
         let jwt_service = Arc::new(JwtService::new(JwtSvcConfig::new(
             "test-secret".to_string(),
@@ -196,7 +196,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel::<DaemonRequest>(1);
         let daemon = crate::daemon::Daemon::new(tx, None);
 
-        MinimalState::new(
+        State::new(
             auth_service,
             daemon,
             allow_local_bypass,
