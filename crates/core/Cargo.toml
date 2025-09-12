@@ -25,7 +25,7 @@ chrono.workspace = true
 config.workspace = true
 futures.workspace = true
 http.workspace = true
-rand = { version = "0.8", optional = true }
+rand = { version = "0.9", optional = true }
 rust_decimal = { version = "1.0", features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true
