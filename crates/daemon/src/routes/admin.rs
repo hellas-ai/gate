@@ -1,6 +1,7 @@
 //! Admin user management routes - refactored version
 
-use crate::helpers::{admin::AdminPermissionHelper, errors::ErrorMapExt};
+use crate::helpers::{errors::ErrorMapExt, services::ServiceAccessor};
+use crate::permissions::LocalContext;
 use axum::{
     Router,
     extract::{Path, State},
@@ -8,8 +9,9 @@ use axum::{
     routing::{get, patch},
 };
 use gate_core::access::{
-    Action, ObjectId, ObjectIdentity, ObjectKind, PermissionManager, TargetNamespace,
+    Action, ObjectId, ObjectIdentity, ObjectKind, Permissions, SubjectIdentity, TargetNamespace,
 };
+use gate_core::state::StateBackend;
 use gate_core::types::User;
 use gate_http::{AppState, error::HttpError, services::HttpIdentity};
 use serde::{Deserialize, Serialize};
@@ -91,6 +93,34 @@ pub struct GrantPermissionRequest {
     pub object: String,
 }
 
+async fn to_local_identity(
+    identity: &HttpIdentity,
+    state_backend: &dyn StateBackend,
+) -> SubjectIdentity<LocalContext> {
+    let local_ctx = LocalContext::from_http_identity(identity, state_backend).await;
+    SubjectIdentity::new(identity.id.clone(), identity.source.clone(), local_ctx)
+}
+
+async fn require_admin_permission(
+    permissions: &crate::permissions::LocalPermissionManager,
+    identity: &SubjectIdentity<LocalContext>,
+    action: Action,
+    object: &ObjectIdentity,
+) -> Result<(), HttpError> {
+    permissions
+        .require(identity, action, object)
+        .await
+        .map_err(|e| {
+            tracing::debug!(
+                "Permission denied for user {} on object {:?}: {}",
+                identity.id,
+                object,
+                e
+            );
+            HttpError::AuthorizationFailed(format!("Insufficient permissions: {e}"))
+        })
+}
+
 /// List all users (admin only)
 #[instrument(name = "list_users", skip(app_state), fields(page = %query.page, page_size = %query.page_size))]
 pub async fn list_users(
@@ -98,26 +128,25 @@ pub async fn list_users(
     State(app_state): State<AppState<crate::State>>,
     axum::extract::Query(query): axum::extract::Query<ListUsersQuery>,
 ) -> Result<Json<UserListResponse>, HttpError> {
-    let helper = AdminPermissionHelper::new(&app_state.data.daemon, identity.clone()).await?;
+    let services = ServiceAccessor::new(&app_state.data.daemon);
+    let (permissions, state_backend) = services.core_services().await?;
+    let local_identity = to_local_identity(&identity, state_backend.as_ref()).await;
 
     // Check permission
-    helper
-        .require_admin(
-            Action::Read,
-            &ObjectIdentity {
-                namespace: TargetNamespace::System,
-                kind: ObjectKind::Users,
-                id: ObjectId::new("*"),
-            },
-        )
-        .await?;
+    require_admin_permission(
+        &permissions,
+        &local_identity,
+        Action::Read,
+        &ObjectIdentity {
+            namespace: TargetNamespace::System,
+            kind: ObjectKind::Users,
+            id: ObjectId::new("*"),
+        },
+    )
+    .await?;
 
     // Get and filter users
-    let mut users = helper
-        .state_backend
-        .list_users()
-        .await
-        .map_internal_error()?;
+    let mut users = state_backend.list_users().await.map_internal_error()?;
 
     if let Some(search) = &query.search {
         let search_lower = search.to_lowercase();
@@ -156,21 +185,23 @@ pub async fn get_user(
     State(app_state): State<AppState<crate::State>>,
     Path(user_id): Path<String>,
 ) -> Result<Json<UserInfo>, HttpError> {
-    let helper = AdminPermissionHelper::new(&app_state.data.daemon, identity.clone()).await?;
+    let services = ServiceAccessor::new(&app_state.data.daemon);
+    let (permissions, state_backend) = services.core_services().await?;
+    let local_identity = to_local_identity(&identity, state_backend.as_ref()).await;
 
-    helper
-        .require_admin(
-            Action::Read,
-            &ObjectIdentity {
-                namespace: TargetNamespace::System,
-                kind: ObjectKind::User,
-                id: ObjectId::new(user_id.clone()),
-            },
-        )
-        .await?;
+    require_admin_permission(
+        &permissions,
+        &local_identity,
+        Action::Read,
+        &ObjectIdentity {
+            namespace: TargetNamespace::System,
+            kind: ObjectKind::User,
+            id: ObjectId::new(user_id.clone()),
+        },
+    )
+    .await?;
 
-    let user = helper
-        .state_backend
+    let user = state_backend
         .get_user(&user_id)
         .await
         .map_internal_error()?
@@ -195,30 +226,31 @@ pub async fn delete_user(
         ));
     }
 
-    let helper = AdminPermissionHelper::new(&app_state.data.daemon, identity.clone()).await?;
+    let services = ServiceAccessor::new(&app_state.data.daemon);
+    let (permissions, state_backend) = services.core_services().await?;
+    let local_identity = to_local_identity(&identity, state_backend.as_ref()).await;
 
-    helper
-        .require_admin(
-            Action::Delete,
-            &ObjectIdentity {
-                namespace: TargetNamespace::System,
-                kind: ObjectKind::User,
-                id: ObjectId::new(user_id.clone()),
-            },
-        )
-        .await?;
+    require_admin_permission(
+        &permissions,
+        &local_identity,
+        Action::Delete,
+        &ObjectIdentity {
+            namespace: TargetNamespace::System,
+            kind: ObjectKind::User,
+            id: ObjectId::new(user_id.clone()),
+        },
+    )
+    .await?;
 
     // Check user exists
-    helper
-        .state_backend
+    state_backend
         .get_user(&user_id)
         .await
         .map_internal_error()?
         .ok_or_else(|| HttpError::NotFound(format!("User {user_id} not found")))?;
 
     // Delete user
-    helper
-        .state_backend
+    state_backend
         .delete_user(&user_id)
         .await
         .map_internal_error_with_context("Failed to delete user")?;
@@ -243,22 +275,24 @@ pub async fn update_user_status(
         ));
     }
 
-    let helper = AdminPermissionHelper::new(&app_state.data.daemon, identity.clone()).await?;
+    let services = ServiceAccessor::new(&app_state.data.daemon);
+    let (permissions, state_backend) = services.core_services().await?;
+    let local_identity = to_local_identity(&identity, state_backend.as_ref()).await;
 
-    helper
-        .require_admin(
-            Action::Write,
-            &ObjectIdentity {
-                namespace: TargetNamespace::System,
-                kind: ObjectKind::User,
-                id: ObjectId::new(user_id.clone()),
-            },
-        )
-        .await?;
+    require_admin_permission(
+        &permissions,
+        &local_identity,
+        Action::Write,
+        &ObjectIdentity {
+            namespace: TargetNamespace::System,
+            kind: ObjectKind::User,
+            id: ObjectId::new(user_id.clone()),
+        },
+    )
+    .await?;
 
     // Get and update user
-    let mut user = helper
-        .state_backend
+    let mut user = state_backend
         .get_user(&user_id)
         .await
         .map_internal_error()?
@@ -271,8 +305,7 @@ pub async fn update_user_status(
     }
     user.updated_at = chrono::Utc::now();
 
-    helper
-        .state_backend
+    state_backend
         .update_user(&user)
         .await
         .map_internal_error_with_context("Failed to update user status")?;
@@ -300,29 +333,30 @@ pub async fn get_user_permissions(
     State(app_state): State<AppState<crate::State>>,
     Path(user_id): Path<String>,
 ) -> Result<Json<UserPermissionsResponse>, HttpError> {
-    let helper = AdminPermissionHelper::new(&app_state.data.daemon, identity.clone()).await?;
+    let services = ServiceAccessor::new(&app_state.data.daemon);
+    let (permissions, state_backend) = services.core_services().await?;
+    let local_identity = to_local_identity(&identity, state_backend.as_ref()).await;
 
-    helper
-        .require_admin(
-            Action::ViewPermissions,
-            &ObjectIdentity {
-                namespace: TargetNamespace::System,
-                kind: ObjectKind::User,
-                id: ObjectId::new(user_id.clone()),
-            },
-        )
-        .await?;
+    require_admin_permission(
+        &permissions,
+        &local_identity,
+        Action::ViewPermissions,
+        &ObjectIdentity {
+            namespace: TargetNamespace::System,
+            kind: ObjectKind::User,
+            id: ObjectId::new(user_id.clone()),
+        },
+    )
+    .await?;
 
     // Check user exists
-    helper
-        .state_backend
+    state_backend
         .get_user(&user_id)
         .await
         .map_internal_error()?
         .ok_or_else(|| HttpError::NotFound(format!("User {user_id} not found")))?;
 
-    let permissions = helper
-        .state_backend
+    let permissions = state_backend
         .list_user_permissions(&user_id)
         .await
         .map_internal_error()?
@@ -345,26 +379,21 @@ pub async fn grant_user_permission(
     Path(user_id): Path<String>,
     Json(request): Json<GrantPermissionRequest>,
 ) -> Result<axum::http::StatusCode, HttpError> {
-    let helper = AdminPermissionHelper::new(&app_state.data.daemon, identity.clone()).await?;
+    let services = ServiceAccessor::new(&app_state.data.daemon);
+    let (permissions, state_backend) = services.core_services().await?;
+    let local_identity = to_local_identity(&identity, state_backend.as_ref()).await;
 
-    helper
-        .require_admin(
-            Action::GrantPermission,
-            &ObjectIdentity {
-                namespace: TargetNamespace::System,
-                kind: ObjectKind::User,
-                id: ObjectId::new(user_id.clone()),
-            },
-        )
-        .await?;
-
-    // Check user exists
-    helper
-        .state_backend
-        .get_user(&user_id)
-        .await
-        .map_internal_error()?
-        .ok_or_else(|| HttpError::NotFound(format!("User {user_id} not found")))?;
+    require_admin_permission(
+        &permissions,
+        &local_identity,
+        Action::GrantPermission,
+        &ObjectIdentity {
+            namespace: TargetNamespace::System,
+            kind: ObjectKind::User,
+            id: ObjectId::new(user_id.clone()),
+        },
+    )
+    .await?;
 
     // Parse action and object
     let action = parse_action(&request.action)
@@ -375,8 +404,7 @@ pub async fn grant_user_permission(
     })?;
 
     // Create identity for the user receiving the permission
-    let grantee_user = helper
-        .state_backend
+    let grantee_user = state_backend
         .get_user(&user_id)
         .await
         .map_internal_error()?
@@ -391,9 +419,8 @@ pub async fn grant_user_permission(
         },
     );
 
-    helper
-        .permission_manager
-        .grant(&helper.local_identity, &grantee_identity, action, &object)
+    permissions
+        .grant(&local_identity, &grantee_identity, action, &object)
         .await
         .map_internal_error_with_context("Failed to grant permission")?;
 
@@ -420,22 +447,24 @@ pub async fn revoke_user_permission(
         .get("object")
         .ok_or_else(|| HttpError::BadRequest("Missing object parameter".to_string()))?;
 
-    let helper = AdminPermissionHelper::new(&app_state.data.daemon, identity.clone()).await?;
+    let services = ServiceAccessor::new(&app_state.data.daemon);
+    let (permissions, state_backend) = services.core_services().await?;
+    let local_identity = to_local_identity(&identity, state_backend.as_ref()).await;
 
-    helper
-        .require_admin(
-            Action::RevokePermission,
-            &ObjectIdentity {
-                namespace: TargetNamespace::System,
-                kind: ObjectKind::User,
-                id: ObjectId::new(user_id.clone()),
-            },
-        )
-        .await?;
+    require_admin_permission(
+        &permissions,
+        &local_identity,
+        Action::RevokePermission,
+        &ObjectIdentity {
+            namespace: TargetNamespace::System,
+            kind: ObjectKind::User,
+            id: ObjectId::new(user_id.clone()),
+        },
+    )
+    .await?;
 
     // Check user exists and get their identity
-    let target_user = helper
-        .state_backend
+    let target_user = state_backend
         .get_user(&user_id)
         .await
         .map_internal_error()?
@@ -458,10 +487,9 @@ pub async fn revoke_user_permission(
         },
     );
 
-    helper
-        .permission_manager
+    permissions
         .revoke(
-            &helper.local_identity,
+            &local_identity,
             &subject_identity,
             action_enum,
             &object_identity,
