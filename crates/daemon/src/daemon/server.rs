@@ -205,7 +205,7 @@ impl ServerBuilder {
     ) {
         match LocalInferenceService::new(config.clone()) {
             Ok(_) => {
-                let sink = Arc::new(CatgradSink::new("self://catgrad", config.models.clone()));
+                let sink = Arc::new(CatgradSink::new("self://catgrad"));
                 registry.register("self://catgrad".to_string(), sink).await;
                 info!("Registered Catgrad sink for local inference");
             }

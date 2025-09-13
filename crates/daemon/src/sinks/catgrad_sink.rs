@@ -3,7 +3,7 @@ use catgrad_llm::serve::Loader;
 use futures::StreamExt;
 use gate_core::Result;
 use gate_core::router::prelude::{
-    ModelList, Protocol, RequestContext, RequestStream, ResponseChunk, Sink, SinkCapabilities,
+    Protocol, RequestContext, RequestStream, ResponseChunk, Sink, SinkCapabilities,
     SinkDescription, SinkHealth, StopReason,
 };
 use serde_json::json;
@@ -16,32 +16,22 @@ use catgrad_llm::{
 
 pub struct CatgradSink {
     id: String,
-    models: Vec<String>,
 }
 
 impl CatgradSink {
-    pub fn new(id: impl Into<String>, models: Vec<String>) -> Self {
-        Self {
-            id: id.into(),
-            models,
-        }
+    pub fn new(id: impl Into<String>) -> Self {
+        Self { id: id.into() }
     }
 }
 
 #[async_trait]
 impl Sink for CatgradSink {
     async fn describe(&self) -> SinkDescription {
-        // We can serve both OpenAI chat completions and Anthropic messages
         SinkDescription {
             id: self.id.clone(),
             accepted_protocols: vec![Protocol::OpenAIChat, Protocol::Anthropic],
-            models: if self.models.is_empty() {
-                ModelList::Dynamic
-            } else {
-                ModelList::Static(self.models.clone())
-            },
             capabilities: SinkCapabilities {
-                supports_streaming: true, // we emit a streaming response interface
+                supports_streaming: true,
                 supports_batching: false,
                 supports_tools: false,
                 max_context_length: Some(8192),
@@ -90,6 +80,7 @@ impl Sink for CatgradSink {
                 content: system.into(),
             });
         }
+
         if let Some(msgs) = first.get("messages").and_then(|v| v.as_array()) {
             for m in msgs {
                 let role = m

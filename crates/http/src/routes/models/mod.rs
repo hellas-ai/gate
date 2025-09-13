@@ -33,27 +33,27 @@ where
     // Get models from router if available
     if let Some(router) = &app_state.router {
         let desc = router.describe().await;
-        match desc.models {
-            gate_core::router::types::ModelList::Static(list) => {
-                for id in list {
-                    models.push(ModelInfo {
-                        id,
-                        object: "model".to_string(),
-                        owned_by: "system".to_string(),
-                        created: chrono::Utc::now().timestamp(),
-                        context_length: desc.capabilities.max_context_length,
-                    });
-                }
-            }
-            gate_core::router::types::ModelList::Dynamic => {
-                // Dynamic models are resolved at runtime
-                info!("Router has dynamic model list");
-            }
-            gate_core::router::types::ModelList::Infinite => {
-                // Router accepts any model name
-                info!("Router accepts any model");
-            }
-        }
+        // match desc.models {
+        //     gate_core::router::types::ModelList::Static(list) => {
+        //         for id in list {
+        //             models.push(ModelInfo {
+        //                 id,
+        //                 object: "model".to_string(),
+        //                 owned_by: "system".to_string(),
+        //                 created: chrono::Utc::now().timestamp(),
+        //                 context_length: desc.capabilities.max_context_length,
+        //             });
+        //         }
+        //     }
+        //     gate_core::router::types::ModelList::Dynamic => {
+        //         // Dynamic models are resolved at runtime
+        //         info!("Router has dynamic model list");
+        //     }
+        //     gate_core::router::types::ModelList::Infinite => {
+        //         // Router accepts any model name
+        //         info!("Router accepts any model");
+        //     }
+        // }
     }
 
     tracing::Span::current().record("model_count", models.len());

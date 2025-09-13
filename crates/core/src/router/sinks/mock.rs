@@ -12,7 +12,6 @@ use std::pin::Pin;
 pub struct MockSink {
     pub id: String,
     pub accepted_protocols: Vec<Protocol>,
-    pub models: ModelList,
     pub capabilities: SinkCapabilities,
     pub healthy: bool,
 }
@@ -22,7 +21,6 @@ impl MockSink {
         Self {
             id: id.to_string(),
             accepted_protocols: vec![Protocol::OpenAIChat, Protocol::Anthropic],
-            models: ModelList::Dynamic,
             capabilities: SinkCapabilities {
                 supports_streaming: true,
                 supports_batching: false,
@@ -47,7 +45,6 @@ impl Sink for MockSink {
         SinkDescription {
             id: self.id.clone(),
             accepted_protocols: self.accepted_protocols.clone(),
-            models: self.models.clone(),
             capabilities: self.capabilities.clone(),
             cost_structure: None,
         }

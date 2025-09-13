@@ -163,12 +163,6 @@ impl Router {
                     continue;
                 }
 
-                // Check if sink supports any of the models
-                let supports_model = models.iter().any(|model| description.supports_model(model));
-                if !supports_model {
-                    continue;
-                }
-
                 // Check protocol support (no conversion in v2)
                 if !description.accepts_protocol(protocol) {
                     continue;
@@ -222,11 +216,6 @@ impl Router {
                 let health = sink.probe().await;
 
                 if !health.healthy {
-                    continue;
-                }
-
-                let supports_model = models.iter().any(|model| description.supports_model(model));
-                if !supports_model {
                     continue;
                 }
 
@@ -310,7 +299,6 @@ impl Sink for Router {
         // Aggregate descriptions from all sinks
         let sinks = self.sink_registry.get_all().await;
         let mut all_protocols = Vec::new();
-        let mut all_models = Vec::new();
         let mut supports_streaming = false;
         let mut supports_tools = false;
         let mut max_context = 0usize;
@@ -320,13 +308,6 @@ impl Sink for Router {
             for proto in desc.accepted_protocols {
                 if !all_protocols.contains(&proto) {
                     all_protocols.push(proto);
-                }
-            }
-            if let ModelList::Static(models) = desc.models {
-                for model in models {
-                    if !all_models.contains(&model) {
-                        all_models.push(model);
-                    }
                 }
             }
             supports_streaming |= desc.capabilities.supports_streaming;
@@ -339,11 +320,6 @@ impl Sink for Router {
         SinkDescription {
             id: "router".to_string(),
             accepted_protocols: all_protocols,
-            models: if all_models.is_empty() {
-                ModelList::Dynamic
-            } else {
-                ModelList::Static(all_models)
-            },
             capabilities: SinkCapabilities {
                 supports_streaming,
                 supports_batching: false,

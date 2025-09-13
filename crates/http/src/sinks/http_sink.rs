@@ -10,8 +10,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use gate_core::router::sink::{RequestContext, ResponseStream, Sink, SinkDescription};
 use gate_core::router::types::{
-    CostStructure, ModelList, Protocol, RequestStream, ResponseChunk, SinkCapabilities, SinkHealth,
-    StopReason,
+    CostStructure, Protocol, RequestStream, ResponseChunk, SinkCapabilities, SinkHealth, StopReason,
 };
 use gate_core::{Error, Result};
 use http::header::{AUTHORIZATION, USER_AGENT};
@@ -476,11 +475,6 @@ impl Sink for HttpSink {
         SinkDescription {
             id: self.config.id.clone(),
             accepted_protocols: self.config.accepted_protocols.clone(),
-            models: if self.config.models.is_empty() {
-                ModelList::Dynamic
-            } else {
-                ModelList::Static(self.config.models.clone())
-            },
             capabilities: self.config.capabilities.clone(),
             cost_structure: self.config.cost_structure.clone(),
         }

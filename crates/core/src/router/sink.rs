@@ -1,8 +1,6 @@
 //! Sink trait and core implementations
 
-use super::types::{
-    CostStructure, ModelList, Protocol, ResponseChunk, SinkCapabilities, SinkHealth,
-};
+use super::types::{CostStructure, Protocol, ResponseChunk, SinkCapabilities, SinkHealth};
 use crate::{
     Result,
     access::{IdentityContext, SubjectIdentity},
@@ -85,20 +83,11 @@ pub trait Sink: Send + Sync {
 pub struct SinkDescription {
     pub id: String,
     pub accepted_protocols: Vec<Protocol>,
-    pub models: ModelList,
     pub capabilities: SinkCapabilities,
     pub cost_structure: Option<CostStructure>,
 }
 
 impl SinkDescription {
-    /// Check if this sink supports the given model
-    pub fn supports_model(&self, model: &str) -> bool {
-        match &self.models {
-            ModelList::Static(models) => models.iter().any(|m| m == model),
-            ModelList::Dynamic | ModelList::Infinite => true,
-        }
-    }
-
     /// Check if this sink accepts the given protocol
     pub fn accepts_protocol(&self, protocol: Protocol) -> bool {
         self.accepted_protocols.contains(&protocol)
