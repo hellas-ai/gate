@@ -1,6 +1,5 @@
 pub mod auth;
 pub mod inference;
-pub mod key_capture;
 pub mod monitoring;
 pub mod p2p;
 pub mod tls;

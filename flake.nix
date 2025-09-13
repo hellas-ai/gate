@@ -114,9 +114,11 @@
       formatter = pkgs.nixpkgs-fmt;
 
       devShells.default = pkgs.mkShell {
-        nativeBuildInputs = with pkgs; [
-          pkg-config
-        ] ++ frontendTools;
+        nativeBuildInputs = with pkgs;
+          [
+            pkg-config
+          ]
+          ++ frontendTools;
 
         buildInputs = with pkgs;
           [
@@ -184,6 +186,9 @@
             # Image conversion tools
             librsvg # provides rsvg-convert
             imagemagick
+
+            # debugging
+            mitmproxy
           ]
           ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
             # Linux-specific GUI dependencies
@@ -224,9 +229,11 @@
             inherit outputHashes;
           };
 
-          nativeBuildInputs = [
-            pkgs.openssl
-          ] ++ frontendTools;
+          nativeBuildInputs =
+            [
+              pkgs.openssl
+            ]
+            ++ frontendTools;
 
           # Skip normal cargo build
           buildPhase = ''
@@ -261,9 +268,11 @@
             inherit outputHashes;
           };
 
-          nativeBuildInputs = [
-            pkgs.openssl
-          ] ++ frontendTools;
+          nativeBuildInputs =
+            [
+              pkgs.openssl
+            ]
+            ++ frontendTools;
 
           # Skip normal cargo build
           buildPhase = ''
@@ -298,9 +307,11 @@
             inherit outputHashes;
           };
 
-          nativeBuildInputs = [
-            pkgs.openssl
-          ] ++ frontendTools;
+          nativeBuildInputs =
+            [
+              pkgs.openssl
+            ]
+            ++ frontendTools;
 
           # Skip normal cargo build
           buildPhase = ''

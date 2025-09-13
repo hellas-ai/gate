@@ -8,7 +8,7 @@ use axum::{
     routing::{get, patch},
 };
 use gate_core::access::{
-    Action, ObjectId, ObjectIdentity, ObjectKind, PermissionManager, TargetNamespace,
+    Action, ObjectId, ObjectIdentity, ObjectKind, TargetNamespace, permissions::PermissionManager,
 };
 use gate_core::types::User;
 use gate_http::{AppState, error::HttpError, services::HttpIdentity};

@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 use gate_core::StateBackend;
+use gate_core::access::permissions::PermissionManager;
 use gate_core::access::{
-    Action, IdentityContext, ObjectIdentity, PermissionDenied, PermissionManager, PermissionResult,
-    Permissions, SubjectIdentity,
+    Action, IdentityContext, ObjectIdentity, PermissionDenied, PermissionResult, Permissions,
+    SubjectIdentity,
 };
 use gate_http::services::identity::HttpIdentity;
 use serde::{Deserialize, Serialize};

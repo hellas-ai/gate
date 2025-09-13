@@ -5,7 +5,7 @@ use crate::{
     config::{LocalInferenceConfig, ProviderConfig, ProviderType, Settings},
     daemon::{Daemon, Result},
     error::DaemonError,
-    services::{LocalInferenceService, key_capture::DaemonKeyRegistrar},
+    services::LocalInferenceService,
     sinks::catgrad_sink::CatgradSink,
 };
 use axum::http::HeaderName;
@@ -13,7 +13,6 @@ use gate_core::{
     router::{
         Sink,
         index::SinkIndex,
-        middleware::KeyCaptureMiddleware,
         registry::SinkRegistry,
         routing::Router,
         strategy::{CompositeStrategy, ProviderAffinityStrategy, SimpleStrategy},
@@ -221,12 +220,6 @@ impl ServerBuilder {
         sink_registry: Arc<SinkRegistry>,
         sink_index: Arc<SinkIndex>,
     ) -> Arc<Router> {
-        let registrar = Arc::new(DaemonKeyRegistrar::new(
-            self.daemon.clone(),
-            sink_registry.clone(),
-            sink_index.clone(),
-        ));
-
         let router = Router::builder()
             .state_backend(state_backend)
             .sink_registry(sink_registry)
@@ -234,7 +227,6 @@ impl ServerBuilder {
                 (Box::new(ProviderAffinityStrategy::new()), 1.0),
                 (Box::new(SimpleStrategy::new()), 0.1),
             ])))
-            .middleware(Arc::new(KeyCaptureMiddleware::new(registrar)))
             .sink_index(sink_index)
             .build();
 

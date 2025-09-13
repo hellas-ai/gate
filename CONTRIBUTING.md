@@ -20,6 +20,10 @@ We do **not** currently accept contributions for:
 
 If you'd like help, contact us on [discord](https://discord.gg/YWZCWPrNTb).
 
+# Running and testing
+- We use nix to install development dependencies. When running commands, you need to use `nix develop` to ensure all toolchains, libraries, helpers etc are available.
+- nix develop --command bash -c "make ci"
+
 # Coding Guidelines
 
 General guidelines:
@@ -61,10 +65,13 @@ This crate contains the core hellas data types, traits, etc.
 - We are very big of type safety. We should be using the type system as much as possible to help us.
 - This means stuff like:
     - Deriving the `From/Into/TryInto/TryFrom` traits instead of custom conversion functions.
-    - No "magic variables"- consts and strings etc should be defined at module level `const WHATEVER_NAME: &str = "whatever-thingy"`, if appropriate
+    - No "magic variables"- consts and strings etc should be defined at module level `const WHATEVER_NAME: &str = "whatever-thingy"`, if appropriate. if you later need to access them from a sibling crate or module, hoist them somewhere accessible by both.
     - Avoid unstructured data- we should perform ser/de at our system boundaries as soon as possible
     - Try to avoid `Option<>` as much as possible- lets think about whether we can refactor to remove ambiguity
     - Return structured errors, not Strings
+- use e.g Url instead of &str or String to store URLs
+- use e.g HeaderName/HeaderValue instead of &str or String
+- use e.g http::headers::AUTHORIZATION instead of "authorization"
 
 # Style / Formatting
 - This repo runs *strict* formatting and clippy checks. Don't worry so much about formatting as we can run `cargo fmt` before committing

@@ -5,7 +5,7 @@ use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Wrapper that combines Iroh's RecvStream and SendStream into a single
 /// type that implements AsyncRead + AsyncWrite
@@ -106,23 +106,6 @@ type Result<T> = std::result::Result<T, StreamError>;
 pub struct StreamUtils;
 
 impl StreamUtils {
-    /// Copy data between two streams with a timeout
-    pub async fn copy_with_timeout<R, W>(
-        reader: &mut R,
-        writer: &mut W,
-        timeout: std::time::Duration,
-    ) -> Result<u64>
-    where
-        R: AsyncRead + Unpin,
-        W: AsyncWrite + Unpin,
-    {
-        Ok(
-            tokio::time::timeout(timeout, tokio::io::copy(reader, writer))
-                .await
-                .map_err(|_| StreamError::Timeout)??,
-        )
-    }
-
     /// Copy data bidirectionally between two streams
     pub async fn copy_bidirectional<A, B>(stream_a: &mut A, stream_b: &mut B) -> Result<(u64, u64)>
     where
@@ -130,42 +113,5 @@ impl StreamUtils {
         B: AsyncRead + AsyncWrite + Unpin,
     {
         Ok(tokio::io::copy_bidirectional(stream_a, stream_b).await?)
-    }
-
-    /// Read a length-prefixed message from a stream
-    pub async fn read_length_prefixed<R>(reader: &mut R, max_len: usize) -> Result<Vec<u8>>
-    where
-        R: AsyncRead + Unpin,
-    {
-        // Read length (4 bytes, big-endian)
-        let mut len_buf = [0u8; 4];
-        reader.read_exact(&mut len_buf).await?;
-        let len = u32::from_be_bytes(len_buf) as usize;
-
-        if len > max_len {
-            return Err(StreamError::MessageTooLarge(len, max_len));
-        }
-
-        // Read message
-        let mut msg = vec![0u8; len];
-        reader.read_exact(&mut msg).await?;
-
-        Ok(msg)
-    }
-
-    /// Write a length-prefixed message to a stream
-    pub async fn write_length_prefixed<W>(writer: &mut W, msg: &[u8]) -> Result<()>
-    where
-        W: AsyncWrite + Unpin,
-    {
-        // Write length (4 bytes, big-endian)
-        let len = msg.len() as u32;
-        writer.write_all(&len.to_be_bytes()).await?;
-
-        // Write message
-        writer.write_all(msg).await?;
-        writer.flush().await?;
-
-        Ok(())
     }
 }
