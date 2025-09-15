@@ -8130,18 +8130,18 @@ dependencies = [
 
 [[package]]
 name = "sqlx-d1"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6226ebb36a6752f156783d83c5fdeb30a776988dea54831f990261c6a75260de"
+checksum = "1cdbc1b12713549997bb308b1d7b80375b5e261493fbb0d13adca78944c176de"
 dependencies = [
  "sqlx-d1-core",
 ]
 
 [[package]]
 name = "sqlx-d1-core"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "900a04904fe9a60ad39bfe93f367154772e7af85431260dd2c32ad70d6666e46"
+checksum = "c616de9b85649a1f1b8e18134a29be1d201d12316d33d41605b022886b8b3817"
 dependencies = [
  "futures-core",
  "futures-util",
