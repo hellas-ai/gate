@@ -57,7 +57,7 @@ chrono = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 gate-core = { workspace = true, features = ["tracing"], optional = true }
 http = { workspace = true, optional = true }
-opentelemetry = { version = "0.30", default-features = false, features = ["trace"] }
+opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 hyper = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 rust_decimal = { workspace = true }
