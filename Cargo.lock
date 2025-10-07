@@ -3931,7 +3931,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.0",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -4204,9 +4204,9 @@ dependencies = [
 
 [[package]]
 name = "instant-acme"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e49a0d5d5b4c21fd218ab511764a9e0c441e2c97b63a8e782ecc3784868b8f9"
+checksum = "aa48652eee2967fa047312e3f289e78763cf4dd7e45ff1ccc955a792d0077462"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4424,7 +4424,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6801,7 +6801,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.0",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -6838,7 +6838,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.0",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -7404,7 +7404,7 @@ dependencies = [
  "security-framework 3.4.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
