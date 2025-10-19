@@ -1,10 +1,10 @@
-//! Anthropic-specific sink factory
+//! Anthropic-specific connector factory
 
-use super::http_sink::{HttpSink, HttpSinkConfig, Provider};
-use crate::sinks::DEFAULT_SINK_TIMEOUT_SECS;
+use super::http_connector::{HttpConnector, HttpConnectorConfig, Provider};
+use crate::connectors::DEFAULT_CONNECTOR_TIMEOUT_SECS;
 use chrono::{DateTime, Utc};
 use gate_core::Result;
-use gate_core::router::types::{CostStructure, Protocol, SinkCapabilities};
+use gate_core::router::types::{ConnectorCapabilities, CostStructure, Protocol};
 use http::header::{AUTHORIZATION, USER_AGENT};
 use http::{HeaderName, HeaderValue};
 use rust_decimal::Decimal;
@@ -30,17 +30,20 @@ pub(crate) const CLAUDE_CODE_USER_AGENT: HeaderValue =
 /// Configuration for Anthropic provider
 #[derive(Debug, Clone)]
 pub struct AnthropicConfig {
-    /// API key for Anthropic; if None, sink will operate in fallback mode and
+    /// API key for Anthropic; if None, connector will operate in fallback mode and
     /// accept client-supplied keys via request headers.
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub timeout_seconds: Option<u64>,
-    /// Optional sink ID to use in descriptions/registry keys
+    /// Optional connector ID to use in descriptions/registry keys
     pub sink_id: Option<String>,
 }
 
-/// Create an Anthropic sink
-pub async fn create_sink(config: AnthropicConfig) -> Result<HttpSink> {
+/// Create an Anthropic connector
+pub async fn create_sink(
+    config: AnthropicConfig,
+    allow_passthrough: bool,
+) -> Result<HttpConnector> {
     let base_url = config
         .base_url
         .unwrap_or_else(|| "https://api.anthropic.com".to_string());
@@ -52,8 +55,12 @@ pub async fn create_sink(config: AnthropicConfig) -> Result<HttpSink> {
         Vec::new()
     };
 
-    let timeout = Duration::from_secs(config.timeout_seconds.unwrap_or(DEFAULT_SINK_TIMEOUT_SECS));
-    let sink_config = HttpSinkConfig {
+    let timeout = Duration::from_secs(
+        config
+            .timeout_seconds
+            .unwrap_or(DEFAULT_CONNECTOR_TIMEOUT_SECS),
+    );
+    let sink_config = HttpConnectorConfig {
         id: config
             .sink_id
             .clone()
@@ -65,7 +72,7 @@ pub async fn create_sink(config: AnthropicConfig) -> Result<HttpSink> {
         timeout,
         max_retries: 3,
         accepted_protocols: vec![Protocol::Anthropic],
-        capabilities: SinkCapabilities {
+        capabilities: ConnectorCapabilities {
             supports_streaming: true,
             supports_batching: false,
             supports_tools: true,
@@ -78,22 +85,23 @@ pub async fn create_sink(config: AnthropicConfig) -> Result<HttpSink> {
             cached_input_cost_per_token: Some(Decimal::from_str("0.0000075").unwrap()), // 50% discount
             currency: "USD".to_string(),
         }),
+        allow_passthrough,
     };
 
-    HttpSink::new(sink_config)
+    HttpConnector::new(sink_config)
 }
 
 /// Create a fallback Anthropic sink with no API key and default base URL.
 /// This sink will accept client-supplied API keys via headers and capture
 /// them after a successful response.
-pub async fn create_fallback_sink() -> Result<HttpSink> {
+pub async fn create_fallback_sink(allow_passthrough: bool) -> Result<HttpConnector> {
     let config = AnthropicConfig {
         api_key: None,
         base_url: None,
-        timeout_seconds: Some(DEFAULT_SINK_TIMEOUT_SECS),
+        timeout_seconds: Some(DEFAULT_CONNECTOR_TIMEOUT_SECS),
         sink_id: Some("provider://anthropic/fallback".to_string()),
     };
-    create_sink(config).await
+    create_sink(config, allow_passthrough).await
 }
 
 #[derive(Deserialize)]

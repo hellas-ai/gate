@@ -1,17 +1,16 @@
 //! Router implementation for intelligent request routing
 
+use super::connector::{Connector, ConnectorDescription, RequestContext, ResponseStream};
 use super::executor::PlanExecutor;
-use super::index::SinkIndex;
+use super::index::ConnectorIndex;
 use super::middleware::Middleware;
 use super::plan::{Route, RoutingPlan};
-use super::registry::SinkRegistry;
-use super::sink::{RequestContext, ResponseStream, Sink, SinkDescription};
-use super::strategy::{RoutingStrategy, ScoredRoute, SimpleStrategy, SinkCandidate};
+use super::registry::ConnectorRegistry;
+use super::strategy::{ConnectorCandidate, RoutingStrategy, ScoredRoute, SimpleStrategy};
 use super::types::{Protocol, RequestCapabilities, RequestDescriptor, RequestStream, RetryConfig};
-use super::{SinkHealth, SinkSnapshot};
+use super::{ConnectorHealth, ConnectorSnapshot};
 use crate::Result;
-use crate::router::SinkCapabilities;
-use crate::router::types::ModelList;
+// use crate::router::types::ConnectorCapabilities; // used inline
 use crate::state::StateBackend;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -24,10 +23,10 @@ use std::time::Duration;
 /// Router - makes routing decisions
 pub struct Router {
     state_backend: Arc<dyn StateBackend>,
-    sink_registry: Arc<SinkRegistry>,
+    sink_registry: Arc<ConnectorRegistry>,
     strategy: Box<dyn RoutingStrategy>,
     middleware: Vec<Arc<dyn Middleware>>,
-    sink_index: Option<Arc<SinkIndex>>, // Optional fast-path index
+    sink_index: Option<Arc<ConnectorIndex>>, // Optional fast-path index
 }
 
 impl Router {
@@ -134,12 +133,12 @@ impl Router {
     /// Find eligible sinks for the given models and protocol
     async fn find_eligible_sinks(
         &self,
-        models: &[String],
+        _models: &[String],
         protocol: Protocol,
         req_caps: &RequestCapabilities,
         context_hint: Option<usize>,
-        index: Option<&SinkIndex>,
-    ) -> Result<Vec<SinkCandidate>> {
+        index: Option<&ConnectorIndex>,
+    ) -> Result<Vec<ConnectorCandidate>> {
         let mut candidates = Vec::new();
 
         if let Some(index) = index {
@@ -147,7 +146,7 @@ impl Router {
             let snapshots = index.list().await;
             for (
                 sink_id,
-                SinkSnapshot {
+                ConnectorSnapshot {
                     description,
                     health,
                     ..
@@ -200,8 +199,8 @@ impl Router {
                     }
                 }
 
-                candidates.push(SinkCandidate {
-                    sink: sink.clone(),
+                candidates.push(ConnectorCandidate {
+                    connector: sink.clone(),
                     description,
                     health,
                     needs_conversion: None,
@@ -248,8 +247,8 @@ impl Router {
                     }
                 }
 
-                candidates.push(SinkCandidate {
-                    sink: sink.clone(),
+                candidates.push(ConnectorCandidate {
+                    connector: sink.clone(),
                     description,
                     health,
                     needs_conversion: None,
@@ -271,7 +270,7 @@ impl Router {
 
         let primary = scored.remove(0);
         let primary_route = Route {
-            sink_id: primary.sink_id,
+            connector_id: primary.connector_id,
             protocol_conversion: primary.conversion_needed,
             timeout: Duration::from_secs(300),
             retry_config: RetryConfig::default(),
@@ -281,7 +280,7 @@ impl Router {
             .into_iter()
             .take(2) // Limit fallbacks
             .map(|s| Route {
-                sink_id: s.sink_id,
+                connector_id: s.connector_id,
                 protocol_conversion: s.conversion_needed,
                 timeout: Duration::from_secs(30),
                 retry_config: RetryConfig::default(),
@@ -292,10 +291,10 @@ impl Router {
     }
 }
 
-// Router also implements Sink for composability
+// Router also implements Connector for composability
 #[async_trait]
-impl Sink for Router {
-    async fn describe(&self) -> SinkDescription {
+impl Connector for Router {
+    async fn describe(&self) -> ConnectorDescription {
         // Aggregate descriptions from all sinks
         let sinks = self.sink_registry.get_all().await;
         let mut all_protocols = Vec::new();
@@ -317,10 +316,10 @@ impl Sink for Router {
             }
         }
 
-        SinkDescription {
+        ConnectorDescription {
             id: "router".to_string(),
             accepted_protocols: all_protocols,
-            capabilities: SinkCapabilities {
+            capabilities: crate::router::types::ConnectorCapabilities {
                 supports_streaming,
                 supports_batching: false,
                 supports_tools,
@@ -331,7 +330,7 @@ impl Sink for Router {
         }
     }
 
-    async fn probe(&self) -> SinkHealth {
+    async fn probe(&self) -> ConnectorHealth {
         // Aggregate health from all sinks
         let sinks = self.sink_registry.get_all().await;
         let mut healthy_count = 0;
@@ -345,7 +344,7 @@ impl Sink for Router {
             }
         }
 
-        SinkHealth {
+        ConnectorHealth {
             healthy: healthy_count > 0,
             latency_ms: None,
             error_rate: if total_count > 0 {
@@ -374,10 +373,10 @@ impl Sink for Router {
 /// Builder for Router
 pub struct RouterBuilder {
     state_backend: Option<Arc<dyn StateBackend>>,
-    sink_registry: Option<Arc<SinkRegistry>>,
+    sink_registry: Option<Arc<ConnectorRegistry>>,
     strategy: Option<Box<dyn RoutingStrategy>>,
     middleware: Vec<Arc<dyn Middleware>>,
-    sink_index: Option<Arc<SinkIndex>>,
+    sink_index: Option<Arc<ConnectorIndex>>,
 }
 
 impl RouterBuilder {
@@ -399,7 +398,7 @@ impl RouterBuilder {
     }
 
     /// Set the sink registry
-    pub fn sink_registry(mut self, registry: Arc<SinkRegistry>) -> Self {
+    pub fn sink_registry(mut self, registry: Arc<ConnectorRegistry>) -> Self {
         self.sink_registry = Some(registry);
         self
     }
@@ -417,7 +416,7 @@ impl RouterBuilder {
     }
 
     /// Set an optional sink index to use for fast routing
-    pub fn sink_index(mut self, index: Arc<SinkIndex>) -> Self {
+    pub fn sink_index(mut self, index: Arc<ConnectorIndex>) -> Self {
         self.sink_index = Some(index);
         self
     }
@@ -428,7 +427,7 @@ impl RouterBuilder {
             state_backend: self.state_backend.expect("state_backend is required"),
             sink_registry: self
                 .sink_registry
-                .unwrap_or_else(|| Arc::new(SinkRegistry::new())),
+                .unwrap_or_else(|| Arc::new(ConnectorRegistry::new())),
             strategy: self
                 .strategy
                 .unwrap_or_else(|| Box::new(SimpleStrategy::new())),

@@ -3,8 +3,8 @@ use catgrad_llm::serve::Loader;
 use futures::StreamExt;
 use gate_core::Result;
 use gate_core::router::prelude::{
-    Protocol, RequestContext, RequestStream, ResponseChunk, Sink, SinkCapabilities,
-    SinkDescription, SinkHealth, StopReason,
+    Connector, ConnectorCapabilities, ConnectorHealth, Protocol, RequestContext, RequestStream,
+    ResponseChunk, StopReason,
 };
 use serde_json::json;
 use std::pin::Pin;
@@ -14,23 +14,18 @@ use catgrad_llm::{
     serve::{ChatTokenizer, LM, Message, Tokenizer},
 };
 
-pub struct CatgradSink {
-    id: String,
-}
+const SINK_ID: &str = "catgrad";
 
-impl CatgradSink {
-    pub fn new(id: impl Into<String>) -> Self {
-        Self { id: id.into() }
-    }
-}
+#[derive(Default)]
+pub struct CatgradSink;
 
 #[async_trait]
-impl Sink for CatgradSink {
-    async fn describe(&self) -> SinkDescription {
-        SinkDescription {
-            id: self.id.clone(),
+impl Connector for CatgradSink {
+    async fn describe(&self) -> gate_core::router::connector::ConnectorDescription {
+        gate_core::router::connector::ConnectorDescription {
+            id: SINK_ID.to_string(),
             accepted_protocols: vec![Protocol::OpenAIChat, Protocol::Anthropic],
-            capabilities: SinkCapabilities {
+            capabilities: ConnectorCapabilities {
                 supports_streaming: true,
                 supports_batching: false,
                 supports_tools: false,
@@ -41,8 +36,8 @@ impl Sink for CatgradSink {
         }
     }
 
-    async fn probe(&self) -> SinkHealth {
-        SinkHealth {
+    async fn probe(&self) -> ConnectorHealth {
+        ConnectorHealth {
             healthy: true,
             latency_ms: Some(10),
             error_rate: 0.0,

@@ -59,7 +59,10 @@ fn local_app_content() -> Html {
     }
 
     // Show loading state while auth is being restored from sessionStorage
-    if auth.is_loading {
+    if matches!(
+        auth.state,
+        gate_frontend_common::auth::context::AuthState::Loading
+    ) {
         html! {
             <div class="min-h-screen bg-gray-950 flex items-center justify-center">
                 <div class="text-center">

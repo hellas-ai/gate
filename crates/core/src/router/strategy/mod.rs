@@ -12,27 +12,27 @@ pub use latency::LatencyOptimizedStrategy;
 pub use provider_affinity::ProviderAffinityStrategy;
 pub use weighted::WeightedStrategy;
 
+use super::connector::{Connector, ConnectorDescription, RequestContext};
 use super::protocols::ProtocolConversion;
-use super::sink::{RequestContext, Sink, SinkDescription};
-use super::types::{RequestDescriptor, SinkHealth};
+use super::types::{ConnectorHealth, RequestDescriptor};
 use crate::Result;
 use async_trait::async_trait;
 use rust_decimal::Decimal;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Candidate sink for routing
+/// Candidate connector for routing
 #[derive(Clone)]
-pub struct SinkCandidate {
-    pub sink: Arc<dyn Sink>,
-    pub description: SinkDescription,
-    pub health: SinkHealth,
+pub struct ConnectorCandidate {
+    pub connector: Arc<dyn Connector>,
+    pub description: ConnectorDescription,
+    pub health: ConnectorHealth,
     pub needs_conversion: Option<ProtocolConversion>,
 }
 
 /// Scored route after strategy evaluation
 pub struct ScoredRoute {
-    pub sink_id: String,
+    pub connector_id: String,
     pub score: f64,
     pub estimated_cost: Option<Decimal>,
     pub estimated_latency: Option<Duration>,
@@ -48,7 +48,7 @@ pub trait RoutingStrategy: Send + Sync {
         &self,
         ctx: &RequestContext,
         request: &RequestDescriptor,
-        candidates: Vec<SinkCandidate>,
+        candidates: Vec<ConnectorCandidate>,
     ) -> Result<Vec<ScoredRoute>>;
 }
 
@@ -67,13 +67,13 @@ impl RoutingStrategy for SimpleStrategy {
         &self,
         _ctx: &RequestContext,
         _request: &RequestDescriptor,
-        candidates: Vec<SinkCandidate>,
+        candidates: Vec<ConnectorCandidate>,
     ) -> Result<Vec<ScoredRoute>> {
         Ok(candidates
             .into_iter()
             .enumerate()
             .map(|(i, candidate)| ScoredRoute {
-                sink_id: candidate.description.id,
+                connector_id: candidate.description.id,
                 score: 1.0 / (i as f64 + 1.0), // Decreasing scores
                 estimated_cost: None,
                 estimated_latency: None,
@@ -107,7 +107,7 @@ impl RoutingStrategy for CompositeStrategy {
         &self,
         ctx: &RequestContext,
         request: &RequestDescriptor,
-        candidates: Vec<SinkCandidate>,
+        candidates: Vec<ConnectorCandidate>,
     ) -> Result<Vec<ScoredRoute>> {
         if self.strategies.is_empty() {
             return Ok(vec![]);
@@ -123,12 +123,12 @@ impl RoutingStrategy for CompositeStrategy {
             let scored = strategy.evaluate(ctx, request, candidates.clone()).await?;
             for route in scored {
                 all_scores
-                    .entry(route.sink_id.clone())
+                    .entry(route.connector_id.clone())
                     .or_default()
                     .push((route.score, *weight));
 
                 // Store the route details (will be overwritten by last strategy)
-                final_routes.insert(route.sink_id.clone(), route);
+                final_routes.insert(route.connector_id.clone(), route);
             }
         }
 

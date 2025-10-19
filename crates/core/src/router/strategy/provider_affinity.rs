@@ -1,7 +1,7 @@
-use super::{RoutingStrategy, ScoredRoute, SinkCandidate};
+use super::{ConnectorCandidate, RoutingStrategy, ScoredRoute};
 use crate::Result;
+use crate::router::connector::RequestContext;
 use crate::router::signals::{has_anthropic_signal, has_openai_signal};
-use crate::router::sink::RequestContext;
 use crate::router::types::{Protocol, RequestDescriptor};
 use async_trait::async_trait;
 use http::header::AUTHORIZATION;
@@ -59,7 +59,7 @@ impl RoutingStrategy for ProviderAffinityStrategy {
         &self,
         _ctx: &RequestContext,
         request: &RequestDescriptor,
-        candidates: Vec<SinkCandidate>,
+        candidates: Vec<ConnectorCandidate>,
     ) -> Result<Vec<ScoredRoute>> {
         // Derive intent from protocol, headers, then model prefix as weak hint
         let protocol_intent = Self::provider_prefix_for_protocol(request.protocol);
@@ -106,7 +106,7 @@ impl RoutingStrategy for ProviderAffinityStrategy {
             }
 
             routes.push(ScoredRoute {
-                sink_id: c.description.id.clone(),
+                connector_id: c.description.id.clone(),
                 score,
                 estimated_cost: None,
                 estimated_latency: None,

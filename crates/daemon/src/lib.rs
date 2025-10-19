@@ -3,6 +3,7 @@ extern crate tracing;
 
 pub mod bootstrap;
 pub mod config;
+pub mod connectors;
 pub mod context;
 pub mod daemon;
 pub mod error;
@@ -10,7 +11,6 @@ pub mod helpers;
 pub mod permissions;
 pub mod routes;
 pub mod services;
-pub mod sinks;
 pub mod state;
 pub mod state_dir;
 pub mod tls_reload;

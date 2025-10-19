@@ -1,8 +1,7 @@
 //! WebAuthn hook for simplified authentication flows
 
-use crate::auth::context::AuthState;
 use crate::auth::error_messages::get_user_friendly_error;
-use crate::auth::{use_auth, AuthAction};
+use crate::auth::{context::use_public_client, use_auth, AuthAction};
 use crate::services::{AuthApiService, WebAuthnBrowserService};
 use yew::prelude::*;
 
@@ -17,7 +16,7 @@ pub enum WebAuthnState {
 /// WebAuthn hook handle
 #[derive(Clone)]
 pub struct UseWebAuthnHandle {
-    auth_api: AuthApiService,
+    auth_api: Option<AuthApiService>,
     browser_service: WebAuthnBrowserService,
     auth_context: UseReducerHandle<crate::auth::context::AuthContextData>,
     state: UseStateHandle<WebAuthnState>,
@@ -47,8 +46,16 @@ impl UseWebAuthnHandle {
                 return;
             }
 
+            // Get the auth API
+            let Some(api) = auth_api else {
+                state.set(WebAuthnState::Error(
+                    "Authentication service not available".to_string(),
+                ));
+                return;
+            };
+
             // Start registration
-            match auth_api.start_registration(name).await {
+            match api.start_registration(&name).await {
                 Ok(start_response) => {
                     gloo::console::log!("Registration started, creating credential...");
 
@@ -61,7 +68,7 @@ impl UseWebAuthnHandle {
                             gloo::console::log!("Credential created, completing registration...");
 
                             // Complete registration
-                            match auth_api
+                            match api
                                 .complete_registration(
                                     start_response.session_id,
                                     credential,
@@ -74,12 +81,11 @@ impl UseWebAuthnHandle {
                                     gloo::console::log!("Registration successful!");
 
                                     // Update auth state
-                                    auth_context.dispatch(AuthAction::Login(AuthState {
+                                    auth_context.dispatch(AuthAction::Login {
                                         user_id: complete_response.user_id,
                                         name: complete_response.name,
                                         token: complete_response.token,
-                                        expires_at: None,
-                                    }));
+                                    });
 
                                     state.set(WebAuthnState::Idle);
                                 }
@@ -122,8 +128,16 @@ impl UseWebAuthnHandle {
                 return;
             }
 
+            // Get the auth API
+            let Some(api) = auth_api else {
+                state.set(WebAuthnState::Error(
+                    "Authentication service not available".to_string(),
+                ));
+                return;
+            };
+
             // Start authentication
-            match auth_api.start_authentication().await {
+            match api.start_authentication().await {
                 Ok(start_response) => {
                     gloo::console::log!("Authentication started, getting credential...");
 
@@ -138,7 +152,7 @@ impl UseWebAuthnHandle {
                             );
 
                             // Complete authentication
-                            match auth_api
+                            match api
                                 .complete_authentication(start_response.session_id, credential)
                                 .await
                             {
@@ -146,12 +160,11 @@ impl UseWebAuthnHandle {
                                     gloo::console::log!("Authentication successful!");
 
                                     // Update auth state
-                                    auth_context.dispatch(AuthAction::Login(AuthState {
+                                    auth_context.dispatch(AuthAction::Login {
                                         user_id: complete_response.user_id,
                                         name: complete_response.name,
                                         token: complete_response.token,
-                                        expires_at: None,
-                                    }));
+                                    });
 
                                     state.set(WebAuthnState::Idle);
                                 }
@@ -192,13 +205,14 @@ impl UseWebAuthnHandle {
 /// Hook to use WebAuthn authentication
 #[hook]
 pub fn use_webauthn() -> UseWebAuthnHandle {
-    let auth_api = use_memo((), |_| AuthApiService::new());
+    let client = use_public_client();
+    let auth_api = client.map(AuthApiService::new);
     let browser_service = use_memo((), |_| WebAuthnBrowserService::new());
     let auth_context = use_auth();
     let state = use_state(|| WebAuthnState::Idle);
 
     UseWebAuthnHandle {
-        auth_api: (*auth_api).clone(),
+        auth_api,
         browser_service: (*browser_service).clone(),
         auth_context,
         state,

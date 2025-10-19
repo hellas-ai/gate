@@ -2,8 +2,8 @@
 
 use crate::{
     auth::extract_identity,
+    connectors::response_converter::{response_stream_to_axum, response_stream_to_json},
     error::HttpError,
-    sinks::response_converter::{response_stream_to_axum, response_stream_to_json},
     state::AppState,
     types::*,
 };
@@ -17,7 +17,7 @@ use axum::{
     routing::post,
 };
 use gate_core::router::{
-    service::route_and_execute_json_with_protocol, sink::RequestContext, types::Protocol,
+    connector::RequestContext, service::route_and_execute_json_with_protocol, types::Protocol,
 };
 use gate_core::tracing::prelude::*;
 

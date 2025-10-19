@@ -1,7 +1,7 @@
 //! Type-safe API clients that enforce authentication requirements at compile time
 
 use super::ClientError;
-use reqwest::{Client, ClientBuilder, Method, RequestBuilder, header};
+use reqwest::{Client, Method, RequestBuilder, header};
 use std::time::Duration;
 use url::Url;
 
@@ -41,7 +41,7 @@ impl PublicGateClient {
 
         #[cfg(not(target_arch = "wasm32"))]
         let client = {
-            let mut builder = ClientBuilder::new().user_agent("gate-client/0.1.0");
+            let mut builder = reqwest::ClientBuilder::new().user_agent("gate-client/0.1.0");
             if let Some(timeout) = timeout {
                 builder = builder.timeout(timeout);
             }
@@ -51,7 +51,7 @@ impl PublicGateClient {
         #[cfg(target_arch = "wasm32")]
         let client = {
             let _ = timeout; // Timeouts not supported on WASM
-            ClientBuilder::new()
+            reqwest::ClientBuilder::new()
                 .user_agent("gate-client/0.1.0")
                 .build()?
         };
@@ -125,7 +125,7 @@ impl AuthenticatedGateClient {
 
         #[cfg(not(target_arch = "wasm32"))]
         let client = {
-            let mut builder = ClientBuilder::new().user_agent("gate-client/0.1.0");
+            let mut builder = reqwest::ClientBuilder::new().user_agent("gate-client/0.1.0");
             if let Some(timeout) = timeout {
                 builder = builder.timeout(timeout);
             }
@@ -190,20 +190,13 @@ impl AuthenticatedGateClient {
 }
 
 /// Type-safe builder that creates the appropriate client type
-pub struct TypedClientBuilder {
+#[derive(Default)]
+pub struct ClientBuilder {
     base_url: Option<String>,
     timeout: Option<Duration>,
 }
 
-impl TypedClientBuilder {
-    /// Create a new builder
-    pub fn new() -> Self {
-        Self {
-            base_url: None,
-            timeout: None,
-        }
-    }
-
+impl ClientBuilder {
     /// Set the base URL
     pub fn base_url(mut self, url: impl Into<String>) -> Self {
         self.base_url = Some(url.into());
@@ -236,11 +229,5 @@ impl TypedClientBuilder {
             .ok_or_else(|| ClientError::Configuration("base_url is required".into()))?;
 
         AuthenticatedGateClient::new_with_timeout(base_url, api_key, self.timeout)
-    }
-}
-
-impl Default for TypedClientBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }

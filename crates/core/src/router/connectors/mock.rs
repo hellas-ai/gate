@@ -1,27 +1,27 @@
-//! Mock sink implementations for testing
+//! Mock connector implementations for testing
 
 use crate::Result;
-use crate::router::sink::{RequestContext, Sink, SinkDescription};
+use crate::router::connector::{Connector, ConnectorDescription, RequestContext};
 use crate::router::types::RequestStream;
-use crate::router::types::{ModelList, Protocol, ResponseChunk, SinkCapabilities, SinkHealth};
+use crate::router::types::{ConnectorCapabilities, ConnectorHealth, Protocol, ResponseChunk};
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::json;
 use std::pin::Pin;
 
-pub struct MockSink {
+pub struct MockConnector {
     pub id: String,
     pub accepted_protocols: Vec<Protocol>,
-    pub capabilities: SinkCapabilities,
+    pub capabilities: ConnectorCapabilities,
     pub healthy: bool,
 }
 
-impl MockSink {
+impl MockConnector {
     pub fn success(id: &str) -> Self {
         Self {
             id: id.to_string(),
             accepted_protocols: vec![Protocol::OpenAIChat, Protocol::Anthropic],
-            capabilities: SinkCapabilities {
+            capabilities: ConnectorCapabilities {
                 supports_streaming: true,
                 supports_batching: false,
                 supports_tools: true,
@@ -40,9 +40,9 @@ impl MockSink {
 }
 
 #[async_trait]
-impl Sink for MockSink {
-    async fn describe(&self) -> SinkDescription {
-        SinkDescription {
+impl Connector for MockConnector {
+    async fn describe(&self) -> ConnectorDescription {
+        ConnectorDescription {
             id: self.id.clone(),
             accepted_protocols: self.accepted_protocols.clone(),
             capabilities: self.capabilities.clone(),
@@ -50,8 +50,8 @@ impl Sink for MockSink {
         }
     }
 
-    async fn probe(&self) -> SinkHealth {
-        SinkHealth {
+    async fn probe(&self) -> ConnectorHealth {
+        ConnectorHealth {
             healthy: self.healthy,
             latency_ms: Some(50),
             error_rate: if self.healthy { 0.0 } else { 1.0 },

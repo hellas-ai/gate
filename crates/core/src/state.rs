@@ -90,7 +90,7 @@ pub trait StateBackend: Send + Sync {
     async fn update_sink_health(
         &self,
         _sink_id: &str,
-        _health: &crate::router::types::SinkHealth,
+        _health: &crate::router::types::ConnectorHealth,
     ) -> Result<()> {
         Err(crate::Error::Internal(
             "Sink health tracking not implemented".into(),
@@ -100,7 +100,7 @@ pub trait StateBackend: Send + Sync {
     async fn get_sink_health(
         &self,
         _sink_id: &str,
-    ) -> Result<Option<crate::router::types::SinkHealth>> {
+    ) -> Result<Option<crate::router::types::ConnectorHealth>> {
         Err(crate::Error::Internal(
             "Sink health tracking not implemented".into(),
         ))

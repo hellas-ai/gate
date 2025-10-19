@@ -53,12 +53,11 @@ async fn test_identity_extraction_anonymous() {
 
 #[tokio::test]
 async fn test_sse_parser() {
-    use bytes::Bytes;
     use futures::{StreamExt, stream};
-    use gate_http::sinks::sse_parser::parse_sse;
+    use gate_http::connectors::sse_parser::parse_sse;
 
     let data = b"event: message\ndata: {\"text\": \"hello\"}\nid: 123\n\n";
-    let stream = stream::once(async { Ok::<_, reqwest::Error>(Bytes::from(&data[..])) });
+    let stream = stream::once(async { Ok::<_, gate_core::Error>(data.to_vec()) });
     let stream = Box::pin(stream);
     let mut parser = parse_sse(stream);
 
@@ -70,12 +69,11 @@ async fn test_sse_parser() {
 
 #[tokio::test]
 async fn test_sse_parser_multiline() {
-    use bytes::Bytes;
     use futures::{StreamExt, stream};
-    use gate_http::sinks::sse_parser::parse_sse;
+    use gate_http::connectors::sse_parser::parse_sse;
 
     let data = b"data: line 1\ndata: line 2\ndata: line 3\n\n";
-    let stream = stream::once(async { Ok::<_, reqwest::Error>(Bytes::from(&data[..])) });
+    let stream = stream::once(async { Ok::<_, gate_core::Error>(data.to_vec()) });
     let stream = Box::pin(stream);
     let mut parser = parse_sse(stream);
 
@@ -85,17 +83,16 @@ async fn test_sse_parser_multiline() {
 
 #[tokio::test]
 async fn test_sse_parser_split_chunks() {
-    use bytes::Bytes;
     use futures::{StreamExt, stream};
-    use gate_http::sinks::sse_parser::parse_sse;
+    use gate_http::connectors::sse_parser::parse_sse;
 
     // Simulate data arriving in multiple chunks
     let chunk1 = b"data: {\"partial\":";
     let chunk2 = b"\"message\"}\n\n";
 
     let stream = stream::iter(vec![
-        Ok::<_, reqwest::Error>(Bytes::from(&chunk1[..])),
-        Ok(Bytes::from(&chunk2[..])),
+        Ok::<_, gate_core::Error>(chunk1.to_vec()),
+        Ok(chunk2.to_vec()),
     ]);
     let stream = Box::pin(stream);
 
@@ -107,12 +104,11 @@ async fn test_sse_parser_split_chunks() {
 
 #[tokio::test]
 async fn test_sse_parser_with_comments() {
-    use bytes::Bytes;
     use futures::{StreamExt, stream};
-    use gate_http::sinks::sse_parser::parse_sse;
+    use gate_http::connectors::sse_parser::parse_sse;
 
     let data = b": this is a comment\ndata: actual data\n\n";
-    let stream = stream::once(async { Ok::<_, reqwest::Error>(Bytes::from(&data[..])) });
+    let stream = stream::once(async { Ok::<_, gate_core::Error>(data.to_vec()) });
     let stream = Box::pin(stream);
     let mut parser = parse_sse(stream);
 
@@ -122,12 +118,11 @@ async fn test_sse_parser_with_comments() {
 
 #[tokio::test]
 async fn test_sse_parser_with_retry() {
-    use bytes::Bytes;
     use futures::{StreamExt, stream};
-    use gate_http::sinks::sse_parser::parse_sse;
+    use gate_http::connectors::sse_parser::parse_sse;
 
     let data = b"retry: 5000\ndata: test message\n\n";
-    let stream = stream::once(async { Ok::<_, reqwest::Error>(Bytes::from(&data[..])) });
+    let stream = stream::once(async { Ok::<_, gate_core::Error>(data.to_vec()) });
     let stream = Box::pin(stream);
     let mut parser = parse_sse(stream);
 

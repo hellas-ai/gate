@@ -1,9 +1,10 @@
 //! User detail view with permission management
 
-use super::shared::{ActionButton, ActionButtonVariant, EmptyState, StatusBadge};
-use crate::services::user::{UserInfo, UserPermission, UserService};
+use super::shared::{ActionButton, ActionButtonVariant, StatusBadge};
+use crate::hooks::use_user_service;
+use crate::services::user::UserInfo;
+// TODO: UserPermission not yet implemented in backend
 use gloo::timers::callback::Timeout;
-use yew::functional::use_memo;
 use yew::prelude::*;
 
 #[derive(Properties, PartialEq)]
@@ -15,21 +16,32 @@ pub struct UserDetailProps {
 
 #[function_component(UserDetail)]
 pub fn user_detail(props: &UserDetailProps) -> Html {
-    let user_service = use_memo((), |_| UserService::new());
+    let user_service = use_user_service();
 
     let user = use_state(|| Option::<UserInfo>::None);
-    let permissions = use_state(Vec::<UserPermission>::new);
+    // let permissions = use_state(Vec::<UserPermission>::new);
     let is_loading = use_state(|| true);
     let error = use_state(|| Option::<String>::None);
     let success = use_state(|| Option::<String>::None);
     let show_add_permission = use_state(|| false);
+
+    // Return early if no auth client available
+    let Some(user_service) = user_service else {
+        return html! {
+            <div class="p-6">
+                <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+                    <p class="text-gray-600 dark:text-gray-400">{ "Authentication required to view user details." }</p>
+                </div>
+            </div>
+        };
+    };
 
     // Load user data
     {
         let user_id = props.user_id.clone();
         let user_service = user_service.clone();
         let user = user.clone();
-        let permissions = permissions.clone();
+        // let permissions = permissions.clone();
         let is_loading = is_loading.clone();
         let error = error.clone();
 
@@ -47,15 +59,15 @@ pub fn user_detail(props: &UserDetailProps) -> Html {
                     }
                 }
 
-                // Load permissions
-                match user_service.get_user_permissions(&user_id).await {
-                    Ok(perms) => {
-                        permissions.set(perms);
-                    }
-                    Err(e) => {
-                        error.set(Some(format!("Failed to load permissions: {e}")));
-                    }
-                }
+                // TODO: Load permissions when backend API is ready
+                // match user_service.get_user_permissions(&user_id).await {
+                //     Ok(perms) => {
+                //         permissions.set(perms);
+                //     }
+                //     Err(e) => {
+                //         error.set(Some(format!("Failed to load permissions: {e}")));
+                //     }
+                // }
 
                 is_loading.set(false);
             });
@@ -110,44 +122,8 @@ pub fn user_detail(props: &UserDetailProps) -> Html {
         })
     };
 
-    let on_revoke_permission = {
-        let user_id = props.user_id.clone();
-        let user_service = user_service.clone();
-        let permissions = permissions.clone();
-        let error = error.clone();
-        let success = success.clone();
-
-        Callback::from(move |perm: UserPermission| {
-            let user_service = user_service.clone();
-            let permissions = permissions.clone();
-            let error = error.clone();
-            let success = success.clone();
-            let user_id = user_id.clone();
-
-            wasm_bindgen_futures::spawn_local(async move {
-                match user_service
-                    .revoke_permission(&user_id, &perm.action, &perm.object)
-                    .await
-                {
-                    Ok(_) => {
-                        // Reload permissions
-                        match user_service.get_user_permissions(&user_id).await {
-                            Ok(perms) => {
-                                permissions.set(perms);
-                                success.set(Some("Permission revoked".to_string()));
-                            }
-                            Err(e) => {
-                                error.set(Some(format!("Failed to reload permissions: {e}")));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error.set(Some(format!("Failed to revoke permission: {e}")));
-                    }
-                }
-            });
-        })
-    };
+    // TODO: Implement permission management when backend API is ready
+    // let on_revoke_permission = { ... };
 
     if *is_loading {
         return html! {
@@ -301,6 +277,7 @@ pub fn user_detail(props: &UserDetailProps) -> Html {
                     </div>
                 </div>
 
+                /* TODO: Permission management UI when backend API is ready
                 <div class="px-6 py-4">
                     {if permissions.is_empty() {
                         html! {
@@ -352,42 +329,45 @@ pub fn user_detail(props: &UserDetailProps) -> Html {
                             </div>
                         }
                     }}
-                </div>
+                </div>*/
             </div>
 
-            // Add Permission Modal
-            {if *show_add_permission {
+            // TODO: Add Permission Modal when backend API is ready
+            /*{if *show_add_permission {
                 let show_add_permission_close = show_add_permission.clone();
                 let show_add_permission_grant = show_add_permission.clone();
-                let permissions = permissions.clone();
+                // let permissions = permissions.clone();
                 let user_service = user_service.clone();
                 let user_id = props.user_id.clone();
 
                 html! {
-                    <PermissionGrantModal
+                    // <PermissionGrantModal
                         user_id={props.user_id.clone()}
                         on_close={Callback::from(move |_| show_add_permission_close.set(false))}
                         on_grant={Callback::from(move |_| {
                             show_add_permission_grant.set(false);
                             // Reload permissions
                             let user_service = user_service.clone();
-                            let permissions = permissions.clone();
+                            // let permissions = permissions.clone();
                             let user_id = user_id.clone();
                             wasm_bindgen_futures::spawn_local(async move {
                                 if let Ok(perms) = user_service.get_user_permissions(&user_id).await {
-                                    permissions.set(perms);
+                                    // permissions.set(perms);
                                 }
                             });
                         })}
-                    />
+                    // /&gt;
+                    html! {}
                 }
             } else {
                 html! {}
-            }}
+            }}*/
         </div>
     }
 }
 
+// TODO: Implement PermissionGrantModal when backend API is ready
+/*
 #[derive(Properties, PartialEq)]
 struct PermissionGrantModalProps {
     user_id: String,
@@ -398,7 +378,7 @@ struct PermissionGrantModalProps {
 #[function_component(PermissionGrantModal)]
 fn permission_grant_modal(props: &PermissionGrantModalProps) -> Html {
     let action = use_state(|| "Read".to_string());
-    let object = use_state(|| "local/System/*".to_string());
+    let object = use_state(|| "local/System/all".to_string());
 
     let available_actions = [
         "Read",
@@ -412,7 +392,7 @@ fn permission_grant_modal(props: &PermissionGrantModalProps) -> Html {
     ];
 
     let on_submit = {
-        let user_service = UserService::new();
+        let user_service = UserService::new(); // TODO: needs client
         let user_id = props.user_id.clone();
         let action = action.clone();
         let object = object.clone();
@@ -491,7 +471,7 @@ fn permission_grant_modal(props: &PermissionGrantModalProps) -> Html {
                                         object.set(input.value());
                                     })
                                 }}
-                                placeholder="e.g., local/System/*, system/User/user123"
+                                placeholder="e.g., local/System/all, system/User/user123"
                             />
                         </div>
                     </div>
@@ -516,4 +496,4 @@ fn permission_grant_modal(props: &PermissionGrantModalProps) -> Html {
             </div>
         </div>
     }
-}
+}*/

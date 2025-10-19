@@ -1,7 +1,6 @@
 //! Inference service for communicating with LLM endpoints
 
-use crate::client::create_authenticated_client;
-use gate_http::client::error::ClientError;
+use gate_http::client::{error::ClientError, AuthenticatedGateClient};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -83,16 +82,20 @@ pub struct ModelsResponse {
 }
 
 /// Inference service for making LLM API calls
-pub struct InferenceService;
+#[derive(Clone)]
+pub struct InferenceService {
+    client: AuthenticatedGateClient,
+}
 
 impl InferenceService {
-    /// Fetch available models (requires authentication)
-    pub async fn get_models() -> Result<Vec<Model>, ClientError> {
-        // This now requires authentication
-        let client = create_authenticated_client()?
-            .ok_or_else(|| ClientError::Configuration("Not authenticated".into()))?;
+    /// Create a new inference service with an authenticated client
+    pub fn new(client: AuthenticatedGateClient) -> Self {
+        Self { client }
+    }
 
-        let response = client.list_models().await?;
+    /// Fetch available models (requires authentication)
+    pub async fn get_models(&self) -> Result<Vec<Model>, ClientError> {
+        let response = self.client.list_models().await?;
         Ok(response
             .data
             .into_iter()
@@ -105,21 +108,19 @@ impl InferenceService {
 
     /// Send a chat completion request (requires authentication)
     pub async fn chat_completion(
+        &self,
         provider: Provider,
         model: String,
         messages: Vec<ChatMessage>,
         temperature: Option<f32>,
         max_tokens: Option<u32>,
     ) -> Result<JsonValue, ClientError> {
-        let client = create_authenticated_client()?
-            .ok_or_else(|| ClientError::Configuration("Not authenticated".into()))?;
-
         match provider {
             Provider::OpenAI => {
                 // Build OpenAI-style request
                 let messages = messages
                     .into_iter()
-                    .map(|msg| gate_http::client::inference_typed::ChatMessage {
+                    .map(|msg| gate_http::client::inference::ChatMessage {
                         role: match msg.role {
                             Role::System => "system",
                             Role::User => "user",
@@ -130,7 +131,7 @@ impl InferenceService {
                     })
                     .collect();
 
-                let request = gate_http::client::inference_typed::ChatCompletionRequest {
+                let request = gate_http::client::inference::ChatCompletionRequest {
                     model,
                     messages,
                     temperature,
@@ -138,16 +139,16 @@ impl InferenceService {
                     stream: Some(false),
                 };
 
-                let response = client.create_chat_completion(request).await?;
+                let response = self.client.create_chat_completion(request).await?;
                 serde_json::to_value(response).map_err(ClientError::Serialization)
             }
             Provider::Anthropic => {
                 // Convert messages to Anthropic format
-                let anthropic_messages: Vec<gate_http::client::inference_typed::AnthropicMessage> =
+                let anthropic_messages: Vec<gate_http::client::inference::AnthropicMessage> =
                     messages
                         .into_iter()
                         .filter(|msg| !matches!(msg.role, Role::System)) // Anthropic doesn't use system role in messages
-                        .map(|msg| gate_http::client::inference_typed::AnthropicMessage {
+                        .map(|msg| gate_http::client::inference::AnthropicMessage {
                             role: match msg.role {
                                 Role::User => "user",
                                 Role::Assistant => "assistant",
@@ -158,7 +159,7 @@ impl InferenceService {
                         })
                         .collect();
 
-                let request = gate_http::client::inference_typed::MessageRequest {
+                let request = gate_http::client::inference::MessageRequest {
                     model,
                     messages: anthropic_messages,
                     max_tokens: max_tokens.unwrap_or(1024), // Anthropic requires max_tokens
@@ -167,7 +168,7 @@ impl InferenceService {
                     system: None, // TODO: Extract system message if present
                 };
 
-                let response = client.create_message(request).await?;
+                let response = self.client.create_message(request).await?;
                 serde_json::to_value(response).map_err(ClientError::Serialization)
             }
         }

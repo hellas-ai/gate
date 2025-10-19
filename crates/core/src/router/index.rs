@@ -1,45 +1,45 @@
-//! SinkIndex: caller-managed snapshots of sink descriptions and health
+//! ConnectorIndex: caller-managed snapshots of connector descriptions and health
 
 use tokio::sync::RwLock;
 
-use super::registry::SinkRegistry;
-use super::sink::SinkDescription;
-use super::types::SinkHealth;
+use super::connector::ConnectorDescription;
+use super::registry::ConnectorRegistry;
+use super::types::ConnectorHealth;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Snapshot of a sink's description and health
+/// Snapshot of a connector's description and health
 #[derive(Clone, Debug)]
-pub struct SinkSnapshot {
-    pub description: SinkDescription,
-    pub health: SinkHealth,
+pub struct ConnectorSnapshot {
+    pub description: ConnectorDescription,
+    pub health: ConnectorHealth,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Caller-managed index of sink snapshots for fast routing
+/// Caller-managed index of connector snapshots for fast routing
 #[derive(Default, Debug, Clone)]
-pub struct SinkIndex {
-    inner: Arc<RwLock<HashMap<String, SinkSnapshot>>>,
+pub struct ConnectorIndex {
+    inner: Arc<RwLock<HashMap<String, ConnectorSnapshot>>>,
 }
 
-impl SinkIndex {
+impl ConnectorIndex {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    /// Set or update a snapshot for a sink ID (URL)
+    /// Set or update a snapshot for a connector ID (URL)
     pub async fn set_snapshot(
         &self,
-        sink_id: String,
-        description: SinkDescription,
-        health: SinkHealth,
+        connector_id: String,
+        description: ConnectorDescription,
+        health: ConnectorHealth,
     ) {
         let mut guard = self.inner.write().await;
         guard.insert(
-            sink_id,
-            SinkSnapshot {
+            connector_id,
+            ConnectorSnapshot {
                 description,
                 health,
                 updated_at: chrono::Utc::now(),
@@ -48,40 +48,40 @@ impl SinkIndex {
     }
 
     /// Remove a snapshot
-    pub async fn remove(&self, sink_id: &str) {
+    pub async fn remove(&self, connector_id: &str) {
         let mut guard = self.inner.write().await;
-        guard.remove(sink_id);
+        guard.remove(connector_id);
     }
 
-    /// Get a snapshot by sink ID
-    pub async fn get(&self, sink_id: &str) -> Option<SinkSnapshot> {
+    /// Get a snapshot by connector ID
+    pub async fn get(&self, connector_id: &str) -> Option<ConnectorSnapshot> {
         let guard = self.inner.read().await;
-        guard.get(sink_id).cloned()
+        guard.get(connector_id).cloned()
     }
 
     /// List all snapshots
-    pub async fn list(&self) -> Vec<(String, SinkSnapshot)> {
+    pub async fn list(&self) -> Vec<(String, ConnectorSnapshot)> {
         let guard = self.inner.read().await;
         guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
-    /// Refresh snapshots from the given registry (all sinks)
-    pub async fn refresh_from_registry(&self, registry: &SinkRegistry) -> usize {
+    /// Refresh snapshots from the given registry (all connectors)
+    pub async fn refresh_from_registry(&self, registry: &ConnectorRegistry) -> usize {
         let ids = registry.list_ids().await;
         self.refresh_subset_from_registry(registry, &ids).await
     }
 
-    /// Refresh a subset of sink IDs from the registry
+    /// Refresh a subset of connector IDs from the registry
     pub async fn refresh_subset_from_registry(
         &self,
-        registry: &SinkRegistry,
+        registry: &ConnectorRegistry,
         ids: &[String],
     ) -> usize {
         let mut count = 0usize;
         for id in ids {
-            if let Some(sink) = registry.get(id).await {
-                let desc = sink.describe().await;
-                let health = sink.probe().await;
+            if let Some(connector) = registry.get(id).await {
+                let desc = connector.describe().await;
+                let health = connector.probe().await;
                 self.set_snapshot(id.clone(), desc, health).await;
                 count += 1;
             }

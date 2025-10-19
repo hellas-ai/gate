@@ -1,6 +1,7 @@
 //! User management service
 
-use gate_frontend_common::client::{create_authenticated_client, ClientError};
+use gate_frontend_common::ClientError;
+use gate_http::client::AuthenticatedGateClient;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 
@@ -28,28 +29,28 @@ pub struct UpdateUserStatusRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateUserStatusResponse {
-    pub user: UserInfo,
+pub struct UserActivity {
+    pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
+    pub total_requests: u64,
+    pub recent_activity: Vec<ActivityEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserPermission {
-    pub action: String,
-    pub object: String,
-    pub granted_at: chrono::DateTime<chrono::Utc>,
+pub struct ActivityEntry {
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub endpoint: String,
+    pub status_code: u16,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserPermissionsResponse {
-    pub permissions: Vec<UserPermission>,
-}
-
+/// User management service
 #[derive(Clone)]
-pub struct UserService;
+pub struct UserService {
+    client: AuthenticatedGateClient,
+}
 
 impl UserService {
-    pub fn new() -> Self {
-        Self
+    pub fn new(client: AuthenticatedGateClient) -> Self {
+        Self { client }
     }
 
     /// List all users with pagination
@@ -59,9 +60,6 @@ impl UserService {
         page_size: usize,
         search: Option<String>,
     ) -> Result<UserListResponse, ClientError> {
-        let client = create_authenticated_client()?
-            .ok_or_else(|| ClientError::Configuration("Not authenticated".into()))?;
-
         let mut query_params = vec![
             ("page", page.to_string()),
             ("page_size", page_size.to_string()),
@@ -71,9 +69,10 @@ impl UserService {
             query_params.push(("search", search_term));
         }
 
-        let response: UserListResponse = client
+        let response: UserListResponse = self
+            .client
             .execute(
-                client
+                self.client
                     .request(Method::GET, "/api/admin/users")?
                     .query(&query_params),
             )
@@ -84,133 +83,101 @@ impl UserService {
 
     /// Get a specific user's details
     pub async fn get_user(&self, user_id: &str) -> Result<UserInfo, ClientError> {
-        let client = create_authenticated_client()?
-            .ok_or_else(|| ClientError::Configuration("Not authenticated".into()))?;
-
-        let response: UserInfo = client
-            .execute(client.request(Method::GET, &format!("/api/admin/users/{user_id}"))?)
+        let path = format!("/api/admin/users/{user_id}");
+        let response: UserInfo = self
+            .client
+            .execute(self.client.request(Method::GET, &path)?)
             .await?;
 
         Ok(response)
     }
 
-    /// Update user status (enable/disable)
+    /// Update a user's status (enable/disable)
     pub async fn update_user_status(
         &self,
         user_id: &str,
         enabled: bool,
     ) -> Result<UserInfo, ClientError> {
-        let client = create_authenticated_client()?
-            .ok_or_else(|| ClientError::Configuration("Not authenticated".into()))?;
-
-        let request_body = UpdateUserStatusRequest { enabled };
-
-        let response: UpdateUserStatusResponse = client
+        let path = format!("/api/admin/users/{user_id}/status");
+        let response: UserInfo = self
+            .client
             .execute(
-                client
-                    .request(Method::PATCH, &format!("/api/admin/users/{user_id}/status"))?
-                    .json(&request_body),
+                self.client
+                    .request(Method::PUT, &path)?
+                    .json(&UpdateUserStatusRequest { enabled }),
             )
             .await?;
 
-        Ok(response.user)
+        Ok(response)
     }
 
     /// Delete a user
     pub async fn delete_user(&self, user_id: &str) -> Result<(), ClientError> {
-        let client = create_authenticated_client()?
-            .ok_or_else(|| ClientError::Configuration("Not authenticated".into()))?;
-
-        // For DELETE with no response body, we expect empty JSON
-        let _: serde_json::Value = client
-            .execute(client.request(Method::DELETE, &format!("/api/admin/users/{user_id}"))?)
+        let path = format!("/api/admin/users/{user_id}");
+        let _: serde_json::Value = self
+            .client
+            .execute(self.client.request(Method::DELETE, &path)?)
             .await?;
 
         Ok(())
     }
 
-    /// Get user's permissions
-    pub async fn get_user_permissions(
-        &self,
-        user_id: &str,
-    ) -> Result<Vec<UserPermission>, ClientError> {
-        let client = create_authenticated_client()?
-            .ok_or_else(|| ClientError::Configuration("Not authenticated".into()))?;
-
-        let response: UserPermissionsResponse = client
-            .execute(client.request(
-                Method::GET,
-                &format!("/api/admin/users/{user_id}/permissions"),
-            )?)
-            .await?;
-
-        Ok(response.permissions)
-    }
-
-    /// Grant permission to user
-    pub async fn grant_permission(
-        &self,
-        user_id: &str,
-        action: &str,
-        object: &str,
-    ) -> Result<(), ClientError> {
-        let client = create_authenticated_client()?
-            .ok_or_else(|| ClientError::Configuration("Not authenticated".into()))?;
-
-        #[derive(Serialize)]
-        struct GrantRequest {
-            action: String,
-            object: String,
-        }
-
-        let request_body = GrantRequest {
-            action: action.to_string(),
-            object: object.to_string(),
-        };
-
-        let _: serde_json::Value = client
-            .execute(
-                client
-                    .request(
-                        Method::POST,
-                        &format!("/api/admin/users/{user_id}/permissions"),
-                    )?
-                    .json(&request_body),
-            )
+    /// Revoke all of a user's active sessions
+    pub async fn revoke_user_sessions(&self, user_id: &str) -> Result<(), ClientError> {
+        let path = format!("/api/admin/users/{user_id}/sessions");
+        let _: serde_json::Value = self
+            .client
+            .execute(self.client.request(Method::DELETE, &path)?)
             .await?;
 
         Ok(())
     }
 
-    /// Revoke permission from user
-    pub async fn revoke_permission(
-        &self,
-        user_id: &str,
-        action: &str,
-        object: &str,
-    ) -> Result<(), ClientError> {
-        let client = create_authenticated_client()?
-            .ok_or_else(|| ClientError::Configuration("Not authenticated".into()))?;
-
-        let query_params = vec![("action", action), ("object", object)];
-
-        let _: serde_json::Value = client
-            .execute(
-                client
-                    .request(
-                        Method::DELETE,
-                        &format!("/api/admin/users/{user_id}/permissions"),
-                    )?
-                    .query(&query_params),
-            )
+    /// Revoke all of a user's API keys
+    pub async fn revoke_user_api_keys(&self, user_id: &str) -> Result<(), ClientError> {
+        let path = format!("/api/admin/users/{user_id}/api-keys");
+        let _: serde_json::Value = self
+            .client
+            .execute(self.client.request(Method::DELETE, &path)?)
             .await?;
 
         Ok(())
+    }
+
+    /// Get user activity
+    pub async fn get_user_activity(&self, user_id: &str) -> Result<UserActivity, ClientError> {
+        let path = format!("/api/admin/users/{user_id}/activity");
+        let response: UserActivity = self
+            .client
+            .execute(self.client.request(Method::GET, &path)?)
+            .await?;
+
+        Ok(response)
+    }
+
+    /// Get aggregated user statistics
+    pub async fn get_user_stats(&self) -> Result<UserStats, ClientError> {
+        let response: UserStats = self
+            .client
+            .execute(self.client.request(Method::GET, "/api/admin/users/stats")?)
+            .await?;
+
+        Ok(response)
     }
 }
 
 impl Default for UserService {
     fn default() -> Self {
-        Self::new()
+        panic!("UserService requires a client - use UserService::new(client)")
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserStats {
+    pub total_users: usize,
+    pub active_users: usize,
+    pub disabled_users: usize,
+    pub users_created_today: usize,
+    pub users_created_this_week: usize,
+    pub users_created_this_month: usize,
 }

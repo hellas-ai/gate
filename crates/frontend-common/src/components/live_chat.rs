@@ -1,3 +1,4 @@
+use crate::hooks::use_inference;
 use crate::services::{ChatMessage, InferenceService, Model, Role};
 use gate_chat_ui::{
     types::{ChatMessage as UIChatMessage, ChatResponse, Provider as UIProvider},
@@ -45,41 +46,62 @@ pub fn live_chat() -> Html {
         metadata: HashMap::new(),
     };
 
+    // Get inference service
+    let inference = use_inference();
+
     // Fetch models on component mount
     {
         let available_models = available_models.clone();
         let models_loading = models_loading.clone();
         let error = error.clone();
         let selected_model = selected_model.clone();
+        let inference = inference.clone();
+        let has_inference = inference.is_some();
 
-        use_effect_with((), move |_| {
-            spawn_local(async move {
-                models_loading.set(true);
-                match InferenceService::get_models().await {
-                    Ok(models) => {
-                        web_sys::console::log_1(&format!("Fetched {} models", models.len()).into());
-
-                        // Set Qwen as default if available
-                        if selected_model.is_none() {
-                            if let Some(qwen_model) = models.iter().find(|m| m.id.contains("Qwen"))
-                            {
-                                selected_model.set(Some(qwen_model.id.clone()));
+        use_effect_with(has_inference, move |has_inf| {
+            if *has_inf {
+                if let Some(inference_service) = inference {
+                    let inference_service = inference_service.clone();
+                    spawn_local(async move {
+                        models_loading.set(true);
+                        match inference_service.get_models().await {
+                            Ok(models) => {
                                 web_sys::console::log_1(
-                                    &format!("Set default model to: {}", qwen_model.id).into(),
+                                    &format!("Fetched {} models", models.len()).into(),
                                 );
+
+                                // Set Qwen as default if available
+                                if selected_model.is_none() {
+                                    if let Some(qwen_model) =
+                                        models.iter().find(|m| m.id.contains("Qwen"))
+                                    {
+                                        selected_model.set(Some(qwen_model.id.clone()));
+                                        web_sys::console::log_1(
+                                            &format!("Set default model to: {}", qwen_model.id)
+                                                .into(),
+                                        );
+                                    }
+                                }
+
+                                available_models.set(models);
+                            }
+                            Err(e) => {
+                                // Auth errors are handled automatically by the client wrapper
+                                web_sys::console::error_1(
+                                    &format!("Failed to fetch models: {e}").into(),
+                                );
+                                error.set(Some(format!("Failed to fetch models: {e}")));
                             }
                         }
-
-                        available_models.set(models);
-                    }
-                    Err(e) => {
-                        // Auth errors are handled automatically by the client wrapper
-                        web_sys::console::error_1(&format!("Failed to fetch models: {e}").into());
-                        error.set(Some(format!("Failed to fetch models: {e}")));
-                    }
+                        models_loading.set(false);
+                    });
                 }
+            } else {
                 models_loading.set(false);
-            });
+                error.set(Some(
+                    "Not authenticated - please log in to use chat".to_string(),
+                ));
+            }
         });
     }
 
@@ -87,6 +109,7 @@ pub fn live_chat() -> Html {
         let messages = messages.clone();
         let loading = loading.clone();
         let error = error.clone();
+        let inference = inference.clone();
         let selected_model = selected_model.clone();
         let manual_model_input = manual_model_input.clone();
         let use_manual_model = use_manual_model.clone();
@@ -96,6 +119,7 @@ pub fn live_chat() -> Html {
                 return;
             }
 
+            let inference = inference.clone();
             let model = if *use_manual_model {
                 let manual_model = (*manual_model_input).clone();
                 if manual_model.trim().is_empty() {
@@ -146,14 +170,17 @@ pub fn live_chat() -> Html {
                 let provider = InferenceService::detect_provider(&model);
 
                 // Make API call
-                match InferenceService::chat_completion(
-                    provider,
-                    model.clone(),
-                    api_messages,
-                    Some(0.7),
-                    Some(1000),
-                )
-                .await
+                let Some(inference_service) = inference else {
+                    error.set(Some(
+                        "Not authenticated - please log in to use chat".to_string(),
+                    ));
+                    loading.set(false);
+                    return;
+                };
+
+                match inference_service
+                    .chat_completion(provider, model.clone(), api_messages, Some(0.7), Some(1000))
+                    .await
                 {
                     Ok(response) => {
                         web_sys::console::log_1(&format!("API Response: {response:?}").into());

@@ -1,8 +1,8 @@
 //! Weighted routing strategy
 
-use super::{RoutingStrategy, ScoredRoute, SinkCandidate};
+use super::{ConnectorCandidate, RoutingStrategy, ScoredRoute};
 use crate::Result;
-use crate::router::sink::RequestContext;
+use crate::router::connector::RequestContext;
 use crate::router::types::RequestDescriptor;
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -37,13 +37,13 @@ impl RoutingStrategy for WeightedStrategy {
         &self,
         _ctx: &RequestContext,
         _request: &RequestDescriptor,
-        candidates: Vec<SinkCandidate>,
+        candidates: Vec<ConnectorCandidate>,
     ) -> Result<Vec<ScoredRoute>> {
         let mut scored = Vec::new();
 
         for candidate in candidates {
-            let sink_id = &candidate.description.id;
-            let base_weight = self.weights.get(sink_id).copied().unwrap_or(1.0);
+            let connector_id = &candidate.description.id;
+            let base_weight = self.weights.get(connector_id).copied().unwrap_or(1.0);
 
             // Adjust weight based on health
             let health_factor = if candidate.health.healthy {
@@ -61,7 +61,7 @@ impl RoutingStrategy for WeightedStrategy {
             };
 
             scored.push(ScoredRoute {
-                sink_id: sink_id.clone(),
+                connector_id: connector_id.clone(),
                 score,
                 estimated_cost: None,
                 estimated_latency: candidate.health.latency_ms.map(Duration::from_millis),

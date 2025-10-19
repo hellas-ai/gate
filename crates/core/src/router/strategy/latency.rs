@@ -1,8 +1,8 @@
 //! Latency-optimized routing strategy
 
-use super::{RoutingStrategy, ScoredRoute, SinkCandidate};
+use super::{ConnectorCandidate, RoutingStrategy, ScoredRoute};
 use crate::Result;
-use crate::router::sink::RequestContext;
+use crate::router::connector::RequestContext;
 use crate::router::types::RequestDescriptor;
 use async_trait::async_trait;
 use std::time::Duration;
@@ -49,7 +49,7 @@ impl RoutingStrategy for LatencyOptimizedStrategy {
         &self,
         _ctx: &RequestContext,
         _request: &RequestDescriptor,
-        candidates: Vec<SinkCandidate>,
+        candidates: Vec<ConnectorCandidate>,
     ) -> Result<Vec<ScoredRoute>> {
         let mut scored = Vec::new();
 
@@ -97,7 +97,7 @@ impl RoutingStrategy for LatencyOptimizedStrategy {
             let final_score = latency_score * health_factor * conversion_penalty;
 
             scored.push(ScoredRoute {
-                sink_id: candidate.description.id.clone(),
+                connector_id: candidate.description.id.clone(),
                 score: final_score,
                 estimated_cost: None,
                 estimated_latency: Some(latency),

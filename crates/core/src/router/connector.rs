@@ -1,6 +1,8 @@
-//! Sink trait and core implementations
+//! Connector trait and core implementations
 
-use super::types::{CostStructure, Protocol, ResponseChunk, SinkCapabilities, SinkHealth};
+use super::types::{
+    ConnectorCapabilities, ConnectorHealth, CostStructure, Protocol, ResponseChunk,
+};
 use crate::{
     Result,
     access::{IdentityContext, SubjectIdentity},
@@ -20,9 +22,7 @@ pub type ResponseStream = Pin<Box<dyn Stream<Item = Result<ResponseChunk>> + Sen
 pub struct RequestContext {
     pub identity: SubjectIdentity<RouterIdentityContext>,
     pub correlation_id: CorrelationId,
-    /// Request headers supplied by the caller (not credentials)
     pub headers: HeaderMap,
-    /// Raw query string from the incoming HTTP request (without leading '?')
     pub query: Option<String>,
     pub trace_id: Option<String>,
     pub metadata: std::collections::HashMap<String, String>,
@@ -61,14 +61,14 @@ impl IdentityContext for RouterIdentityContext {
     }
 }
 
-/// Sink trait - anything that can receive and process requests
+/// Connector trait - anything that can receive and process requests
 #[async_trait]
-pub trait Sink: Send + Sync {
-    /// Describe sink capabilities
-    async fn describe(&self) -> SinkDescription;
+pub trait Connector: Send + Sync {
+    /// Describe connector capabilities
+    async fn describe(&self) -> ConnectorDescription;
 
-    /// Check sink health
-    async fn probe(&self) -> SinkHealth;
+    /// Check connector health
+    async fn probe(&self) -> ConnectorHealth;
 
     /// Execute request
     async fn execute(
@@ -78,17 +78,17 @@ pub trait Sink: Send + Sync {
     ) -> Result<ResponseStream>;
 }
 
-/// Description of a sink's capabilities
+/// Description of a connector's capabilities
 #[derive(Debug, Clone)]
-pub struct SinkDescription {
+pub struct ConnectorDescription {
     pub id: String,
     pub accepted_protocols: Vec<Protocol>,
-    pub capabilities: SinkCapabilities,
+    pub capabilities: ConnectorCapabilities,
     pub cost_structure: Option<CostStructure>,
 }
 
-impl SinkDescription {
-    /// Check if this sink accepts the given protocol
+impl ConnectorDescription {
+    /// Check if this connector accepts the given protocol
     pub fn accepts_protocol(&self, protocol: Protocol) -> bool {
         self.accepted_protocols.contains(&protocol)
     }

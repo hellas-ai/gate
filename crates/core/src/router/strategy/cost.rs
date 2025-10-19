@@ -1,8 +1,8 @@
 //! Cost-optimized routing strategy
 
-use super::{RoutingStrategy, ScoredRoute, SinkCandidate};
+use super::{ConnectorCandidate, RoutingStrategy, ScoredRoute};
 use crate::Result;
-use crate::router::sink::RequestContext;
+use crate::router::connector::RequestContext;
 use crate::router::types::RequestDescriptor;
 use async_trait::async_trait;
 use rust_decimal::Decimal;
@@ -33,7 +33,7 @@ impl CostOptimizedStrategy {
     /// Estimate cost for a request
     fn estimate_cost(
         &self,
-        candidate: &SinkCandidate,
+        candidate: &ConnectorCandidate,
         request: &RequestDescriptor,
     ) -> Option<Decimal> {
         let cost_structure = candidate.description.cost_structure.as_ref()?;
@@ -63,7 +63,7 @@ impl RoutingStrategy for CostOptimizedStrategy {
         &self,
         _ctx: &RequestContext,
         request: &RequestDescriptor,
-        candidates: Vec<SinkCandidate>,
+        candidates: Vec<ConnectorCandidate>,
     ) -> Result<Vec<ScoredRoute>> {
         let mut scored = Vec::new();
 
@@ -111,7 +111,7 @@ impl RoutingStrategy for CostOptimizedStrategy {
             let final_score = (cost_score + cache_boost) * (1.0 - health_penalty);
 
             scored.push(ScoredRoute {
-                sink_id: candidate.description.id.clone(),
+                connector_id: candidate.description.id.clone(),
                 score: final_score,
                 estimated_cost,
                 estimated_latency: candidate

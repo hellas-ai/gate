@@ -1,11 +1,11 @@
 //! Configuration management client methods
 
-use crate::client::{ClientError, GateClient};
+use super::{AuthenticatedGateClient, ClientError};
 use crate::types::{ConfigPatchRequest, ConfigResponse, ConfigUpdateRequest};
 use reqwest::Method;
 use serde_json::Value;
 
-impl GateClient {
+impl AuthenticatedGateClient {
     /// Get the full configuration
     pub async fn get_config(&self) -> Result<ConfigResponse, ClientError> {
         let request = self.request(Method::GET, "/api/config")?;

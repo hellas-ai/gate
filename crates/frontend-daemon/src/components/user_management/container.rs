@@ -2,7 +2,8 @@
 
 use super::detail::UserDetail;
 use super::list::UserList;
-use crate::services::user::{UserInfo, UserService};
+use crate::hooks::use_user_service;
+use crate::services::user::UserInfo;
 use gate_frontend_common::auth::use_auth;
 use gloo::timers::callback::Timeout;
 use yew::prelude::*;
@@ -15,7 +16,7 @@ pub enum View {
 #[function_component(UserManagementContainer)]
 pub fn user_management_container() -> Html {
     let auth = use_auth();
-    let user_service = use_memo((), |_| UserService::new());
+    let user_service = use_user_service();
 
     let users = use_state(Vec::<UserInfo>::new);
     let view = use_state(|| View::List);
@@ -23,11 +24,23 @@ pub fn user_management_container() -> Html {
     let error = use_state(|| Option::<String>::None);
     let success = use_state(|| Option::<String>::None);
 
-    let current_user_id = auth
-        .auth_state
-        .as_ref()
-        .map(|s| s.user_id.clone())
-        .unwrap_or_default();
+    let current_user_id = match &auth.state {
+        gate_frontend_common::auth::context::AuthState::Authenticated { user_id, .. } => {
+            user_id.clone()
+        }
+        _ => String::new(),
+    };
+
+    // Return early if no auth client available
+    let Some(user_service) = user_service else {
+        return html! {
+            <div class="p-6 max-w-7xl mx-auto">
+                <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+                    <p class="text-gray-600 dark:text-gray-400">{ "Authentication required to manage users." }</p>
+                </div>
+            </div>
+        };
+    };
 
     // For now, treat all authenticated users as having manage permission
     // TODO: Check actual permissions from backend

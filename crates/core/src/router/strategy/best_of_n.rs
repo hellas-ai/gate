@@ -1,8 +1,8 @@
 //! Best-of-N sampling strategy
 
-use super::{RoutingStrategy, ScoredRoute, SinkCandidate};
+use super::{ConnectorCandidate, RoutingStrategy, ScoredRoute};
 use crate::Result;
-use crate::router::sink::RequestContext;
+use crate::router::connector::RequestContext;
 use crate::router::types::RequestDescriptor;
 use async_trait::async_trait;
 
@@ -56,7 +56,7 @@ impl RoutingStrategy for BestOfNStrategy {
         &self,
         _ctx: &RequestContext,
         _request: &RequestDescriptor,
-        mut candidates: Vec<SinkCandidate>,
+        mut candidates: Vec<ConnectorCandidate>,
     ) -> Result<Vec<ScoredRoute>> {
         // For best-of-N, we want to select N candidates that will all be executed
         // Score them equally high so they're all selected
@@ -98,7 +98,7 @@ impl RoutingStrategy for BestOfNStrategy {
             };
 
             scored.push(ScoredRoute {
-                sink_id: candidate.description.id.clone(),
+                connector_id: candidate.description.id.clone(),
                 score,
                 estimated_cost: None,
                 estimated_latency: candidate

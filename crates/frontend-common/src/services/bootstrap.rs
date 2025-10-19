@@ -1,6 +1,6 @@
 //! Bootstrap service for initial admin setup
 
-use crate::client::create_public_client;
+use gate_http::client::PublicGateClient;
 use serde::{Deserialize, Serialize};
 
 /// Bootstrap status response
@@ -13,19 +13,20 @@ pub struct BootstrapStatus {
 
 /// Bootstrap API service
 #[derive(Clone)]
-pub struct BootstrapService;
+pub struct BootstrapService {
+    client: PublicGateClient,
+}
 
 impl BootstrapService {
     /// Create a new bootstrap service
-    pub fn new() -> Self {
-        Self
+    pub fn new(client: PublicGateClient) -> Self {
+        Self { client }
     }
 
     /// Check if bootstrap is needed
     pub async fn check_status(&self) -> Result<BootstrapStatus, String> {
-        let client = create_public_client().map_err(|e| format!("Failed to get client: {e}"))?;
-
-        let request = client
+        let request = self
+            .client
             .request(reqwest::Method::GET, "/auth/bootstrap/status")
             .map_err(|e| format!("Failed to check bootstrap status: {e}"))?;
         let response = request
@@ -45,11 +46,5 @@ impl BootstrapService {
             .json()
             .await
             .map_err(|e| format!("Failed to parse bootstrap status: {e}"))
-    }
-}
-
-impl Default for BootstrapService {
-    fn default() -> Self {
-        Self::new()
     }
 }

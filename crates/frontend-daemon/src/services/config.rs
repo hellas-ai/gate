@@ -1,40 +1,35 @@
 //! Configuration API service
 
-use gate_frontend_common::{client::ClientError, create_authenticated_client};
+use gate_frontend_common::ClientError;
+use gate_http::client::AuthenticatedGateClient;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Configuration API service
 #[derive(Clone)]
-pub struct ConfigApiService;
+pub struct ConfigApiService {
+    client: AuthenticatedGateClient,
+}
 
 impl ConfigApiService {
     /// Create a new config API service
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for ConfigApiService {
-    fn default() -> Self {
-        Self::new()
+    pub fn new(client: AuthenticatedGateClient) -> Self {
+        Self { client }
     }
 }
 
 impl ConfigApiService {
     /// Get the full configuration (requires admin authentication)
     pub async fn get_config(&self) -> Result<Value, ClientError> {
-        let client = create_authenticated_client()?
-            .ok_or_else(|| ClientError::Configuration("Not authenticated".into()))?;
-
         #[derive(Deserialize)]
         struct ConfigResponse {
             config: Value,
         }
 
-        let response: ConfigResponse = client
-            .execute(client.request(Method::GET, "/api/config")?)
+        let response: ConfigResponse = self
+            .client
+            .execute(self.client.request(Method::GET, "/api/config")?)
             .await?;
 
         Ok(response.config)
@@ -42,9 +37,6 @@ impl ConfigApiService {
 
     /// Update the configuration (requires admin authentication)
     pub async fn update_config(&self, config: Value) -> Result<Value, ClientError> {
-        let client = create_authenticated_client()?
-            .ok_or_else(|| ClientError::Configuration("Not authenticated".into()))?;
-
         #[derive(Serialize)]
         struct UpdateRequest {
             config: Value,
@@ -55,9 +47,10 @@ impl ConfigApiService {
             config: Value,
         }
 
-        let response: ConfigResponse = client
+        let response: ConfigResponse = self
+            .client
             .execute(
-                client
+                self.client
                     .request(Method::PUT, "/api/config")?
                     .json(&UpdateRequest { config }),
             )

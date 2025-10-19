@@ -1,6 +1,6 @@
 //! User-friendly error message mappings
 
-use crate::client::ClientError;
+use gate_http::client::error::ClientError;
 
 /// Convert technical errors to user-friendly messages
 pub fn get_user_friendly_error(error: &ClientError) -> String {

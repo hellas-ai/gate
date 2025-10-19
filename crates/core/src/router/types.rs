@@ -32,9 +32,9 @@ impl std::fmt::Display for Protocol {
     }
 }
 
-/// Sink health information
+/// Connector health information
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SinkHealth {
+pub struct ConnectorHealth {
     pub healthy: bool,
     pub latency_ms: Option<u64>,
     pub error_rate: f32,
@@ -97,9 +97,9 @@ pub struct ModelCapabilities {
     pub modalities: Vec<String>,
 }
 
-/// Sink capabilities
+/// Connector capabilities
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SinkCapabilities {
+pub struct ConnectorCapabilities {
     pub supports_streaming: bool,
     pub supports_batching: bool,
     pub supports_tools: bool,
@@ -160,14 +160,14 @@ pub struct CostStructure {
     pub currency: String,
 }
 
-/// List of models a sink supports
+/// List of models a connector supports
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ModelList {
     /// Static list of known models
     Static(Vec<String>),
     /// Models are discovered dynamically
     Dynamic,
-    /// Sink accepts any model name
+    /// Connector accepts any model name
     Infinite,
 }
 

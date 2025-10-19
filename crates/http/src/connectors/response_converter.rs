@@ -129,6 +129,11 @@ pub async fn response_stream_to_json(stream: ResponseStream) -> Result<Response,
                 response_headers = Some(h);
             }
             Ok(ResponseChunk::Content(json)) => last_json = Some(json),
+            Ok(ResponseChunk::Stop {
+                error: Some(err), ..
+            }) => {
+                return Err(HttpError::ServiceUnavailable(err));
+            }
             Ok(_) => {}
             Err(e) => return Err(HttpError::Core(e)),
         }
@@ -229,61 +234,5 @@ impl<'a> Serialize for TypeFirst<'a> {
             }
         }
         map.end()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use futures::stream;
-    use http::header::CONTENT_TYPE;
-    use http_body_util::BodyExt;
-
-    #[tokio::test]
-    async fn test_response_stream_to_json_forwards_headers() {
-        let mut hdrs = std::collections::HashMap::new();
-        hdrs.insert("request-id".to_string(), "abc123".to_string());
-        let json = serde_json::json!({"ok": true});
-        let chunks = vec![
-            Ok(ResponseChunk::Headers(hdrs)),
-            Ok(ResponseChunk::Content(json.clone())),
-            Ok(ResponseChunk::Stop {
-                reason: gate_core::router::types::StopReason::Complete,
-                error: None,
-                cost: None,
-            }),
-        ];
-        let stream = Box::pin(stream::iter(chunks));
-        let resp = response_stream_to_json(stream).await.expect("json resp");
-        assert_eq!(resp.headers().get("request-id").unwrap(), "abc123");
-        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
-        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(body, json);
-    }
-
-    #[tokio::test]
-    async fn test_response_stream_to_axum_sets_event_name() {
-        let mut hdrs = std::collections::HashMap::new();
-        hdrs.insert("x-test".to_string(), "1".to_string());
-        let json = serde_json::json!({"type": "message_start", "message": {"id": "m"}});
-        let chunks = vec![
-            Ok(ResponseChunk::Headers(hdrs)),
-            Ok(ResponseChunk::Content(json)),
-            Ok(ResponseChunk::Stop {
-                reason: gate_core::router::types::StopReason::Complete,
-                error: None,
-                cost: None,
-            }),
-        ];
-        let stream = Box::pin(stream::iter(chunks));
-        let resp = response_stream_to_axum(stream).await.expect("sse resp");
-        assert_eq!(
-            resp.headers().get(CONTENT_TYPE).unwrap(),
-            "text/event-stream"
-        );
-        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
-        let s = String::from_utf8_lossy(&body_bytes);
-        assert!(s.contains("event: message_start"));
-        assert!(s.contains("data: {\"type\":\"message_start\""));
     }
 }

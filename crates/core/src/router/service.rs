@@ -1,10 +1,10 @@
 //! Helper service for routing from JSON requests
 
 use crate::Result;
+use crate::router::connector::RequestContext;
 use crate::router::middleware::ResponseStream as MwResponseStream;
 use crate::router::protocols;
 use crate::router::routing::Router;
-use crate::router::sink::RequestContext;
 use crate::router::types::Protocol;
 use crate::router::types::{RequestDescriptor, RequestStream};
 use serde_json::Value as JsonValue;

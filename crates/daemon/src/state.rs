@@ -45,32 +45,31 @@ impl State {
         }
     }
 }
+// Helper: detect Anthropic API key from headers
+fn detect_anthropic_key(parts: &Parts) -> Option<String> {
+    anthropic_key_from(&parts.headers).map(|s| s.to_string())
+}
+
+// Helper: detect OpenAI API key from headers
+fn detect_openai_key(parts: &Parts) -> Option<String> {
+    if let Some(tok) = openai_bearer_from(&parts.headers) {
+        return Some(tok.to_string());
+    }
+    if let Some(val) = parts
+        .headers
+        .get(HeaderName::from_static("x-api-key"))
+        .and_then(|v| v.to_str().ok())
+        && !val.is_empty()
+    {
+        return Some(val.to_string());
+    }
+    None
+}
 
 // Implement AuthProvider directly for State
 #[async_trait]
 impl AuthProvider for State {
     async fn authenticate(&self, parts: &Parts) -> Result<HttpIdentity, HttpError> {
-        // Helper: detect Anthropic API key from headers
-        fn detect_anthropic_key(parts: &Parts) -> Option<String> {
-            anthropic_key_from(&parts.headers).map(|s| s.to_string())
-        }
-
-        // Helper: detect OpenAI API key from headers
-        fn detect_openai_key(parts: &Parts) -> Option<String> {
-            if let Some(tok) = openai_bearer_from(&parts.headers) {
-                return Some(tok.to_string());
-            }
-            if let Some(val) = parts
-                .headers
-                .get(HeaderName::from_static("x-api-key"))
-                .and_then(|v| v.to_str().ok())
-                && !val.is_empty()
-            {
-                return Some(val.to_string());
-            }
-            None
-        }
-
         let path = parts.uri.path();
         // Provider-token auth bypass for Anthropic/OpenAI, gated by config
         let passthrough_allowed_path = self
@@ -78,11 +77,13 @@ impl AuthProvider for State {
             .allowed_paths
             .iter()
             .any(|p| p == path);
+
         let is_loopback = parts
             .extensions
             .get::<ConnectInfo<SocketAddr>>()
             .map(|c| c.0.ip().is_loopback())
             .unwrap_or(false);
+
         if self.provider_passthrough.enabled
             && passthrough_allowed_path
             && (!self.provider_passthrough.loopback_only || is_loopback)
@@ -124,6 +125,7 @@ impl AuthProvider for State {
         if self.allow_local_bypass {
             if let Some(connect_info) = parts.extensions.get::<ConnectInfo<SocketAddr>>() {
                 let ip = connect_info.0.ip();
+                info!("Bypass is enabled and ip is {ip}");
                 if ip.is_loopback() {
                     let identity = HttpIdentity::new(
                         "local".to_string(),
@@ -136,11 +138,13 @@ impl AuthProvider for State {
                     info!("Granted localhost bypass for peer {}", ip);
                     return Ok(identity);
                 } else {
-                    debug!("Localhost bypass not applied: peer {} not loopback", ip);
+                    info!("Localhost bypass not applied: peer {} not loopback", ip);
                 }
             } else {
-                debug!("Localhost bypass not applied: missing ConnectInfo");
+                info!("Localhost bypass not applied: missing ConnectInfo");
             }
+        } else {
+            info!("Local auth bypass is disabled");
         }
 
         Err(HttpError::AuthenticationFailed(

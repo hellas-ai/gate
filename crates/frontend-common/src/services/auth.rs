@@ -1,36 +1,34 @@
 //! Authentication API service
 
-use crate::client::{create_public_client, ClientError};
-use gate_http::types::{
-    AuthCompleteRequest, AuthCompleteResponse, AuthStartResponse, RegisterCompleteRequest,
-    RegisterCompleteResponse, RegisterStartResponse,
+use std::sync::Arc;
+
+use gate_http::{
+    client::{error::ClientError, PublicGateClient},
+    types::{
+        AuthCompleteRequest, AuthCompleteResponse, AuthStartResponse, RegisterCompleteResponse,
+        RegisterStartResponse,
+    },
 };
+
 /// Authentication API service
 #[derive(Clone)]
-pub struct AuthApiService;
-
-impl AuthApiService {
-    /// Create a new auth API service
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for AuthApiService {
-    fn default() -> Self {
-        Self::new()
-    }
+pub struct AuthApiService {
+    client: Arc<PublicGateClient>,
 }
 
 impl AuthApiService {
+    pub fn new(client: PublicGateClient) -> Self {
+        Self {
+            client: Arc::new(client),
+        }
+    }
+
     /// Start registration process
     pub async fn start_registration(
         &self,
-        name: String,
+        name: &str,
     ) -> Result<RegisterStartResponse, ClientError> {
-        let client = create_public_client()?;
-        let request = gate_http::types::RegisterStartRequest { name };
-        client.register_start(request).await
+        self.client.register_start(name).await
     }
 
     /// Complete registration with the credential
@@ -41,27 +39,14 @@ impl AuthApiService {
         device_name: Option<String>,
         bootstrap_token: Option<String>,
     ) -> Result<RegisterCompleteResponse, ClientError> {
-        let client = create_public_client()?;
-
-        let request = RegisterCompleteRequest {
-            session_id,
-            credential,
-            device_name,
-            bootstrap_token: bootstrap_token.clone(),
-        };
-
-        // Use bootstrap endpoint if bootstrap token is present
-        if bootstrap_token.is_some() {
-            client.register_bootstrap(request).await
-        } else {
-            client.register_complete(request).await
-        }
+        self.client
+            .register_complete(&session_id, credential, device_name, bootstrap_token)
+            .await
     }
 
     /// Start authentication process
     pub async fn start_authentication(&self) -> Result<AuthStartResponse, ClientError> {
-        let client = create_public_client()?;
-        client.auth_start().await
+        self.client.auth_start().await
     }
 
     /// Complete authentication with the credential
@@ -70,13 +55,10 @@ impl AuthApiService {
         session_id: String,
         credential: serde_json::Value,
     ) -> Result<AuthCompleteResponse, ClientError> {
-        let client = create_public_client()?;
-
         let request = AuthCompleteRequest {
             session_id,
             credential,
         };
-
-        client.auth_complete(request).await
+        self.client.auth_complete(request).await
     }
 }

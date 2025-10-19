@@ -7,7 +7,7 @@ const X_API_KEY: HeaderName = HeaderName::from_static("x-api-key");
 const X_USER_ID: HeaderName = HeaderName::from_static("x-user-id");
 const X_ORG_ID: HeaderName = HeaderName::from_static("x-org-id");
 use gate_core::access::SubjectIdentity;
-use gate_core::router::sink::RouterIdentityContext;
+use gate_core::router::connector::RouterIdentityContext;
 use sha2::Digest;
 
 /// Extract identity from request headers

@@ -1,5 +1,6 @@
 use crate::utils::is_tauri;
 use gate_frontend_common::{
+    auth::context::use_public_client,
     components::{BootstrapPrompt, Spinner as LoadingSpinner},
     hooks::{use_webauthn, WebAuthnState},
     services::{BootstrapService, BootstrapStatus},
@@ -19,7 +20,8 @@ pub fn local_auth() -> Html {
     let fetched_token = use_state(|| Option::<String>::None);
     let is_loading_token = use_state(|| false);
 
-    let bootstrap_service = use_memo((), |_| BootstrapService::new());
+    let public_client = use_public_client();
+    let bootstrap_service = public_client.map(BootstrapService::new);
 
     // Check bootstrap status on mount
     {
@@ -27,11 +29,13 @@ pub fn local_auth() -> Html {
         let bootstrap_status = bootstrap_status.clone();
 
         use_effect_with((), move |_| {
-            wasm_bindgen_futures::spawn_local(async move {
-                if let Ok(status) = bootstrap_service.check_status().await {
-                    bootstrap_status.set(Some(status));
-                }
-            });
+            if let Some(bootstrap_service) = bootstrap_service {
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Ok(status) = bootstrap_service.check_status().await {
+                        bootstrap_status.set(Some(status));
+                    }
+                });
+            }
             || ()
         });
     }

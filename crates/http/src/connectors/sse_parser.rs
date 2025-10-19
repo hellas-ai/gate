@@ -1,7 +1,7 @@
 //! Server-Sent Events (SSE) parser for streaming responses
 
-use bytes::Bytes;
 use futures::Stream;
+use gate_core::Result;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -23,7 +23,7 @@ pub struct SseParser<S> {
 
 impl<S> SseParser<S>
 where
-    S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
+    S: Stream<Item = Result<Vec<u8>>> + Unpin,
 {
     pub fn new(stream: S) -> Self {
         Self {
@@ -88,9 +88,9 @@ where
 
 impl<S> Stream for SseParser<S>
 where
-    S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
+    S: Stream<Item = Result<Vec<u8>>> + Unpin,
 {
-    type Item = Result<SseEvent, reqwest::Error>;
+    type Item = Result<SseEvent>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
@@ -136,9 +136,9 @@ where
 }
 
 /// Parse an SSE stream into events
-pub fn parse_sse<S>(stream: S) -> impl Stream<Item = Result<SseEvent, reqwest::Error>>
+pub fn parse_sse<S>(stream: S) -> impl Stream<Item = Result<SseEvent>>
 where
-    S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
+    S: Stream<Item = Result<Vec<u8>>> + Unpin,
 {
     SseParser::new(stream)
 }
@@ -151,7 +151,7 @@ mod tests {
     #[tokio::test]
     async fn test_parse_simple_event() {
         let data = b"data: hello world\n\n";
-        let stream = stream::once(async { Ok(Bytes::from(&data[..])) });
+        let stream = stream::once(async { Ok(data.to_vec()) });
         let stream = Box::pin(stream);
         let mut parser = SseParser::new(stream);
 
@@ -163,7 +163,7 @@ mod tests {
     #[tokio::test]
     async fn test_parse_multiline_data() {
         let data = b"data: line 1\ndata: line 2\n\n";
-        let stream = stream::once(async { Ok(Bytes::from(&data[..])) });
+        let stream = stream::once(async { Ok(data.to_vec()) });
         let stream = Box::pin(stream);
         let mut parser = SseParser::new(stream);
 
@@ -174,7 +174,7 @@ mod tests {
     #[tokio::test]
     async fn test_parse_with_event_type() {
         let data = b"event: message\ndata: hello\n\n";
-        let stream = stream::once(async { Ok(Bytes::from(&data[..])) });
+        let stream = stream::once(async { Ok(data.to_vec()) });
         let stream = Box::pin(stream);
         let mut parser = SseParser::new(stream);
 
@@ -186,7 +186,7 @@ mod tests {
     #[tokio::test]
     async fn test_parse_with_id() {
         let data = b"id: 123\ndata: test\n\n";
-        let stream = stream::once(async { Ok(Bytes::from(&data[..])) });
+        let stream = stream::once(async { Ok(data.to_vec()) });
         let stream = Box::pin(stream);
         let mut parser = SseParser::new(stream);
 
@@ -198,7 +198,7 @@ mod tests {
     #[tokio::test]
     async fn test_ignore_comments() {
         let data = b": this is a comment\ndata: actual data\n\n";
-        let stream = stream::once(async { Ok(Bytes::from(&data[..])) });
+        let stream = stream::once(async { Ok(data.to_vec()) });
         let stream = Box::pin(stream);
         let mut parser = SseParser::new(stream);
 
@@ -210,10 +210,7 @@ mod tests {
     async fn test_handle_split_chunks() {
         let chunk1 = b"data: par";
         let chunk2 = b"tial\ndata: data\n\n";
-        let stream = stream::iter(vec![
-            Ok(Bytes::from(&chunk1[..])),
-            Ok(Bytes::from(&chunk2[..])),
-        ]);
+        let stream = stream::iter(vec![Ok(chunk1.to_vec()), Ok(chunk2.to_vec())]);
         let stream = Box::pin(stream);
         let mut parser = SseParser::new(stream);
 

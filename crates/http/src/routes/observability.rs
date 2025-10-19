@@ -6,6 +6,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+
 #[cfg(all(feature = "otlp", not(target_arch = "wasm32")))]
 use gate_core::tracing::prometheus::prometheus_format;
 

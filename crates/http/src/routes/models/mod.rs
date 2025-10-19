@@ -1,17 +1,13 @@
 //! Models API routes
 
-use crate::{
-    error::HttpError,
-    state::AppState,
-    types::{ModelInfo, ModelsListResponse},
-};
+use crate::{error::HttpError, state::AppState, types::ModelsListResponse};
 use axum::{
     Router,
     extract::State,
     response::{IntoResponse, Json, Response},
     routing::get,
 };
-use gate_core::router::prelude::Sink;
+// use gate_core::router::prelude::Connector;
 use tracing::{info, instrument};
 
 /// Handle models list requests
@@ -28,32 +24,11 @@ where
 {
     info!("Received models list request");
 
-    let mut models = Vec::new();
+    let models = Vec::new();
 
     // Get models from router if available
-    if let Some(router) = &app_state.router {
-        let desc = router.describe().await;
-        // match desc.models {
-        //     gate_core::router::types::ModelList::Static(list) => {
-        //         for id in list {
-        //             models.push(ModelInfo {
-        //                 id,
-        //                 object: "model".to_string(),
-        //                 owned_by: "system".to_string(),
-        //                 created: chrono::Utc::now().timestamp(),
-        //                 context_length: desc.capabilities.max_context_length,
-        //             });
-        //         }
-        //     }
-        //     gate_core::router::types::ModelList::Dynamic => {
-        //         // Dynamic models are resolved at runtime
-        //         info!("Router has dynamic model list");
-        //     }
-        //     gate_core::router::types::ModelList::Infinite => {
-        //         // Router accepts any model name
-        //         info!("Router accepts any model");
-        //     }
-        // }
+    if let Some(_router) = &app_state.router {
+        // TODO: expose models via connector descriptions or catalog service
     }
 
     tracing::Span::current().record("model_count", models.len());

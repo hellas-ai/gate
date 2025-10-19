@@ -16,6 +16,8 @@ pub mod auth;
 #[path = "config/mod.rs"]
 pub mod config;
 #[cfg(feature = "server")]
+pub mod connectors;
+#[cfg(feature = "server")]
 pub mod middleware;
 #[cfg(feature = "server")]
 pub mod routes;
@@ -23,8 +25,6 @@ pub mod routes;
 pub mod server;
 #[cfg(feature = "server")]
 pub mod services;
-#[cfg(feature = "server")]
-pub mod sinks;
 #[cfg(feature = "server")]
 pub mod state;
 #[cfg(feature = "server")]

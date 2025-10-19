@@ -62,11 +62,27 @@ let app = create_router(state);
 ```
 
 ### Client
-```rust
-use gate_http::client::GateClient;
 
-let client = GateClient::new("https://api.gate.ai", "gk-xxx");
-let response = client.chat_completion(request).await?;
+The client module provides type-safe clients that enforce authentication requirements at compile time:
+
+```rust
+use gate_http::client::{PublicGateClient, AuthenticatedGateClient};
+
+// For public endpoints (no authentication required)
+let public_client = PublicGateClient::new("https://api.gate.ai")?;
+let status = public_client.check_health().await?;
+
+// For authenticated endpoints (API key required)
+let auth_client = AuthenticatedGateClient::new("https://api.gate.ai", "gk-xxx")?;
+let response = auth_client.create_chat_completion(request).await?;
+
+// Using the builder for advanced configuration
+use gate_http::client::ClientBuilder;
+
+let client = ClientBuilder::default()
+    .base_url("https://api.gate.ai")
+    .timeout(Duration::from_secs(30))
+    .build_authenticated("gk-xxx")?;
 ```
 
 ## Dependencies

@@ -1,4 +1,5 @@
 mod components;
+mod hooks;
 mod local_app;
 mod local_auth;
 mod onboarding;

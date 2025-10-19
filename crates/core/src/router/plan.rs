@@ -1,6 +1,6 @@
 //! Routing plan definition
+use super::connector::RequestContext;
 use super::protocols::ProtocolConversion;
-use super::sink::RequestContext;
 use super::types::RetryConfig;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,7 @@ pub struct RoutingPlan {
 /// A single route in the plan
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Route {
-    pub sink_id: String,
+    pub connector_id: String,
     pub protocol_conversion: Option<ProtocolConversion>,
     pub timeout: Duration,
     pub retry_config: RetryConfig,

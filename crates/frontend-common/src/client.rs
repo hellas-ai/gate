@@ -1,18 +1,89 @@
 //! Client configuration and initialization
-
-use crate::client_wrapper::WrappedAuthClient;
-pub use gate_http::client::error::ClientError;
-use gate_http::client::{PublicGateClient, TypedClientBuilder};
-use once_cell::sync::Lazy;
-use std::sync::Mutex;
+use gate_http::client::{
+    error::ClientError,
+    inference::{
+        ChatCompletionRequest, ChatCompletionResponse, MessageRequest, MessageResponse,
+        ModelsResponse,
+    },
+    AuthenticatedGateClient,
+};
 use web_sys::window;
 
-/// Global client instances
-static PUBLIC_CLIENT: Lazy<Mutex<Option<PublicGateClient>>> = Lazy::new(|| Mutex::new(None));
-static AUTH_CLIENT: Lazy<Mutex<Option<WrappedAuthClient>>> = Lazy::new(|| Mutex::new(None));
+/// Wrapper around AuthenticatedGateClient that handles auth errors
+#[derive(Clone)]
+pub struct WrappedAuthClient {
+    inner: AuthenticatedGateClient,
+}
+
+impl WrappedAuthClient {
+    /// Create a new wrapped client
+    pub fn new(client: AuthenticatedGateClient) -> Self {
+        Self { inner: client }
+    }
+
+    /// Execute a request and handle auth errors
+    pub async fn execute<T: serde::de::DeserializeOwned>(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<T, ClientError> {
+        match self.inner.execute(request).await {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                // Check if this is an auth error
+                if error.is_auth_expired() {
+                    // Trigger the global auth error handler
+                    crate::auth::error_handler::trigger_auth_error();
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Create a request builder with authentication
+    pub fn request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+    ) -> Result<reqwest::RequestBuilder, ClientError> {
+        self.inner.request(method, path)
+    }
+
+    /// List available models (requires authentication)
+    pub async fn list_models(&self) -> Result<ModelsResponse, ClientError> {
+        let request = self.request(reqwest::Method::GET, "/v1/models")?;
+        self.execute(request).await
+    }
+
+    /// Create a chat completion (requires authentication)
+    pub async fn create_chat_completion(
+        &self,
+        req: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse, ClientError> {
+        let request = self
+            .request(reqwest::Method::POST, "/v1/chat/completions")?
+            .json(&req);
+        self.execute(request).await
+    }
+
+    /// Create a message (Anthropic format, requires authentication)
+    pub async fn create_message(
+        &self,
+        req: MessageRequest,
+    ) -> Result<MessageResponse, ClientError> {
+        let request = self
+            .request(reqwest::Method::POST, "/v1/messages")?
+            .json(&req);
+        self.execute(request).await
+    }
+
+    // /// Get a reference to the inner client
+    pub fn inner(&self) -> &AuthenticatedGateClient {
+        &self.inner
+    }
+}
 
 /// Get the base URL for API calls
-fn get_base_url() -> String {
+pub fn get_base_url() -> String {
     // Try to get from window location
     if let Some(window) = window() {
         if let Ok(location) = window.location().origin() {
@@ -22,52 +93,4 @@ fn get_base_url() -> String {
 
     // Default to relative URLs
     String::new()
-}
-
-/// Get the public client instance (for unauthenticated endpoints)
-pub fn create_public_client() -> Result<PublicGateClient, ClientError> {
-    let mut client_lock = PUBLIC_CLIENT
-        .lock()
-        .expect("Failed to acquire public client lock");
-
-    if client_lock.is_none() {
-        let client = TypedClientBuilder::new()
-            .base_url(get_base_url())
-            .build_public()?;
-        *client_lock = Some(client.clone());
-        Ok(client)
-    } else {
-        Ok(client_lock
-            .as_ref()
-            .expect("Public client should be initialized")
-            .clone())
-    }
-}
-
-/// Get the authenticated client instance (returns None if not authenticated)
-pub fn create_authenticated_client() -> Result<Option<WrappedAuthClient>, ClientError> {
-    let client_lock = AUTH_CLIENT
-        .lock()
-        .expect("Failed to acquire auth client lock");
-    Ok(client_lock.clone())
-}
-
-/// Update the typed clients with an authentication token
-pub fn set_auth_token(token: Option<&str>) -> Result<(), ClientError> {
-    let mut auth_lock = AUTH_CLIENT
-        .lock()
-        .expect("Failed to acquire auth client lock");
-
-    if let Some(token) = token {
-        // Create authenticated client and wrap it
-        let auth_client = TypedClientBuilder::new()
-            .base_url(get_base_url())
-            .build_authenticated(token)?;
-        *auth_lock = Some(WrappedAuthClient::new(auth_client));
-    } else {
-        // Clear authenticated client
-        *auth_lock = None;
-    }
-
-    Ok(())
 }

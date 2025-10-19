@@ -1,25 +1,25 @@
+use super::connector::{Connector, RequestContext};
 use super::plan::{Route, RoutingPlan};
-use super::registry::SinkRegistry;
-use super::sink::{RequestContext, Sink};
+use super::registry::ConnectorRegistry;
 use super::types::{RequestStream, ResponseChunk, StopReason};
 use crate::Result;
 use std::sync::Arc;
 use std::time::Duration;
 
 pub struct PlanExecutor {
-    sink_registry: Arc<SinkRegistry>,
+    connector_registry: Arc<ConnectorRegistry>,
 }
 
 impl PlanExecutor {
-    pub fn new(sink_registry: Arc<SinkRegistry>) -> Self {
-        Self { sink_registry }
+    pub fn new(connector_registry: Arc<ConnectorRegistry>) -> Self {
+        Self { connector_registry }
     }
 
     pub async fn execute(
         &self,
         plan: RoutingPlan,
         request: RequestStream,
-    ) -> Result<super::sink::ResponseStream> {
+    ) -> Result<super::connector::ResponseStream> {
         let result = self
             .execute_route(&plan.context, request, &plan.primary_route)
             .await;
@@ -30,7 +30,7 @@ impl PlanExecutor {
                 {
                     warn!(
                         "Primary route failed: {} - {}",
-                        plan.primary_route.sink_id, primary_err
+                        plan.primary_route.connector_id, primary_err
                     );
                 }
                 Err(primary_err)
@@ -43,12 +43,14 @@ impl PlanExecutor {
         ctx: &RequestContext,
         request: RequestStream,
         route: &Route,
-    ) -> Result<super::sink::ResponseStream> {
-        let sink = self
-            .sink_registry
-            .get(&route.sink_id)
+    ) -> Result<super::connector::ResponseStream> {
+        let connector = self
+            .connector_registry
+            .get(&route.connector_id)
             .await
-            .ok_or_else(|| crate::Error::Internal(format!("Sink not found: {}", route.sink_id)))?;
+            .ok_or_else(|| {
+                crate::Error::Internal(format!("Connector not found: {}", route.connector_id))
+            })?;
 
         if route.protocol_conversion.is_some() {
             return Err(crate::Error::UnsupportedConversion(
@@ -57,19 +59,19 @@ impl PlanExecutor {
             ));
         }
 
-        self.execute_with_retries(ctx, sink, request, &route.retry_config, route.timeout)
+        self.execute_with_retries(ctx, connector, request, &route.retry_config, route.timeout)
             .await
     }
 
     async fn execute_with_retries(
         &self,
         ctx: &RequestContext,
-        sink: Arc<dyn Sink>,
+        connector: Arc<dyn Connector>,
         request: RequestStream,
         _retry_config: &super::types::RetryConfig,
         timeout: Duration,
-    ) -> Result<super::sink::ResponseStream> {
-        match tokio::time::timeout(timeout, sink.execute(ctx, request)).await {
+    ) -> Result<super::connector::ResponseStream> {
+        match tokio::time::timeout(timeout, connector.execute(ctx, request)).await {
             Ok(Ok(stream)) => Ok(stream),
             Ok(Err(err)) => Err(err),
             Err(_) => {

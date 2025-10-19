@@ -42,10 +42,27 @@ pub fn reauth_modal() -> Html {
     }
 
     // Auto-hide modal and reload page when authenticated
+    // Check if we should show the modal
+    let show_modal = matches!(
+        &auth.state,
+        crate::auth::context::AuthState::Public {
+            status: crate::auth::context::PublicAuthStatus::Invalid {
+                show_modal: true,
+                ..
+            },
+            ..
+        }
+    );
+
+    // Auto-hide modal when authenticated
     {
         let auth = auth.clone();
-        use_effect_with(auth.auth_state.clone(), move |auth_state| {
-            if auth_state.is_some() && auth.show_reauth_modal {
+        let is_authenticated = matches!(
+            auth.state,
+            crate::auth::context::AuthState::Authenticated { .. }
+        );
+        use_effect_with(is_authenticated, move |is_auth| {
+            if *is_auth && show_modal {
                 auth.dispatch(AuthAction::HideReauthModal);
                 // Reload the page to refresh all UI elements
                 if let Some(window) = web_sys::window() {
@@ -55,8 +72,8 @@ pub fn reauth_modal() -> Html {
         });
     }
 
-    // Only render modal content if show_reauth_modal is true
-    if !auth.show_reauth_modal {
+    // Only render modal content if show_modal is true
+    if !show_modal {
         return html! {};
     }
 
@@ -77,7 +94,10 @@ pub fn reauth_modal() -> Html {
                     {"Your session has expired. Please re-authenticate to continue using the application."}
                 </p>
 
-                if let Some(error) = &auth.error {
+                if let crate::auth::context::AuthState::Public {
+                    status: crate::auth::context::PublicAuthStatus::Unauthenticated { error: Some(ref error) },
+                    ..
+                } = &auth.state {
                     <div class="mb-4 p-3 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded text-sm">
                         {error}
                     </div>

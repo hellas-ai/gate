@@ -3,17 +3,17 @@
 use crate::{
     State,
     config::{LocalInferenceConfig, ProviderConfig, ProviderType, Settings},
+    connectors::catgrad_connector::CatgradSink,
     daemon::{Daemon, Result},
     error::DaemonError,
     services::LocalInferenceService,
-    sinks::catgrad_sink::CatgradSink,
 };
 use axum::http::HeaderName;
 use gate_core::{
     router::{
-        Sink,
-        index::SinkIndex,
-        registry::SinkRegistry,
+        Connector,
+        index::ConnectorIndex,
+        registry::ConnectorRegistry,
         routing::Router,
         strategy::{CompositeStrategy, ProviderAffinityStrategy, SimpleStrategy},
     },
@@ -21,7 +21,7 @@ use gate_core::{
 };
 use gate_http::{
     AppState,
-    sinks::{
+    connectors::{
         anthropic::{self, AnthropicConfig},
         openai::{self, OpenAIConfig},
     },
@@ -79,7 +79,7 @@ impl ServerBuilder {
     }
 
     /// Register all provider sinks
-    pub async fn register_sinks(&self, registry: &Arc<SinkRegistry>) -> Result<()> {
+    pub async fn register_sinks(&self, registry: &Arc<ConnectorRegistry>) -> Result<()> {
         let mut has_anthropic = false;
         let mut has_openai = false;
 
@@ -121,7 +121,7 @@ impl ServerBuilder {
     }
 
     /// Create a provider sink based on configuration
-    async fn create_provider_sink(&self, config: &ProviderConfig) -> Result<Arc<dyn Sink>> {
+    async fn create_provider_sink(&self, config: &ProviderConfig) -> Result<Arc<dyn Connector>> {
         match config.provider {
             ProviderType::Anthropic => {
                 let anthropic_config = AnthropicConfig {
@@ -130,9 +130,10 @@ impl ServerBuilder {
                     timeout_seconds: Some(config.timeout_seconds),
                     sink_id: Some(format!("provider://anthropic/{}", config.name)),
                 };
-                anthropic::create_sink(anthropic_config)
+                let allow = self.settings.auth.provider_passthrough.enabled;
+                anthropic::create_sink(anthropic_config, allow)
                     .await
-                    .map(|sink| Arc::new(sink) as Arc<dyn Sink>)
+                    .map(|sink| Arc::new(sink) as Arc<dyn Connector>)
                     .map_err(|e| DaemonError::ServiceUnavailable(e.to_string()))
             }
             ProviderType::OpenAI => {
@@ -147,8 +148,9 @@ impl ServerBuilder {
                     timeout_seconds: Some(config.timeout_seconds),
                     sink_id: Some(format!("provider://openai/{}", config.name)),
                 };
-                openai::create_sink(openai_config)
-                    .map(|sink| Arc::new(sink) as Arc<dyn Sink>)
+                let allow = self.settings.auth.provider_passthrough.enabled;
+                openai::create_sink(openai_config, allow)
+                    .map(|sink| Arc::new(sink) as Arc<dyn Connector>)
                     .map_err(|e| DaemonError::ServiceUnavailable(e.to_string()))
             }
             ProviderType::Custom => Err(DaemonError::ConfigError(
@@ -158,8 +160,9 @@ impl ServerBuilder {
     }
 
     /// Register Anthropic fallback sink
-    async fn register_anthropic_fallback(&self, registry: &Arc<SinkRegistry>) {
-        match anthropic::create_fallback_sink().await {
+    async fn register_anthropic_fallback(&self, registry: &Arc<ConnectorRegistry>) {
+        match anthropic::create_fallback_sink(self.settings.auth.provider_passthrough.enabled).await
+        {
             Ok(sink) => {
                 registry
                     .register("provider://anthropic/fallback".to_string(), Arc::new(sink))
@@ -173,9 +176,9 @@ impl ServerBuilder {
     }
 
     /// Register OpenAI fallback sinks
-    async fn register_openai_fallbacks(&self, registry: &Arc<SinkRegistry>) {
+    async fn register_openai_fallbacks(&self, registry: &Arc<ConnectorRegistry>) {
         // Standard OpenAI fallback
-        match openai::create_fallback_sink() {
+        match openai::create_fallback_sink(self.settings.auth.provider_passthrough.enabled) {
             Ok(sink) => {
                 registry
                     .register("provider://openai/fallback".to_string(), Arc::new(sink))
@@ -186,7 +189,7 @@ impl ServerBuilder {
         }
 
         // Codex fallback for ChatGPT backend
-        match openai::create_codex_fallback_sink() {
+        match openai::create_codex_fallback_sink(self.settings.auth.provider_passthrough.enabled) {
             Ok(sink) => {
                 registry
                     .register("provider://openai/codex".to_string(), Arc::new(sink))
@@ -200,12 +203,12 @@ impl ServerBuilder {
     /// Register Catgrad sink for local inference
     async fn register_catgrad_sink(
         &self,
-        registry: &Arc<SinkRegistry>,
+        registry: &Arc<ConnectorRegistry>,
         config: &LocalInferenceConfig,
     ) {
         match LocalInferenceService::new(config.clone()) {
             Ok(_) => {
-                let sink = Arc::new(CatgradSink::new("self://catgrad"));
+                let sink = Arc::new(CatgradSink);
                 registry.register("self://catgrad".to_string(), sink).await;
                 info!("Registered Catgrad sink for local inference");
             }
@@ -217,8 +220,8 @@ impl ServerBuilder {
     pub async fn build_router_core(
         &self,
         state_backend: Arc<dyn StateBackend>,
-        sink_registry: Arc<SinkRegistry>,
-        sink_index: Arc<SinkIndex>,
+        sink_registry: Arc<ConnectorRegistry>,
+        sink_index: Arc<ConnectorIndex>,
     ) -> Arc<Router> {
         let router = Router::builder()
             .state_backend(state_backend)
@@ -307,7 +310,7 @@ fn is_local_host(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
-/// Format provider sink ID
+/// Format provider connector ID
 fn format_provider_sink_id(provider: &ProviderType, name: &str) -> String {
     match provider {
         ProviderType::Anthropic => format!("provider://anthropic/{name}"),

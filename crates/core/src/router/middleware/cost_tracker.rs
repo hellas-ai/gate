@@ -1,7 +1,7 @@
 //! Cost tracking middleware
 
 use super::{Middleware, Next, RequestStream, ResponseStream};
-use crate::router::sink::RequestContext;
+use crate::router::connector::RequestContext;
 use crate::router::types::{ActualCost, ResponseChunk};
 use crate::state::StateBackend;
 use crate::{Result, UsageRecord};

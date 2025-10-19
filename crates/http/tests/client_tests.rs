@@ -2,27 +2,34 @@
 
 #![cfg(feature = "client")]
 
-use gate_http::client::{GateClient, error::ClientError};
-use gate_http::types::AnthropicMessagesRequest;
+use gate_http::client::inference::{AnthropicMessage, MessageRequest};
+use gate_http::client::{
+    AuthenticatedGateClient, ClientBuilder, PublicGateClient, error::ClientError,
+};
 use serde_json::json;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
 async fn test_client_builder() {
-    let client = GateClient::builder()
+    // Test building a public client
+    let public_client = ClientBuilder::default()
         .base_url("http://localhost:8080")
-        .api_key("test-key")
-        .build();
+        .build_public();
 
-    assert!(client.is_ok());
-    let client = client.unwrap();
-    assert_eq!(client.base_url().as_str(), "http://localhost:8080/");
+    assert!(public_client.is_ok());
+
+    // Test building an authenticated client
+    let auth_client = ClientBuilder::default()
+        .base_url("http://localhost:8080")
+        .build_authenticated("test-key");
+
+    assert!(auth_client.is_ok());
 }
 
 #[tokio::test]
 async fn test_client_builder_requires_base_url() {
-    let result = GateClient::builder().build();
+    let result = ClientBuilder::default().build_public();
     assert!(matches!(result, Err(ClientError::Configuration(_))));
 }
 
@@ -50,48 +57,68 @@ async fn test_anthropic_messages_endpoint() {
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
         .and(header("content-type", "application/json"))
+        .and(header("authorization", "Bearer test-api-key"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
         .mount(&mock_server)
         .await;
 
-    let client = GateClient::new(mock_server.uri()).unwrap();
+    let client = AuthenticatedGateClient::new(mock_server.uri(), "test-api-key").unwrap();
 
-    let request = AnthropicMessagesRequest {
+    let request = MessageRequest {
         model: "claude-3".to_string(),
-        stream: false,
-        extra: None,
+        messages: vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: "Hello".to_string(),
+        }],
+        max_tokens: 100,
+        temperature: None,
+        stream: Some(false),
+        system: None,
     };
 
-    let response = client.messages(request).await.unwrap();
-    assert_eq!(response["id"], "msg_123");
-    assert_eq!(response["role"], "assistant");
+    let response = client.create_message(request).await.unwrap();
+    assert_eq!(response.id, "msg_123");
+    assert_eq!(response.role, "assistant");
 }
 
 #[tokio::test]
-async fn test_auth_with_api_key() {
+async fn test_public_and_authenticated_clients() {
     let mock_server = MockServer::start().await;
 
-    Mock::given(method("POST"))
-        .and(path("/v1/messages"))
-        .and(header("authorization", "Bearer test-api-key"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+    // Test public endpoint
+    Mock::given(method("GET"))
+        .and(path("/public/health"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "ok"})))
         .mount(&mock_server)
         .await;
 
-    let client = GateClient::builder()
-        .base_url(mock_server.uri())
-        .api_key("test-api-key")
-        .build()
+    let public_client = PublicGateClient::new(mock_server.uri()).unwrap();
+    let request = public_client
+        .request(reqwest::Method::GET, "/public/health")
         .unwrap();
+    let response = public_client
+        .execute::<serde_json::Value>(request)
+        .await
+        .unwrap();
+    assert_eq!(response["status"], "ok");
 
-    let request = AnthropicMessagesRequest {
-        model: "claude-3".to_string(),
-        stream: false,
-        extra: None,
-    };
+    // Test authenticated endpoint
+    Mock::given(method("GET"))
+        .and(path("/api/user"))
+        .and(header("authorization", "Bearer test-api-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "user123"})))
+        .mount(&mock_server)
+        .await;
 
-    let response = client.messages(request).await;
-    assert!(response.is_ok());
+    let auth_client = AuthenticatedGateClient::new(mock_server.uri(), "test-api-key").unwrap();
+    let request = auth_client
+        .request(reqwest::Method::GET, "/api/user")
+        .unwrap();
+    let response = auth_client
+        .execute::<serde_json::Value>(request)
+        .await
+        .unwrap();
+    assert_eq!(response["id"], "user123");
 }
 
 #[tokio::test]
@@ -105,14 +132,20 @@ async fn test_error_handling() {
         .mount(&mock_server)
         .await;
 
-    let client = GateClient::new(mock_server.uri()).unwrap();
+    let client = AuthenticatedGateClient::new(mock_server.uri(), "wrong-key").unwrap();
 
-    let request = AnthropicMessagesRequest {
+    let request = MessageRequest {
         model: "claude-3".to_string(),
-        stream: false,
-        extra: None,
+        messages: vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: "Hello".to_string(),
+        }],
+        max_tokens: 100,
+        temperature: None,
+        stream: Some(false),
+        system: None,
     };
 
-    let result = client.messages(request).await;
+    let result = client.create_message(request).await;
     assert!(matches!(result, Err(ClientError::AuthenticationFailed(_))));
 }

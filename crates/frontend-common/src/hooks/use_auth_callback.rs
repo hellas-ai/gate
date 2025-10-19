@@ -14,7 +14,10 @@ where
     T: 'static,
 {
     let auth = use_auth();
-    let token = auth.auth_state.as_ref().map(|s| s.token.clone());
+    let token = match &auth.state {
+        crate::auth::context::AuthState::Authenticated { token, .. } => Some(token.clone()),
+        _ => None,
+    };
 
     Callback::from(move |event: T| {
         let token = token.clone();

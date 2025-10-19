@@ -5,7 +5,7 @@ pub mod rpc;
 pub mod server;
 
 pub use builder::DaemonBuilder;
-use gate_core::router::{SinkIndex, SinkRegistry};
+use gate_core::router::{ConnectorIndex, ConnectorRegistry};
 
 use self::rpc::DaemonRequest;
 use crate::Settings;
@@ -217,12 +217,12 @@ impl Daemon {
         let mut app_state = gate_http::AppState::new(state_backend.clone(), state);
         let router = builder.init_router();
 
-        // Step 4: Setup sink registry and register all sinks
-        let sink_registry = Arc::new(SinkRegistry::new());
+        // Step 4: Setup connector registry and register all connectors
+        let sink_registry = Arc::new(ConnectorRegistry::new());
         builder.register_sinks(&sink_registry).await?;
 
-        // Step 5: Setup sink index
-        let sink_index = Arc::new(SinkIndex::new());
+        // Step 5: Setup connector index
+        let sink_index = Arc::new(ConnectorIndex::new());
         sink_index.refresh_from_registry(&sink_registry).await;
 
         // Step 6: Build core router with strategies and middleware

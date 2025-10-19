@@ -18,9 +18,13 @@ pub fn onboarding_auth(props: &OnboardingAuthProps) -> Html {
     let bootstrap_token = props.bootstrap_token.clone();
 
     // Redirect to home if user is authenticated
-    use_effect_with(auth.auth_state.clone(), {
-        move |auth_state| {
-            if auth_state.is_some() {
+    use_effect_with((), {
+        let auth = auth.clone();
+        move |_| {
+            if matches!(
+                auth.state,
+                gate_frontend_common::auth::context::AuthState::Authenticated { .. }
+            ) {
                 // User is authenticated, redirect to home
                 let window = web_sys::window().unwrap();
                 let location = window.location();

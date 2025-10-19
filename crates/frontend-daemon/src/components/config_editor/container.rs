@@ -1,4 +1,4 @@
-use crate::services::ConfigApiService;
+use crate::hooks::use_config;
 use gloo::timers::callback::Timeout;
 use yew::prelude::*;
 
@@ -13,13 +13,24 @@ use super::{
 
 #[function_component(ConfigEditor)]
 pub fn config_editor() -> Html {
-    let config_service = use_memo((), |_| ConfigApiService::new());
+    let config_service = use_config();
     let config = use_state(GateConfig::default);
     let is_loading = use_state(|| false);
     let is_saving = use_state(|| false);
     let error_message = use_state(|| None::<String>);
     let success_message = use_state(|| None::<String>);
     let active_page = use_state(|| ConfigPage::Server);
+
+    // Return early if no auth client available
+    let Some(config_service) = config_service else {
+        return html! {
+            <div class="p-6 max-w-6xl mx-auto">
+                <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+                    <p class="text-gray-600 dark:text-gray-400">{ "Authentication required to access configuration." }</p>
+                </div>
+            </div>
+        };
+    };
 
     {
         let config_service = config_service.clone();

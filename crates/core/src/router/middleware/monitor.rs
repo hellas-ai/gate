@@ -2,7 +2,7 @@
 
 use super::{Middleware, Next, RequestStream, ResponseStream};
 use crate::Result;
-use crate::router::sink::RequestContext;
+use crate::router::connector::RequestContext;
 use crate::router::types::ResponseChunk;
 use async_trait::async_trait;
 use futures::StreamExt;

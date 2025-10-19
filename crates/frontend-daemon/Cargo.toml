@@ -8,6 +8,7 @@ description = "Daemon web UI frontend for Gate"
 
 [dependencies]
 gate-frontend-common = { path = "../frontend-common" }
+gate-http = { path = "../http", default-features = false, features = ["client"] }
 gate-chat-ui = { path = "../chat-ui" }
 gloo = { workspace = true, features = ["timers"] }
 wasm-logger = { workspace = true }

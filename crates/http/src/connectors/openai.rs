@@ -1,10 +1,10 @@
-//! OpenAI-specific sink factory
+//! OpenAI-specific connector factory
 
-use crate::sinks::DEFAULT_SINK_TIMEOUT_SECS;
+use crate::connectors::DEFAULT_CONNECTOR_TIMEOUT_SECS;
 
-use super::http_sink::{HttpSink, HttpSinkConfig, Provider};
+use super::http_connector::{HttpConnector, HttpConnectorConfig, Provider};
 use gate_core::Result;
-use gate_core::router::types::{CostStructure, Protocol, SinkCapabilities};
+use gate_core::router::types::{ConnectorCapabilities, CostStructure, Protocol};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 use std::time::Duration;
@@ -16,12 +16,12 @@ pub struct OpenAIConfig {
     pub base_url: Option<String>,
     pub models: Option<Vec<String>>,
     pub timeout_seconds: Option<u64>,
-    /// Optional sink ID to use in descriptions/registry keys
+    /// Optional connector ID to use in descriptions/registry keys
     pub sink_id: Option<String>,
 }
 
-/// Create an OpenAI sink
-pub fn create_sink(config: OpenAIConfig) -> Result<HttpSink> {
+/// Create an OpenAI connector
+pub fn create_sink(config: OpenAIConfig, allow_passthrough: bool) -> Result<HttpConnector> {
     let base_url = config
         .base_url
         .unwrap_or_else(|| "https://api.openai.com".to_string());
@@ -30,9 +30,13 @@ pub fn create_sink(config: OpenAIConfig) -> Result<HttpSink> {
     // Empty list means dynamic support (accept unknown models for routing intent).
     let models = config.models.unwrap_or_default();
 
-    let timeout = Duration::from_secs(config.timeout_seconds.unwrap_or(DEFAULT_SINK_TIMEOUT_SECS));
+    let timeout = Duration::from_secs(
+        config
+            .timeout_seconds
+            .unwrap_or(DEFAULT_CONNECTOR_TIMEOUT_SECS),
+    );
 
-    let sink_config = HttpSinkConfig {
+    let sink_config = HttpConnectorConfig {
         id: config
             .sink_id
             .clone()
@@ -49,7 +53,7 @@ pub fn create_sink(config: OpenAIConfig) -> Result<HttpSink> {
             Protocol::OpenAICompletions,
             Protocol::OpenAIResponses,
         ],
-        capabilities: SinkCapabilities {
+        capabilities: ConnectorCapabilities {
             supports_streaming: true,
             supports_batching: false,
             supports_tools: true,
@@ -63,41 +67,42 @@ pub fn create_sink(config: OpenAIConfig) -> Result<HttpSink> {
             cached_input_cost_per_token: None, // OpenAI doesn't have cached pricing
             currency: "USD".to_string(),
         }),
+        allow_passthrough,
     };
 
-    HttpSink::new(sink_config)
+    HttpConnector::new(sink_config)
 }
 
-/// Create a fallback OpenAI sink with no API key and default base URL.
-/// This sink will accept client-supplied API keys via Authorization headers.
-pub fn create_fallback_sink() -> Result<HttpSink> {
+/// Create a fallback OpenAI connector with no API key and default base URL.
+/// This connector will accept client-supplied API keys via Authorization headers.
+pub fn create_fallback_sink(allow_passthrough: bool) -> Result<HttpConnector> {
     let config = OpenAIConfig {
         api_key: None,
         base_url: None,
         models: None,
-        timeout_seconds: Some(DEFAULT_SINK_TIMEOUT_SECS),
+        timeout_seconds: Some(DEFAULT_CONNECTOR_TIMEOUT_SECS),
         sink_id: Some("provider://openai/fallback".to_string()),
     };
-    create_sink(config)
+    create_sink(config, allow_passthrough)
 }
 
-/// Create a fallback Codex sink (ChatGPT Codex backend) with no API key and default base URL.
+/// Create a fallback Codex connector (ChatGPT Codex backend) with no API key and default base URL.
 /// Accepts OpenAI Responses protocol with dynamic models; expects OAuth Bearer tokens.
-pub fn create_codex_fallback_sink() -> Result<HttpSink> {
+pub fn create_codex_fallback_sink(allow_passthrough: bool) -> Result<HttpConnector> {
     // Ensure trailing slash so URL::join appends endpoint under codex/
     let base_url = "https://chatgpt.com/backend-api/codex/".to_string();
-    let timeout = std::time::Duration::from_secs(DEFAULT_SINK_TIMEOUT_SECS);
+    let timeout = std::time::Duration::from_secs(DEFAULT_CONNECTOR_TIMEOUT_SECS);
 
-    let sink_config = super::http_sink::HttpSinkConfig {
+    let sink_config = super::http_connector::HttpConnectorConfig {
         id: "provider://openai/codex".to_string(),
-        provider: super::http_sink::Provider::OpenAICodex,
+        provider: super::http_connector::Provider::OpenAICodex,
         base_url,
         api_key: None,
         models: Vec::new(),
         timeout,
         max_retries: 3,
         accepted_protocols: vec![Protocol::OpenAIResponses],
-        capabilities: SinkCapabilities {
+        capabilities: ConnectorCapabilities {
             supports_streaming: true,
             supports_batching: false,
             supports_tools: true,
@@ -105,7 +110,8 @@ pub fn create_codex_fallback_sink() -> Result<HttpSink> {
             modalities: vec!["text".to_string()],
         },
         cost_structure: None,
+        allow_passthrough,
     };
 
-    super::http_sink::HttpSink::new(sink_config)
+    super::http_connector::HttpConnector::new(sink_config)
 }

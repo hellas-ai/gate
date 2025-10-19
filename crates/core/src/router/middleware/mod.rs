@@ -29,7 +29,7 @@ pub trait Middleware: Send + Sync {
     /// Process the request/response through this middleware
     async fn process(
         &self,
-        ctx: &mut super::sink::RequestContext,
+        ctx: &mut super::connector::RequestContext,
         request: RequestStream,
         next: Next,
     ) -> Result<ResponseStream>;

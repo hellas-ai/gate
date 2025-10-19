@@ -124,15 +124,15 @@ impl StateBackend for MockStateBackend {
 #[tokio::test]
 async fn test_router_creation() {
     let backend = std::sync::Arc::new(MockStateBackend);
-    let registry = std::sync::Arc::new(super::registry::SinkRegistry::new());
+    let registry = std::sync::Arc::new(super::registry::ConnectorRegistry::new());
 
     let router = routing::Router::builder()
         .state_backend(backend as std::sync::Arc<dyn crate::StateBackend>)
         .sink_registry(registry)
         .build();
 
-    // Test that router implements Sink
-    let _sink: &dyn Sink = &router;
+    // Test that router implements Connector
+    let _conn: &dyn super::connector::Connector = &router;
 }
 
 #[test]
@@ -161,28 +161,28 @@ fn test_protocol_conversion() {
 #[tokio::test]
 async fn test_route_and_execute_with_mock_sink() {
     use crate::access::SubjectIdentity;
-    use crate::router::index::SinkIndex;
-    use crate::router::sink::RouterIdentityContext;
-    use crate::router::sinks::mock::MockSink;
+    use crate::router::connector::RouterIdentityContext;
+    use crate::router::connectors::mock::MockConnector;
+    use crate::router::index::ConnectorIndex;
     use crate::router::types::{RequestCapabilities, RequestDescriptor};
     use futures::StreamExt;
     use serde_json::json;
 
     // Backend and registry
     let backend = std::sync::Arc::new(MockStateBackend);
-    let registry = std::sync::Arc::new(super::registry::SinkRegistry::new());
+    let registry = std::sync::Arc::new(super::registry::ConnectorRegistry::new());
     registry
         .register(
             "self://mock".to_string(),
-            std::sync::Arc::new(MockSink::success("self://mock")),
+            std::sync::Arc::new(MockConnector::success("self://mock")),
         )
         .await;
 
     // Prepare sink index snapshot for fast routing
-    let index = std::sync::Arc::new(SinkIndex::new());
-    let sink = registry.get("self://mock").await.unwrap();
-    let desc = sink.describe().await;
-    let health = sink.probe().await;
+    let index = std::sync::Arc::new(ConnectorIndex::new());
+    let conn = registry.get("self://mock").await.unwrap();
+    let desc = conn.describe().await;
+    let health = conn.probe().await;
     index
         .set_snapshot("self://mock".to_string(), desc, health)
         .await;
@@ -195,7 +195,7 @@ async fn test_route_and_execute_with_mock_sink() {
         .build();
 
     // Context and descriptor
-    let ctx = sink::RequestContext {
+    let ctx = super::connector::RequestContext {
         identity: SubjectIdentity::new(
             "user-1",
             "test",
@@ -271,24 +271,24 @@ async fn test_route_and_execute_with_mock_sink() {
 #[tokio::test]
 async fn test_service_route_and_execute_json() {
     use crate::access::SubjectIdentity;
-    use crate::router::index::SinkIndex;
+    use crate::router::connector::RouterIdentityContext;
+    use crate::router::connectors::mock::MockConnector;
+    use crate::router::index::ConnectorIndex;
     use crate::router::service::route_and_execute_json_with_protocol;
-    use crate::router::sink::RouterIdentityContext;
-    use crate::router::sinks::mock::MockSink;
     use crate::router::types::Protocol;
     use futures::StreamExt;
     use serde_json::json;
 
     let backend = std::sync::Arc::new(MockStateBackend);
-    let registry = std::sync::Arc::new(super::registry::SinkRegistry::new());
+    let registry = std::sync::Arc::new(super::registry::ConnectorRegistry::new());
     registry
         .register(
             "self://mock".into(),
-            std::sync::Arc::new(MockSink::success("self://mock")),
+            std::sync::Arc::new(MockConnector::success("self://mock")),
         )
         .await;
 
-    let index = std::sync::Arc::new(SinkIndex::new());
+    let index = std::sync::Arc::new(ConnectorIndex::new());
     index.refresh_from_registry(&registry).await;
 
     let router = routing::Router::builder()
@@ -297,7 +297,7 @@ async fn test_service_route_and_execute_json() {
         .sink_index(index)
         .build();
 
-    let ctx = sink::RequestContext {
+    let ctx = super::connector::RequestContext {
         identity: SubjectIdentity::new(
             "user-1",
             "test",
@@ -335,32 +335,32 @@ async fn test_service_route_and_execute_json() {
 #[tokio::test]
 async fn test_sink_index_selects_healthy_candidate() {
     use crate::access::SubjectIdentity;
-    use crate::router::index::SinkIndex;
-    use crate::router::sink::RouterIdentityContext;
-    use crate::router::sinks::mock::MockSink;
+    use crate::router::connector::RouterIdentityContext;
+    use crate::router::connectors::mock::MockConnector;
+    use crate::router::index::ConnectorIndex;
     use crate::router::types::{RequestCapabilities, RequestDescriptor};
 
     let backend = std::sync::Arc::new(MockStateBackend);
-    let registry = std::sync::Arc::new(super::registry::SinkRegistry::new());
+    let registry = std::sync::Arc::new(super::registry::ConnectorRegistry::new());
 
-    // Two sinks: A healthy, B unhealthy
+    // Two connectors: A healthy, B unhealthy
     let sink_a_id = "self://a";
     let sink_b_id = "self://b";
     registry
         .register(
             sink_a_id.to_string(),
-            std::sync::Arc::new(MockSink::success(sink_a_id)),
+            std::sync::Arc::new(MockConnector::success(sink_a_id)),
         )
         .await;
     registry
         .register(
             sink_b_id.to_string(),
-            std::sync::Arc::new(MockSink::unhealthy(sink_b_id)),
+            std::sync::Arc::new(MockConnector::unhealthy(sink_b_id)),
         )
         .await;
 
     // Build index snapshots
-    let index = std::sync::Arc::new(SinkIndex::new());
+    let index = std::sync::Arc::new(ConnectorIndex::new());
     // Refresh from registry to populate index for all sinks
     let refreshed = index.refresh_from_registry(&registry).await;
     assert_eq!(refreshed, 2);
@@ -376,7 +376,7 @@ async fn test_sink_index_selects_healthy_candidate() {
         .strategy(strategy)
         .build();
 
-    let ctx = sink::RequestContext {
+    let ctx = super::connector::RequestContext {
         identity: SubjectIdentity::new(
             "user-1",
             "test",
@@ -407,29 +407,29 @@ async fn test_sink_index_selects_healthy_candidate() {
     };
 
     let plan = router.route(&ctx, &desc).await.expect("route ok");
-    assert_eq!(plan.primary_route.sink_id, sink_a_id);
+    assert_eq!(plan.primary_route.connector_id, sink_a_id);
 }
 
 #[tokio::test]
 async fn test_sink_index_refresher_lists_all_sinks() {
-    use crate::router::index::SinkIndex;
-    use crate::router::sinks::mock::MockSink;
+    use crate::router::connectors::mock::MockConnector;
+    use crate::router::index::ConnectorIndex;
 
-    let registry = std::sync::Arc::new(super::registry::SinkRegistry::new());
+    let registry = std::sync::Arc::new(super::registry::ConnectorRegistry::new());
     registry
         .register(
             "self://one".into(),
-            std::sync::Arc::new(MockSink::success("self://one")),
+            std::sync::Arc::new(MockConnector::success("self://one")),
         )
         .await;
     registry
         .register(
             "self://two".into(),
-            std::sync::Arc::new(MockSink::unhealthy("self://two")),
+            std::sync::Arc::new(MockConnector::unhealthy("self://two")),
         )
         .await;
 
-    let index = SinkIndex::new();
+    let index = ConnectorIndex::new();
     let n = index.refresh_from_registry(&registry).await;
     assert_eq!(n, 2);
 
