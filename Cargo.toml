@@ -61,7 +61,7 @@ hex = "0.4"
 http = "1.0"
 hyper = "1.7"
 hyper-util = { version = "*", default-features = false }
-iroh = { version = "0.94", default-features = false, features = ["discovery-local-network"] }
+iroh = { version = "0.95", default-features = false, features = ["discovery-local-network"] }
 
 # Testing
 mockall = "0.13"
