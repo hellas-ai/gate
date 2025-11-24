@@ -64,7 +64,7 @@ hyper-util = { version = "*", default-features = false }
 iroh = { version = "0.95", default-features = false, features = ["discovery-local-network"] }
 
 # Testing
-mockall = "0.13"
+mockall = "0.14"
 
 # Platform-specific (file watching)
 notify = "6.1"
