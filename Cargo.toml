@@ -58,7 +58,7 @@ gate-p2p = { path = "crates/p2p" }
 gate-tlsforward = { path = "crates/tlsforward" }
 gate-sqlx = { path = "crates/sqlx" }
 hex = "0.4"
-http = "1.0"
+http = "1.4"
 hyper = "1.8"
 hyper-util = { version = "*", default-features = false }
 iroh = { version = "0.95", default-features = false, features = ["discovery-local-network"] }
