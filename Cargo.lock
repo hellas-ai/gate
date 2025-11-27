@@ -4099,9 +4099,9 @@ dependencies = [
 
 [[package]]
 name = "implicit-clone"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88e4c5423e5b38b6f175b42561a08f6ddbc8ed3a3275f48eb350ba2dfe9a6b60"
+checksum = "1689b939ee35e3a075b0834b5672efd43aec8a6e81a1c6002b76a5ca2f211ae0"
 dependencies = [
  "implicit-clone-derive",
  "indexmap 2.12.0",
@@ -10959,7 +10959,7 @@ dependencies = [
 [[package]]
 name = "yew"
 version = "0.21.0"
-source = "git+https://github.com/yewstack/yew#b7a599b9e4879fce18d0a3f3cbbe7c0d526e9f2d"
+source = "git+https://github.com/yewstack/yew#54c20db6cf0f6a3e7b885eb1b6c7b5637bbcb17e"
 dependencies = [
  "console_error_panic_hook",
  "futures",
@@ -10983,7 +10983,7 @@ dependencies = [
 [[package]]
 name = "yew-macro"
 version = "0.21.0"
-source = "git+https://github.com/yewstack/yew#b7a599b9e4879fce18d0a3f3cbbe7c0d526e9f2d"
+source = "git+https://github.com/yewstack/yew#54c20db6cf0f6a3e7b885eb1b6c7b5637bbcb17e"
 dependencies = [
  "once_cell",
  "prettyplease",
@@ -10997,7 +10997,7 @@ dependencies = [
 [[package]]
 name = "yew-router"
 version = "0.18.0"
-source = "git+https://github.com/yewstack/yew#b7a599b9e4879fce18d0a3f3cbbe7c0d526e9f2d"
+source = "git+https://github.com/yewstack/yew#54c20db6cf0f6a3e7b885eb1b6c7b5637bbcb17e"
 dependencies = [
  "gloo",
  "js-sys",
@@ -11015,7 +11015,7 @@ dependencies = [
 [[package]]
 name = "yew-router-macro"
 version = "0.18.0"
-source = "git+https://github.com/yewstack/yew#b7a599b9e4879fce18d0a3f3cbbe7c0d526e9f2d"
+source = "git+https://github.com/yewstack/yew#54c20db6cf0f6a3e7b885eb1b6c7b5637bbcb17e"
 dependencies = [
  "proc-macro2",
  "quote",
