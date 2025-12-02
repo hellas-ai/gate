@@ -114,7 +114,7 @@ tracing-web = { version = "0.1", default-features = false }
 serde-wasm-bindgen = { version = "0.6", default-features = false }
 
 # Utilities
-uuid = { version = "1.18", features = ["v4", "serde", "js"] }
+uuid = { version = "1.19", features = ["v4", "serde", "js"] }
 webauthn-rs = { version = "0.5" }
 wiremock = "0.6"
 wasm-bindgen-test = { version = "0.3", default-features = false }
