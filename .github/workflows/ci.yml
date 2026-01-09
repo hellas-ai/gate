@@ -233,7 +233,7 @@ jobs:
         ls -la artifacts/ || echo "No artifacts directory"
     
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: gate-gui-${{ matrix.target }}
         path: artifacts/*
