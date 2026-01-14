@@ -72,7 +72,7 @@ notify = "6.1"
 # Random
 getrandom = { version = "0.3", default-features=false, features = ["wasm_js"] }
 rand = { version = "0.9", features = ["std", "std_rng"] }
-rust_decimal = { version = "1.39", features = ["serde"] }
+rust_decimal = { version = "1.40", features = ["serde"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
