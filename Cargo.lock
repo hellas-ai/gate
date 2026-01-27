@@ -950,8 +950,16 @@ dependencies = [
 
 [[package]]
 name = "catgrad"
+version = "0.2.1"
+source = "git+https://github.com/hellas-ai/catgrad#dcd3b84d8be2f062130c9f5c557313cfb2a8f1de"
+dependencies = [
+ "open-hypergraphs",
+]
+
+[[package]]
+name = "catgrad-legacy"
 version = "0.1.1"
-source = "git+https://github.com/hellas-ai/catgrad#746f7e586528ecc5cc0cd8ecaba97d6611b9ddb5"
+source = "git+https://github.com/hellas-ai/catgrad#dcd3b84d8be2f062130c9f5c557313cfb2a8f1de"
 dependencies = [
  "gemm",
  "half",
@@ -968,10 +976,11 @@ dependencies = [
 
 [[package]]
 name = "catgrad-llm"
-version = "0.1.1"
-source = "git+https://github.com/hellas-ai/catgrad#746f7e586528ecc5cc0cd8ecaba97d6611b9ddb5"
+version = "0.2.1"
+source = "git+https://github.com/hellas-ai/catgrad#dcd3b84d8be2f062130c9f5c557313cfb2a8f1de"
 dependencies = [
  "catgrad",
+ "catgrad-legacy",
  "half",
  "hf-hub",
  "log",
@@ -3528,14 +3537,15 @@ dependencies = [
 
 [[package]]
 name = "half"
-version = "2.6.0"
+version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "459196ed295495a68f7d7fe1d84f6c4b7ff0e21fe3017b2f283c6fac3ad803c9"
+checksum = "6ea2d84b969582b4b1864a92dc5d27cd2b77b622a8d79306834f1be5ba20d84b"
 dependencies = [
  "bytemuck",
  "cfg-if",
  "crunchy",
  "num-traits",
+ "zerocopy",
 ]
 
 [[package]]
@@ -3582,6 +3592,7 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash 0.2.0",
+ "serde",
 ]
 
 [[package]]
@@ -4659,7 +4670,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.53.3",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -4865,9 +4876,9 @@ checksum = "32a282da65faaf38286cf3be983213fcf1d2e2a58700e808f83f4ea9a4804bc0"
 
 [[package]]
 name = "memmap2"
-version = "0.9.8"
+version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "843a98750cd611cc2965a8213b53b43e715f13c37a9e096c6408e69990961db7"
+checksum = "744133e4a0e0a658e1374cf3bf8e415c4052a15a111acd372764c55b4177d490"
 dependencies = [
  "libc",
 ]
@@ -5718,9 +5729,9 @@ dependencies = [
 
 [[package]]
 name = "open-hypergraphs"
-version = "0.2.5"
+version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5bf4628a77ba91c60f7fc64bc08b80052f9517bcba48ba3aa71f10e7cb1bbe7"
+checksum = "8c1e6b890bbd53b03344882387c36bdc3be51b401bcdead164066e8926f43a1f"
 dependencies = [
  "num-traits",
 ]
@@ -7243,10 +7254,11 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "safetensors"
-version = "0.6.2"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "172dd94c5a87b5c79f945c863da53b2ebc7ccef4eca24ac63cca66a41aab2178"
+checksum = "675656c1eabb620b921efea4f9199f97fc86e36dd6ffd1fbbe48d0f59a4987f5"
 dependencies = [
+ "hashbrown 0.16.0",
  "serde",
  "serde_json",
 ]
@@ -10067,7 +10079,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
