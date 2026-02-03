@@ -70,7 +70,7 @@ mockall = "0.14"
 notify = "6.1"
 
 # Random
-getrandom = { version = "0.3", default-features=false, features = ["wasm_js"] }
+getrandom = { version = "0.4", default-features=false, features = ["wasm_js"] }
 rand = { version = "0.9", features = ["std", "std_rng"] }
 rust_decimal = { version = "1.40", features = ["serde"] }
 
