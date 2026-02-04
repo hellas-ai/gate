@@ -2572,7 +2572,7 @@ dependencies = [
  "chrono",
  "config",
  "futures",
- "getrandom 0.4.0",
+ "getrandom 0.4.1",
  "hex",
  "http 1.4.0",
  "js-sys",
@@ -2652,7 +2652,7 @@ dependencies = [
  "base64 0.22.1",
  "gate-chat-ui",
  "gate-http",
- "getrandom 0.4.0",
+ "getrandom 0.4.1",
  "gloo",
  "js-sys",
  "once_cell",
@@ -2679,7 +2679,7 @@ dependencies = [
  "chrono",
  "gate-chat-ui",
  "gate-frontend-common",
- "getrandom 0.4.0",
+ "getrandom 0.4.1",
  "gloo",
  "reqwest 0.12.28",
  "serde",
@@ -2724,7 +2724,7 @@ version = "0.1.0"
 dependencies = [
  "gate-chat-ui",
  "gate-frontend-common",
- "getrandom 0.4.0",
+ "getrandom 0.4.1",
  "gloo-events",
  "gloo-timers",
  "gloo-utils",
@@ -2781,7 +2781,7 @@ dependencies = [
  "chrono",
  "futures",
  "gate-core",
- "getrandom 0.4.0",
+ "getrandom 0.4.1",
  "http 1.4.0",
  "http-body-util",
  "hyper",
@@ -3160,9 +3160,9 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd66c162c2a0609c0507f49814877c621d00cb85978e6fbbf04e88b8048c07c8"
+checksum = "139ef39800118c7683f2fd3c98c1b23c09ae076556b435f8e9064ae108aaeeec"
 dependencies = [
  "cfg-if",
  "js-sys",
