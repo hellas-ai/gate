@@ -92,7 +92,7 @@ jobs:
     
     # Cache cargo-installed tools
     - name: Cache cargo tools
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.cargo/bin
         key: ${{ runner.os }}-cargo-tools-trunk-tauri-${{ hashFiles('**/Cargo.lock') }}
