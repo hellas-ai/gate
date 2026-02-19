@@ -1920,7 +1920,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2225,7 +2225,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3920,7 +3920,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "system-configuration 0.7.0",
  "tokio",
  "tower-service",
@@ -4114,9 +4114,9 @@ dependencies = [
 
 [[package]]
 name = "implicit-clone"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88e4c5423e5b38b6f175b42561a08f6ddbc8ed3a3275f48eb350ba2dfe9a6b60"
+checksum = "1689b939ee35e3a075b0834b5672efd43aec8a6e81a1c6002b76a5ca2f211ae0"
 dependencies = [
  "implicit-clone-derive",
  "indexmap 2.12.0",
@@ -4404,7 +4404,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6648,7 +6648,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -6685,7 +6685,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -7200,7 +7200,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7268,7 +7268,7 @@ dependencies = [
  "security-framework 3.4.0",
  "security-framework-sys",
  "webpki-root-certs 0.26.11",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7289,7 +7289,7 @@ dependencies = [
  "security-framework 3.4.0",
  "security-framework-sys",
  "webpki-root-certs 1.0.2",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8786,7 +8786,7 @@ dependencies = [
  "getrandom 0.4.1",
  "once_cell",
  "rustix",
- "windows-sys 0.61.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -10203,7 +10203,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -11159,8 +11159,8 @@ dependencies = [
 
 [[package]]
 name = "yew"
-version = "0.21.0"
-source = "git+https://github.com/yewstack/yew#b7a599b9e4879fce18d0a3f3cbbe7c0d526e9f2d"
+version = "0.22.0"
+source = "git+https://github.com/yewstack/yew#d8754b6b0d1f5057892da919917c2f699b17e8cf"
 dependencies = [
  "console_error_panic_hook",
  "futures",
@@ -11183,8 +11183,8 @@ dependencies = [
 
 [[package]]
 name = "yew-macro"
-version = "0.21.0"
-source = "git+https://github.com/yewstack/yew#b7a599b9e4879fce18d0a3f3cbbe7c0d526e9f2d"
+version = "0.22.0"
+source = "git+https://github.com/yewstack/yew#d8754b6b0d1f5057892da919917c2f699b17e8cf"
 dependencies = [
  "once_cell",
  "prettyplease",
@@ -11197,8 +11197,8 @@ dependencies = [
 
 [[package]]
 name = "yew-router"
-version = "0.18.0"
-source = "git+https://github.com/yewstack/yew#b7a599b9e4879fce18d0a3f3cbbe7c0d526e9f2d"
+version = "0.19.0"
+source = "git+https://github.com/yewstack/yew#d8754b6b0d1f5057892da919917c2f699b17e8cf"
 dependencies = [
  "gloo",
  "js-sys",
@@ -11215,8 +11215,8 @@ dependencies = [
 
 [[package]]
 name = "yew-router-macro"
-version = "0.18.0"
-source = "git+https://github.com/yewstack/yew#b7a599b9e4879fce18d0a3f3cbbe7c0d526e9f2d"
+version = "0.19.0"
+source = "git+https://github.com/yewstack/yew#d8754b6b0d1f5057892da919917c2f699b17e8cf"
 dependencies = [
  "proc-macro2",
  "quote",
