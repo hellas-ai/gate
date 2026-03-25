@@ -1920,7 +1920,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2225,7 +2225,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3550,7 +3550,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "http 1.4.0",
- "indexmap 2.12.0",
+ "indexmap 2.13.0",
  "slab",
  "tokio",
  "tokio-util",
@@ -3606,9 +3606,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5419bdc4f6a9207fbeba6d11b604d481addf78ecd10c11ad51e76c2f6482748d"
+checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 dependencies = [
  "allocator-api2",
  "equivalent",
@@ -3920,7 +3920,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "system-configuration 0.7.0",
  "tokio",
  "tower-service",
@@ -4114,12 +4114,12 @@ dependencies = [
 
 [[package]]
 name = "implicit-clone"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88e4c5423e5b38b6f175b42561a08f6ddbc8ed3a3275f48eb350ba2dfe9a6b60"
+checksum = "1689b939ee35e3a075b0834b5672efd43aec8a6e81a1c6002b76a5ca2f211ae0"
 dependencies = [
  "implicit-clone-derive",
- "indexmap 2.12.0",
+ "indexmap 2.13.0",
 ]
 
 [[package]]
@@ -4145,12 +4145,12 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.12.0"
+version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6717a8d2a5a929a1a2eb43a12812498ed141a0bcfb7e8f7844fbdbe4303bba9f"
+checksum = "7714e70437a7dc3ac8eb7e6f8df75fd8eb422675fc7678aff7364301092b1017"
 dependencies = [
  "equivalent",
- "hashbrown 0.16.0",
+ "hashbrown 0.16.1",
  "serde",
  "serde_core",
 ]
@@ -4404,7 +4404,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4635,7 +4635,7 @@ checksum = "02cb977175687f33fa4afa0c95c112b987ea1443e5a51c8f8ff27dc618270cc2"
 dependencies = [
  "cssparser",
  "html5ever",
- "indexmap 2.12.0",
+ "indexmap 2.13.0",
  "selectors",
 ]
 
@@ -4797,7 +4797,7 @@ version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96051b46fc183dc9cd4a223960ef37b9af631b55191852a8274bfef064cda20f"
 dependencies = [
- "hashbrown 0.16.0",
+ "hashbrown 0.16.1",
 ]
 
 [[package]]
@@ -6245,7 +6245,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3af6b589e163c5a788fab00ce0c0366f6efbb9959c2f9874b224936af7fce7e1"
 dependencies = [
  "base64 0.22.1",
- "indexmap 2.12.0",
+ "indexmap 2.13.0",
  "quick-xml",
  "serde",
  "time",
@@ -6561,7 +6561,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -6598,7 +6598,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -7119,7 +7119,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7187,7 +7187,7 @@ dependencies = [
  "security-framework 3.4.0",
  "security-framework-sys",
  "webpki-root-certs 0.26.11",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7208,7 +7208,7 @@ dependencies = [
  "security-framework 3.4.0",
  "security-framework-sys",
  "webpki-root-certs 1.0.2",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7585,7 +7585,7 @@ dependencies = [
  "chrono",
  "hex",
  "indexmap 1.9.3",
- "indexmap 2.12.0",
+ "indexmap 2.13.0",
  "schemars 0.9.0",
  "schemars 1.0.4",
  "serde_core",
@@ -7972,7 +7972,7 @@ dependencies = [
  "futures-util",
  "hashbrown 0.15.5",
  "hashlink",
- "indexmap 2.12.0",
+ "indexmap 2.13.0",
  "log",
  "memchr",
  "once_cell",
@@ -8704,7 +8704,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9037,7 +9037,7 @@ version = "0.9.12+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf92845e79fc2e2def6a5d828f0801e29a2f8acc037becc5ab08595c7d5e9863"
 dependencies = [
- "indexmap 2.12.0",
+ "indexmap 2.13.0",
  "serde_core",
  "serde_spanned 1.0.4",
  "toml_datetime 0.7.5+spec-1.1.0",
@@ -9070,7 +9070,7 @@ version = "0.19.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b5bb770da30e5cbfde35a2d7b9b8a2c4b8ef89548a7a6aeab5c9a576e3e7421"
 dependencies = [
- "indexmap 2.12.0",
+ "indexmap 2.13.0",
  "toml_datetime 0.6.11",
  "winnow 0.5.40",
 ]
@@ -9081,7 +9081,7 @@ version = "0.20.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "70f427fce4d84c72b5b732388bf4a9f4531b53f74e2887e3ecb2481f68f66d81"
 dependencies = [
- "indexmap 2.12.0",
+ "indexmap 2.13.0",
  "toml_datetime 0.6.11",
  "winnow 0.5.40",
 ]
@@ -9092,7 +9092,7 @@ version = "0.22.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41fe8c660ae4257887cf66394862d21dbca4a6ddd26f04a3560410406a2f819a"
 dependencies = [
- "indexmap 2.12.0",
+ "indexmap 2.13.0",
  "serde",
  "serde_spanned 0.6.9",
  "toml_datetime 0.6.11",
@@ -9849,7 +9849,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb0e353e6a2fbdc176932bbaab493762eb1255a7900fe0fea1a2f96c296cc909"
 dependencies = [
  "anyhow",
- "indexmap 2.12.0",
+ "indexmap 2.13.0",
  "wasm-encoder",
  "wasmparser",
 ]
@@ -9875,7 +9875,7 @@ checksum = "47b807c72e1bac69382b3a6fb3dbe8ea4c0ed87ff5629b8685ae6b9a611028fe"
 dependencies = [
  "bitflags 2.9.4",
  "hashbrown 0.15.5",
- "indexmap 2.12.0",
+ "indexmap 2.13.0",
  "semver",
 ]
 
@@ -10121,7 +10121,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -10756,7 +10756,7 @@ checksum = "b7c566e0f4b284dd6561c786d9cb0142da491f46a9fbed79ea69cdad5db17f21"
 dependencies = [
  "anyhow",
  "heck 0.5.0",
- "indexmap 2.12.0",
+ "indexmap 2.13.0",
  "prettyplease",
  "syn 2.0.106",
  "wasm-metadata",
@@ -10787,7 +10787,7 @@ checksum = "9d66ea20e9553b30172b5e831994e35fbde2d165325bec84fc43dbf6f4eb9cb2"
 dependencies = [
  "anyhow",
  "bitflags 2.9.4",
- "indexmap 2.12.0",
+ "indexmap 2.13.0",
  "log",
  "serde",
  "serde_derive",
@@ -10806,7 +10806,7 @@ checksum = "ecc8ac4bc1dc3381b7f59c34f00b67e18f910c2c0f50015669dde7def656a736"
 dependencies = [
  "anyhow",
  "id-arena",
- "indexmap 2.12.0",
+ "indexmap 2.13.0",
  "log",
  "semver",
  "serde",
@@ -11077,14 +11077,14 @@ dependencies = [
 
 [[package]]
 name = "yew"
-version = "0.21.0"
-source = "git+https://github.com/yewstack/yew#b7a599b9e4879fce18d0a3f3cbbe7c0d526e9f2d"
+version = "0.23.0"
+source = "git+https://github.com/yewstack/yew#dd5281e5d32fc29059f5e033686991f75fed090e"
 dependencies = [
  "console_error_panic_hook",
  "futures",
  "gloo",
  "implicit-clone",
- "indexmap 2.12.0",
+ "indexmap 2.13.0",
  "js-sys",
  "rustversion",
  "serde",
@@ -11101,10 +11101,9 @@ dependencies = [
 
 [[package]]
 name = "yew-macro"
-version = "0.21.0"
-source = "git+https://github.com/yewstack/yew#b7a599b9e4879fce18d0a3f3cbbe7c0d526e9f2d"
+version = "0.23.0"
+source = "git+https://github.com/yewstack/yew#dd5281e5d32fc29059f5e033686991f75fed090e"
 dependencies = [
- "once_cell",
  "prettyplease",
  "proc-macro-error",
  "proc-macro2",
@@ -11115,8 +11114,8 @@ dependencies = [
 
 [[package]]
 name = "yew-router"
-version = "0.18.0"
-source = "git+https://github.com/yewstack/yew#b7a599b9e4879fce18d0a3f3cbbe7c0d526e9f2d"
+version = "0.20.0"
+source = "git+https://github.com/yewstack/yew#dd5281e5d32fc29059f5e033686991f75fed090e"
 dependencies = [
  "gloo",
  "js-sys",
@@ -11133,8 +11132,8 @@ dependencies = [
 
 [[package]]
 name = "yew-router-macro"
-version = "0.18.0"
-source = "git+https://github.com/yewstack/yew#b7a599b9e4879fce18d0a3f3cbbe7c0d526e9f2d"
+version = "0.20.0"
+source = "git+https://github.com/yewstack/yew#dd5281e5d32fc29059f5e033686991f75fed090e"
 dependencies = [
  "proc-macro2",
  "quote",
