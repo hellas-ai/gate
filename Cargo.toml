@@ -86,7 +86,7 @@ thiserror = "2.0"
 # Core async runtime
 tokio = { version = "1", default-features = false, features = ["sync", "time", "macros"] }
 tokio-util = "0.7"
-toml = "0.9"
+toml = "1.0"
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace", "cors", "timeout"] }
 tower-service = "0.3"
