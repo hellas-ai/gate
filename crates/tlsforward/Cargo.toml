@@ -57,7 +57,7 @@ cloudflare = { version = "0.14", optional = true }
 
 # Configuration
 config = { workspace = true, optional = true }
-dashmap = "6.0"
+dashmap = "6.2"
 deadpool = "0.13"
 directories = "6"
 futures = { workspace = true }
