@@ -88,7 +88,7 @@ tokio = { version = "1", default-features = false, features = ["sync", "time", "
 tokio-util = "0.7"
 toml = "0.9"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["trace", "cors", "timeout"] }
+tower-http = { version = "0.7", features = ["trace", "cors", "timeout"] }
 tower-service = "0.3"
 
 # Logging and tracing
