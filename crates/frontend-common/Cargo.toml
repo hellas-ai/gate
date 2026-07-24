@@ -7,7 +7,7 @@ license = "AGPL-3.0"
 description = "Common frontend components and utilities for Gate"
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 gate-chat-ui = { path = "../chat-ui" }
 yew = { workspace = true, features = ["csr"] }
 yew-router = { workspace = true }
