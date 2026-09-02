@@ -44,20 +44,27 @@ pub enum PermissionDenied {
 
 pub type PermissionResult = Result<(), PermissionDenied>;
 
-/// Checks if a subject can perform an action on an object
+/// Unified permissions interface (check + grant/revoke/store)
 #[async_trait]
 pub trait Permissions<C: IdentityContext>: Send + Sync {
+    /// Check if a subject may perform an action on an object
     async fn check(
         &self,
         subject: &SubjectIdentity<C>,
         action: Action,
         object: &ObjectIdentity,
     ) -> PermissionResult;
-}
 
-/// Manages permission grants and revocations
-#[async_trait]
-pub trait PermissionManager<C: IdentityContext>: Permissions<C> {
+    /// Convenience wrapper around `check`
+    async fn require(
+        &self,
+        subject: &SubjectIdentity<C>,
+        action: Action,
+        object: &ObjectIdentity,
+    ) -> PermissionResult {
+        self.check(subject, action, object).await
+    }
+
     /// Grant a permission to a subject
     async fn grant(
         &self,
