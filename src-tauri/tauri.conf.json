@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Hellas Gate",
+  "version": "0.1.0",
+  "identifier": "ai.hellas.gate",
+  "build": {
+    "beforeDevCommand": "node ui/dev.mjs",
+    "beforeBuildCommand": "tsc --noEmit -p ui/tsconfig.json && node ui/build.mjs",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "/tmp/hellas-gate-ui-dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [{
+      "label": "main",
+      "title": "Hellas Gate",
+      "width": 1120,
+      "height": 760,
+      "minWidth": 820,
+      "minHeight": 580,
+      "resizable": true
+    }],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "icon": [
+      "../crates/gui/icons/32x32.png",
+      "../crates/gui/icons/128x128.png",
+      "../crates/gui/icons/128x128@2x.png",
+      "../crates/gui/icons/icon.icns",
+      "../crates/gui/icons/icon.ico"
+    ],
+    "macOS": {
+      "hardenedRuntime": true,
+      "minimumSystemVersion": "14.0"
+    }
+  }
+}

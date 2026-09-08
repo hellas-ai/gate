@@ -1,0 +1,44 @@
+[package]
+name = "hellas-gate"
+description = "The native desktop host for Hellas"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["desktop"]
+desktop = ["dep:tauri", "dep:tauri-build", "dep:ts-rs"]
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "hellas-gate"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[dependencies]
+anyhow = "1"
+futures = "0.3"
+hellas-attestation = { path = "../../hellas/crates/attestation", features = ["apple-app-attest"] }
+hellas-rpc = { path = "../../hellas/crates/rpc", features = ["host-control", "execute", "fetch", "courtesy"] }
+hellas-sdk = { path = "../../hellas/crates/sdk", default-features = false, features = ["apple-verifier", "client", "gateway", "local-control", "provider"] }
+hellas-wire = { path = "../../hellas/crates/wire", features = ["unix"] }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["tray-icon"], optional = true }
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "net", "fs", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ts-rs = { version = "12", features = ["serde-compat"], optional = true }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [], optional = true }
+
+[target.'cfg(target_os = "macos")'.build-dependencies]
+cc = "1"
