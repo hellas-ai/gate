@@ -45,7 +45,7 @@
             webkitgtk_4_1
           ];
           shellHook = ''
-            export CARGO_TARGET_DIR="''${TMPDIR:-/tmp}/hellas-gate-target"
+            export CARGO_TARGET_DIR="''${CARGO_TARGET_DIR:-/tmp/hellas-gate-target}"
           '' + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
             export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
             export SDKROOT="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"

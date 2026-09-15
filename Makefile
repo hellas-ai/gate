@@ -1,16 +1,20 @@
-.PHONY: bindings check dev ui-check
+.PHONY: bindings check dev ui-check ui-build
 
-GATE_TARGET ?= /tmp/hellas-gate-target
+export CARGO_TARGET_DIR ?= /tmp/hellas-gate-target
 
 bindings:
-	CARGO_TARGET_DIR=$(GATE_TARGET) cargo test -p hellas-gate --lib export_bindings
+	cargo test --locked -p hellas-gate --lib export_bindings
 
-check: bindings
-	CARGO_TARGET_DIR=$(GATE_TARGET) cargo check -p hellas-gate
-	tsc --noEmit -p ui/tsconfig.json
+check: bindings ui-build
+	cargo fmt --all -- --check
+	cargo clippy --locked --workspace --all-targets -- -D warnings
+	cargo test --locked --workspace
 
 ui-check:
 	tsc --noEmit -p ui/tsconfig.json
 
 dev:
-	CARGO_TARGET_DIR=$(GATE_TARGET) cargo tauri dev
+	cargo tauri dev
+
+ui-build: ui-check
+	node ui/build.mjs

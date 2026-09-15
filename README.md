@@ -28,8 +28,26 @@ There is no npm package and no package publication in this repository.
 
 The flake is the canonical environment. It supplies Rust, Tauri, TypeScript,
 esbuild, and Node directly; there is no npm manifest, `npm install`, or
-`node_modules` directory. Rust and frontend build output both stay under
-`/tmp`, off this shared checkout:
+`node_modules` directory. Rust 1.96.1 is shared with the pinned Hellas workspace.
+Rust and frontend build output both stay under `/tmp`, off this shared checkout.
+Set `CARGO_TARGET_DIR` to override the Rust output location; the flake, Makefile,
+and CI all respect it.
+
+Gate uses local path dependencies from a sibling Hellas checkout. From a fresh
+Gate clone, prepare the exact published revision recorded in `.hellas-revision`:
+
+```sh
+git clone https://github.com/hellas-ai/hellas.git ../hellas
+git -C ../hellas checkout --detach "$(cat .hellas-revision)"
+```
+
+If `../hellas` already contains your work, keep it intact and create a separate
+parent directory with sibling `gate` and `hellas` checkouts for the pinned build.
+CI uses the same revision and layout. To update Hellas deliberately, change
+`.hellas-revision`, reconcile the desktop SDK calls, and regenerate `Cargo.lock`
+against that checkout.
+
+Then run:
 
 ```sh
 nix develop
@@ -37,10 +55,11 @@ make check
 make dev
 ```
 
-The Hellas crates are local path dependencies from `../hellas`. Gate's old
-router, daemon, relay, TLS forwarder, and Rust/Wasm frontend have intentionally
-been removed; equivalent protocol behavior must be added to Hellas rather than
-copied back into this app.
+`make check` runs binding generation, frontend typechecking and production
+bundling, Rust formatting, warnings-as-errors Clippy, and Rust tests with the
+checked-in lockfile. Gate's old router, daemon, relay, TLS forwarder, and
+Rust/Wasm frontend have intentionally been removed; equivalent protocol
+behavior must be added to Hellas rather than copied back into this app.
 
 ## Local data and secrets
 

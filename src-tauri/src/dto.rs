@@ -131,7 +131,7 @@ pub struct GatewayAccess {
 
 #[derive(Clone, Debug, Deserialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export, export_to = "../../ui/src/generated/"))]
+#[cfg_attr(feature = "desktop", ts(export, export_to = "../ui/src/generated/"))]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfig {
     pub service: String,
