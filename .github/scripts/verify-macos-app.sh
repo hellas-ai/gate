@@ -16,6 +16,7 @@ if [[ "${2:-}" == --notarized ]]; then
   : "${APPLE_TEAM_ID:?APPLE_TEAM_ID is required to verify a release}"
   details=$(/usr/bin/codesign --display --verbose=4 "$app" 2>&1)
   printf '%s\n' "$details"
+  printf '%s\n' "$details" | grep -q '^Authority=Developer ID Application:'
   printf '%s\n' "$details" | grep -Fqx "TeamIdentifier=$APPLE_TEAM_ID"
   printf '%s\n' "$details" | grep -Eq '^CodeDirectory .*flags=.*runtime'
   /usr/bin/xcrun stapler validate "$app"

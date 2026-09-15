@@ -12,7 +12,11 @@ case "${1:-}" in
     : "${APPLE_CERTIFICATE_PASSWORD:?Missing APPLE_CERTIFICATE_PASSWORD}"
     : "${APPLE_SIGNING_IDENTITY:?Missing APPLE_SIGNING_IDENTITY}"
     : "${KEYCHAIN_PASSWORD:?Missing KEYCHAIN_PASSWORD}"
-    [[ "$APPLE_SIGNING_IDENTITY" == "Developer ID Application:"* ]]
+    if [[ "$APPLE_SIGNING_IDENTITY" != "Developer ID Application:"* &&
+          ! "$APPLE_SIGNING_IDENTITY" =~ ^[0-9A-Fa-f]{40}$ ]]; then
+      echo "APPLE_SIGNING_IDENTITY must be a Developer ID Application name or certificate SHA-1" >&2
+      exit 1
+    fi
     umask 077
     /usr/bin/security list-keychains -d user > "$search_list"
     printf '%s' "$APPLE_CERTIFICATE" | /usr/bin/base64 --decode > "$certificate"
