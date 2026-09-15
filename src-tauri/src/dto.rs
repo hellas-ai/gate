@@ -4,7 +4,7 @@ use ts_rs::TS;
 
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export, export_to = "../ui/src/generated/"))]
+#[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceStatus {
     pub state: ServiceState,
@@ -13,7 +13,7 @@ pub struct ServiceStatus {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export, export_to = "../ui/src/generated/"))]
+#[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub enum ServiceState {
     Stopped,
@@ -25,7 +25,7 @@ pub enum ServiceState {
 
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export, export_to = "../ui/src/generated/"))]
+#[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct IdentityStatus {
     pub producer_id: String,
@@ -37,7 +37,7 @@ pub struct IdentityStatus {
 
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export, export_to = "../ui/src/generated/"))]
+#[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct AppStatus {
     pub version: String,
@@ -50,7 +50,7 @@ pub struct AppStatus {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export, export_to = "../ui/src/generated/"))]
+#[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct RunRequest {
     pub kind: RunKind,
@@ -75,7 +75,7 @@ pub struct RunRequest {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export, export_to = "../ui/src/generated/"))]
+#[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub enum RunKind {
     CausalLm,
@@ -84,7 +84,7 @@ pub enum RunKind {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export, export_to = "../ui/src/generated/"))]
+#[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub enum AssuranceInput {
     #[default]
@@ -94,8 +94,13 @@ pub enum AssuranceInput {
 
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export, export_to = "../ui/src/generated/"))]
-#[serde(tag = "type", content = "data", rename_all = "camelCase")]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum ExecutionEvent {
     Started { run_id: String },
     Output { text: String },
@@ -106,7 +111,7 @@ pub enum ExecutionEvent {
 
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export, export_to = "../ui/src/generated/"))]
+#[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryEntry {
     pub id: String,
@@ -122,7 +127,7 @@ pub struct HistoryEntry {
 
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export, export_to = "../ui/src/generated/"))]
+#[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayAccess {
     pub address: String,
@@ -131,7 +136,7 @@ pub struct GatewayAccess {
 
 #[derive(Clone, Debug, Deserialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export, export_to = "../ui/src/generated/"))]
+#[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfig {
     pub service: String,
@@ -141,4 +146,29 @@ pub struct ProviderConfig {
     pub allowed_callers: Vec<String>,
     #[cfg_attr(feature = "desktop", ts(optional))]
     pub port: Option<u16>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ExecutionEvent;
+
+    #[test]
+    fn execution_events_expose_the_run_id_expected_by_the_ui() {
+        for event in [
+            ExecutionEvent::Started {
+                run_id: "run-1".into(),
+            },
+            ExecutionEvent::Finished {
+                run_id: "run-1".into(),
+            },
+            ExecutionEvent::Failed {
+                run_id: "run-1".into(),
+                message: "failed".into(),
+            },
+        ] {
+            let value = serde_json::to_value(event).unwrap();
+            assert_eq!(value["data"]["runId"], "run-1");
+            assert!(value["data"].get("run_id").is_none());
+        }
+    }
 }

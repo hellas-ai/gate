@@ -4,7 +4,7 @@ use ts_rs::TS;
 
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export, export_to = "../ui/src/generated/"))]
+#[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct ApiError {
     pub code: &'static str,
