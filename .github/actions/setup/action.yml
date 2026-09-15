@@ -1,0 +1,37 @@
+name: Set up Gate
+description: Check out the pinned Hellas workspace and load Gate's locked development tools
+runs:
+  using: composite
+  steps:
+    - name: Read Hellas revision
+      id: hellas
+      shell: bash
+      working-directory: ${{ github.workspace }}/gate
+      run: |
+        revision=$(<.hellas-revision)
+        if [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "::error::.hellas-revision must contain one full commit SHA"
+          exit 1
+        fi
+        printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+
+    - name: Check out Hellas
+      uses: actions/checkout@v5
+      with:
+        repository: hellas-ai/hellas
+        ref: ${{ steps.hellas.outputs.revision }}
+        path: hellas
+        persist-credentials: false
+
+    - name: Install Nix
+      uses: cachix/install-nix-action@v31
+      with:
+        github_access_token: ${{ github.token }}
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: gate -> target
+        key: ${{ runner.arch }}-${{ hashFiles('gate/flake.lock', 'gate/.hellas-revision') }}
+        cache-bin: false
+        cmd-format: nix develop --no-update-lock-file "${{ github.workspace }}/gate" --command {0}

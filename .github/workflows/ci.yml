@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: ${{ github.workspace }}/gate/target
+  RUST_BACKTRACE: 1
+
+defaults:
+  run:
+    shell: bash
+    working-directory: gate
+
+jobs:
+  linux:
+    name: Linux checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: gate
+          persist-credentials: false
+      - uses: ./gate/.github/actions/setup
+
+      - name: Check formatting
+        run: nix develop --no-update-lock-file --command cargo fmt --all -- --check
+
+      - name: Clippy
+        run: nix develop --no-update-lock-file --command cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: Rust tests
+        run: nix develop --no-update-lock-file --command cargo test --locked --workspace --all-features
+
+      - name: Generate and check TypeScript bindings
+        run: |
+          rm -f -- ui/src/generated/*.ts
+          nix develop --no-update-lock-file --command make bindings
+          changes=$(git status --porcelain --untracked-files=all -- ui/src/generated)
+          if [[ -n "$changes" ]]; then
+            printf '%s\n' "$changes"
+            git diff -- ui/src/generated
+            echo "::error::Generated bindings are stale; run make bindings and commit the result"
+            exit 1
+          fi
+
+      - name: Typecheck and build frontend
+        run: nix develop --no-update-lock-file --command make ui-build
+
+  macos:
+    name: macOS ARM64 app
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: gate
+          persist-credentials: false
+      - uses: ./gate/.github/actions/setup
+
+      - name: Build app
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+        run: nix develop --no-update-lock-file --command cargo tauri build --target aarch64-apple-darwin --bundles app -- --locked
+
+      - name: Validate app bundle
+        run: bash .github/scripts/verify-macos-app.sh "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/bundle/macos/Hellas Gate.app"
+
+  ci:
+    name: CI
+    if: ${{ always() }}
+    needs: [linux, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every check to pass
+        working-directory: .
+        env:
+          LINUX_RESULT: ${{ needs.linux.result }}
+          MACOS_RESULT: ${{ needs.macos.result }}
+        run: |
+          printf 'Linux: %s\nmacOS: %s\n' "$LINUX_RESULT" "$MACOS_RESULT"
+          [[ "$LINUX_RESULT" == success && "$MACOS_RESULT" == success ]]
