@@ -16,7 +16,7 @@ runs:
         printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
 
     - name: Check out Hellas
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
       with:
         repository: hellas-ai/hellas
         ref: ${{ steps.hellas.outputs.revision }}
