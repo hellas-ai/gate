@@ -1,2 +1,4 @@
-[target.wasm32-unknown-unknown]
-rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]
+[env]
+TS_RS_EXPORT_DIR = { value = "ui/src/generated", relative = true }
+TS_RS_IMPORT_EXTENSION = "ts"
+TS_RS_LARGE_INT = "number"

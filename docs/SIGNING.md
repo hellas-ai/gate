@@ -1,70 +1,41 @@
-# macOS Code Signing Setup
+# macOS signing and App Attest
 
-This document explains how to set up code signing for macOS binaries in GitHub Actions.
+Gate's App Attest producer is intentionally owned by the signed application,
+not by `hellas-attestation` or `hellas-cli`.
 
-## Required GitHub Secrets
+The default Tauri build deliberately has no restricted App Attest entitlement.
+It is the normal, launchable desktop app and reports App Attest as unavailable.
+It may be signed with Developer ID in the usual way without a provisioning
+profile.
 
-You need to add the following secrets to your GitHub repository:
+For the attested provider to start, a provisioned build must use:
 
-### 1. `APPLE_CERTIFICATE`
-Your Apple Developer ID Application certificate in base64 format.
+- bundle identifier `ai.hellas.gate`;
+- an Apple provisioning profile whose App ID matches that identifier; and
+- the `com.apple.developer.devicecheck.app-attest-opt-in` entitlement with the
+  value `CDhash` in that profile.
 
-To export your certificate:
-1. Open Keychain Access on macOS
-2. Find your "Developer ID Application" certificate
-3. Right-click and select "Export..."
-4. Save as a .p12 file with a password
-5. Convert to base64: `base64 -i certificate.p12 | pbcopy`
-6. Add the base64 string as a GitHub secret
+Build the app ad-hoc first, then embed the provisioning profile and apply the
+final Developer ID signature in one validated step:
 
-### 2. `APPLE_CERTIFICATE_PASSWORD`
-The password you used when exporting the .p12 certificate.
-
-### 3. `KEYCHAIN_PASSWORD`
-A password for the temporary keychain created during CI. Can be any secure string.
-
-### 4. `APPLE_SIGNING_IDENTITY`
-Your signing identity, typically in the format: "Developer ID Application: Your Name (TEAMID)"
-
-To find your signing identity:
-```bash
-security find-identity -v -p codesigning
+```sh
+APPLE_SIGNING_IDENTITY=- cargo tauri build
+./macos/sign.sh path/to/gate.provisionprofile \
+  /tmp/hellas-gate-target/release/bundle/macos/Hellas\ Gate.app
 ```
 
-### 5. `APPLE_ID`
-Your Apple ID email address used for developer account.
+`macos/sign.sh` embeds the profile and signs with the entitlements extracted
+from it. It rejects a profile whose application identifier does not match the
+app bundle identifier and rejects entitlements that relax hardened runtime or
+library validation. Set `SIGN_IDENTITY` only when more than one Developer ID
+Application identity is installed. Do not add the restricted entitlement to
+the default Tauri configuration: macOS refuses to launch such a bundle when it
+lacks a matching profile.
 
-### 6. `APPLE_PASSWORD`
-An app-specific password for notarization.
+Gate checks `DCAppAttestService` at runtime and reports unavailable when Apple
+rejects the build or machine. It does not fall back to a software root.
 
-To create an app-specific password:
-1. Go to https://appleid.apple.com/account/manage
-2. Sign in with your Apple ID
-3. In the "Sign-In and Security" section, select "App-Specific Passwords"
-4. Click the plus button to generate a new password
-5. Name it something like "GitHub Actions Notarization"
-6. Copy the generated password
-
-### 7. `APPLE_TEAM_ID`
-Your Apple Developer Team ID (10-character string).
-
-You can find this in:
-- Apple Developer portal under Membership
-- Or in your signing identity (the part in parentheses)
-
-## Adding Secrets to GitHub
-
-1. Go to your repository on GitHub
-2. Click Settings → Secrets and variables → Actions
-3. Click "New repository secret" for each secret above
-4. Enter the name and value for each secret
-
-## Testing
-
-After setting up the secrets, your CI will:
-1. Import the certificate into a temporary keychain
-2. Sign the app during the Tauri build process
-3. Notarize the DMG file with Apple
-4. Staple the notarization ticket to the DMG
-
-The signed and notarized app will run on any macOS system without security warnings.
+App Attest keys are created and retained by Apple's service. Gate persists only
+the opaque key identifier and the canonical Hellas enrollment bundle in its
+private application data directory. A persisted enrollment is fully verified
+against the current Gate transport/caller identity before it is reused.

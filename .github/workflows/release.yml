@@ -1,0 +1,84 @@
+name: Release macOS app
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: ${{ github.workspace }}/gate/target
+  RUST_BACKTRACE: 1
+
+defaults:
+  run:
+    shell: bash
+    working-directory: gate
+
+jobs:
+  release:
+    name: Signed macOS ARM64 release
+    runs-on: macos-15
+    timeout-minutes: 150
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: gate
+          persist-credentials: false
+
+      - name: Validate release version
+        run: python3 .github/scripts/release-version.py "$GITHUB_REF_NAME"
+
+      - uses: ./gate/.github/actions/setup
+
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: bash .github/scripts/macos-keychain.sh setup
+
+      - name: Build signed app
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: nix develop --no-update-lock-file --command cargo tauri build --target aarch64-apple-darwin --bundles app -- --locked
+
+      - name: Notarize and package app and DMG
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash .github/scripts/package-macos-release.sh
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python3 .github/scripts/release-version.py "$GITHUB_REF_NAME")
+          dmg="$GATE_RELEASE_DIR/Hellas-Gate_${version}_aarch64.dmg"
+          archive="$GATE_RELEASE_DIR/Hellas-Gate_${version}_aarch64.app.zip"
+          test -s "$dmg"
+          test -s "$archive"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$dmg" "$archive" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            flags=()
+            if [[ "$version" == *-* ]]; then flags+=(--prerelease); fi
+            gh release create "$GITHUB_REF_NAME" "$dmg" "$archive" \
+              --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
+              --title "Hellas Gate $GITHUB_REF_NAME" "${flags[@]}"
+          fi
+
+      - name: Remove signing credentials
+        if: ${{ always() }}
+        run: bash .github/scripts/macos-keychain.sh cleanup
