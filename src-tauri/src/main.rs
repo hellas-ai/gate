@@ -23,7 +23,7 @@ fn main() {
             let state = Arc::new(AppState::open(&data_dir)?);
             app.manage(state.clone());
 
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             tauri::async_runtime::spawn(async move {
                 if let Err(error) = host_control::serve(state).await {
                     tracing::error!(%error, "local-control listener stopped");
@@ -79,12 +79,9 @@ fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Mode 0700 on Unix; on Windows an owner-only DACL that everything Gate
+/// writes inside (identities, history, the gateway credential) inherits.
 fn create_private_directory(path: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
-    }
-    Ok(())
+    hellas_private::restrict_directory(path)
 }

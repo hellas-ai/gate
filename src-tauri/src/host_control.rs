@@ -1,6 +1,10 @@
+#[cfg(unix)]
 use std::io;
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+#[cfg(unix)]
 use std::path::Path;
 use std::sync::Arc;
 
@@ -9,13 +13,18 @@ use hellas_rpc::pb::host::{
     IdentityStatus, RuntimeState, ServiceStatus, SetGatewayStateRequest, SetProviderStateRequest,
 };
 use hellas_rpc::services::host_control::{HostControlHandler, HostControlServer};
+#[cfg(unix)]
 use hellas_wire::mux::{MuxTransport, Role};
-use hellas_wire::{Dispatcher, StreamTransport, TransportContext, WireCode, WireStatus};
+#[cfg(unix)]
+use hellas_wire::{Dispatcher, StreamTransport, TransportContext};
+use hellas_wire::{WireCode, WireStatus};
+#[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 
 use crate::dto;
 use crate::state::AppState;
 
+#[cfg(unix)]
 pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
     prepare_socket(state.socket_path())?;
     let listener = UnixListener::bind(state.socket_path())?;
@@ -36,6 +45,22 @@ pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
     }
 }
 
+/// Windows: hellas's owner-authenticated named pipe, derived from the same
+/// `gate.sock` path so hellas-cli finds it. It does what the socket
+/// permissions and peer-uid check do on Unix: an owner-only DACL, a first
+/// instance nobody could have squatted, remote clients refused, and clients
+/// admitted only if their process runs as this user.
+#[cfg(windows)]
+pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
+    let _server = hellas_sdk::local::LocalControlServer::bind(
+        state.socket_path(),
+        HostControlServer(Handler(state.clone())),
+    )?;
+    std::future::pending::<()>().await;
+    Ok(())
+}
+
+#[cfg(unix)]
 async fn serve_connection(stream: UnixStream, state: Arc<AppState>) -> anyhow::Result<()> {
     let transport =
         hellas_sdk::local::transport(stream, Role::Server, TransportContext::default())?;
@@ -129,6 +154,7 @@ fn service_to_proto(status: dto::ServiceStatus) -> ServiceStatus {
     }
 }
 
+#[cfg(unix)]
 fn prepare_socket(path: &Path) -> io::Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_socket() => {
@@ -190,5 +216,36 @@ fn peer_uid(stream: &UnixStream) -> io::Result<libc::uid_t> {
         Ok(uid)
     } else {
         Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hellas_rpc::services::host_control::HostControlClientImpl;
+
+    /// Gate's listener answers over the platform's local transport: a Unix
+    /// socket, or on Windows hellas's owner-authenticated named pipe.
+    #[tokio::test]
+    async fn host_status_is_served_over_the_local_transport() {
+        let directory = tempfile::tempdir().unwrap();
+        hellas_private::restrict_directory(directory.path()).unwrap();
+        let state = Arc::new(AppState::open(directory.path()).unwrap());
+        let socket = state.socket_path().to_path_buf();
+        tokio::spawn(serve(state.clone()));
+
+        let mut connection = None;
+        for _ in 0..100 {
+            match hellas_sdk::local::connect(&socket).await {
+                Ok(transport) => {
+                    connection = Some(transport);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+            }
+        }
+        let host = HostControlClientImpl::new(connection.expect("listener came up"));
+        let status = host.get_host_status(GetHostStatusRequest {}).await.unwrap();
+        assert_eq!(status.version, state.status().await.version);
     }
 }

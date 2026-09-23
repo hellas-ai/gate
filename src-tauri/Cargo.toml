@@ -23,6 +23,7 @@ required-features = ["desktop"]
 anyhow = "1"
 futures = "0.3"
 hellas-attestation = { path = "../../hellas/crates/attestation", features = ["apple-app-attest"] }
+hellas-private = { path = "../../hellas/crates/private" }
 hellas-rpc = { path = "../../hellas/crates/rpc", features = ["host-control", "execute", "fetch", "courtesy"] }
 hellas-sdk = { path = "../../hellas/crates/sdk", default-features = false, features = ["apple-verifier", "client", "gateway", "local-control", "provider"] }
 hellas-wire = { path = "../../hellas/crates/wire", features = ["unix"] }
@@ -36,6 +37,11 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "net",
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ts-rs = { version = "12", features = ["serde-compat"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+# Windows has no system SQLite: compile the amalgamation in. Elsewhere the
+# FFI in history.rs links the platform's libsqlite3.
+libsqlite3-sys = { version = "0.38", features = ["bundled"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }

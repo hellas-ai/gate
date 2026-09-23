@@ -219,15 +219,22 @@ mod platform {
             .parent()
             .context("provider identity path has no parent")?;
         let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
-        use std::os::unix::fs::PermissionsExt;
-        temporary
-            .as_file()
-            .set_permissions(fs::Permissions::from_mode(0o600))?;
+        // On Windows the file inherits the data directory's owner-only DACL
+        // (create_private_directory); there is no mode to set.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            temporary
+                .as_file()
+                .set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
         temporary.write_all(bytes)?;
         temporary.flush()?;
         temporary.as_file().sync_all()?;
         match temporary.persist_noclobber(path) {
             Ok(_) => {
+                // Directory fsync has no Windows counterpart.
+                #[cfg(unix)]
                 fs::File::open(directory)?.sync_all()?;
                 Ok(())
             }
