@@ -3116,6 +3116,7 @@ dependencies = [
  "futures-util",
  "hellas-chain",
  "hellas-kernel",
+ "hellas-private",
  "hellas-rpc",
  "hellas-wire",
  "hellas-work",
@@ -3222,6 +3223,7 @@ name = "hellas-private"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "tempfile",
  "windows-sys 0.61.2",
 ]
 
@@ -3300,6 +3302,7 @@ name = "hellas-wire"
 version = "0.1.0"
 dependencies = [
  "async-stream",
+ "blake3",
  "bytes",
  "data-encoding",
  "futures",
@@ -3333,6 +3336,7 @@ dependencies = [
  "async-stream",
  "futures",
  "hellas-kernel",
+ "hellas-private",
  "hellas-rpc",
  "hellas-wire",
  "hellas-xet",
