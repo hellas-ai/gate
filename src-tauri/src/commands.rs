@@ -5,7 +5,8 @@ use tauri::State;
 use tauri::ipc::Channel;
 
 use crate::dto::{
-    AppStatus, ExecutionEvent, GatewayAccess, HistoryEntry, ProviderConfig, RunRequest,
+    AppStatus, ExecutionEvent, GatewayAccess, GatewayConfig, HistoryEntry, ProviderConfig,
+    RunRequest,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -31,7 +32,7 @@ pub async fn set_provider_enabled(
 pub async fn set_gateway_enabled(
     state: State<'_, Arc<AppState>>,
     enabled: bool,
-    config: Option<RunRequest>,
+    config: Option<GatewayConfig>,
 ) -> ApiResult<AppStatus> {
     state
         .set_gateway_enabled(enabled, config)
@@ -106,8 +107,11 @@ pub async fn run_request(
             )) => {
                 let text = serde_json::to_string(&terminal.to_output_event())
                     .map_err(ApiError::internal)?;
-                let verification =
-                    "Provider identity, signatures, commitments, and Fetch transcript verified";
+                let verification = if request.paid_config_path.is_some() {
+                    "Provider identity, paid Fetch transcript and payment acknowledgement verified"
+                } else {
+                    "Provider identity, signatures, commitments, and Fetch transcript verified"
+                };
                 state
                     .history
                     .append_result(&run_id, &text)
@@ -201,4 +205,16 @@ pub async fn delete_history(state: State<'_, Arc<AppState>>, id: String) -> ApiR
 #[tauri::command]
 pub async fn clear_history(state: State<'_, Arc<AppState>>) -> ApiResult<usize> {
     state.history.clear().map_err(ApiError::internal)
+}
+
+#[tauri::command]
+pub async fn provision_paid_offer(
+    state: State<'_, Arc<AppState>>,
+    path: String,
+    preview: bool,
+) -> ApiResult<String> {
+    state
+        .provision_paid_offer(std::path::Path::new(&path), preview)
+        .await
+        .map_err(ApiError::internal)
 }

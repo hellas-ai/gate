@@ -51,8 +51,22 @@ pub struct AppStatus {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
 #[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayConfig {
+    pub paid_pool_path: String,
+    pub http_routes_path: String,
+    pub assurance: AssuranceInput,
+    pub zdr: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct RunRequest {
+    #[serde(default)]
+    #[cfg_attr(feature = "desktop", ts(optional))]
+    pub paid_config_path: Option<String>,
     pub kind: RunKind,
     pub target: String,
     #[serde(default)]
@@ -141,7 +155,15 @@ pub struct GatewayAccess {
 pub struct ProviderConfig {
     pub service: String,
     pub method: String,
+    #[serde(default)]
     pub openai_api_key: String,
+    // JSON HttpProviderConfig: account aliases reference environment variables.
+    #[serde(default)]
+    #[cfg_attr(feature = "desktop", ts(optional))]
+    pub http_config: Option<String>,
+    #[serde(default)]
+    #[cfg_attr(feature = "desktop", ts(optional))]
+    pub work_config_path: Option<String>,
     #[serde(default)]
     pub allowed_callers: Vec<String>,
     #[cfg_attr(feature = "desktop", ts(optional))]

@@ -36,6 +36,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
             commands::set_provider_enabled,
+            commands::provision_paid_offer,
             commands::set_gateway_enabled,
             commands::get_gateway_access,
             commands::run_request,

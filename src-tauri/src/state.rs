@@ -6,8 +6,8 @@ use tokio::sync::{Mutex, OnceCell, RwLock};
 
 use crate::apple;
 use crate::dto::{
-    AppStatus, AssuranceInput, GatewayAccess, IdentityStatus, ProviderConfig, RunKind, RunRequest,
-    ServiceState, ServiceStatus,
+    AppStatus, AssuranceInput, GatewayAccess, GatewayConfig, IdentityStatus, ProviderConfig,
+    RunKind, RunRequest, ServiceState, ServiceStatus,
 };
 use crate::history::History;
 use crate::identity;
@@ -18,13 +18,14 @@ struct RuntimeStatus {
     gateway: ServiceStatus,
     gateway_access: Option<GatewayAccess>,
     gateway_handle: Option<hellas_sdk::gateway::GatewayHandle>,
-    gateway_config: Option<RunRequest>,
+    gateway_config: Option<GatewayConfig>,
 }
 
 pub struct AppState {
     pub history: History,
     socket_path: PathBuf,
     counter_directory: PathBuf,
+    archive_directory: PathBuf,
     identity: hellas_sdk::ClientIdentity,
     #[cfg(target_os = "macos")]
     provider_identity_path: PathBuf,
@@ -43,6 +44,7 @@ impl AppState {
             history: History::open(&data_dir.join("history.sqlite3"))?,
             socket_path: data_dir.join("gate.sock"),
             counter_directory: data_dir.join("apple-assertion-counters"),
+            archive_directory: data_dir.join("gateway-archive"),
             identity,
             #[cfg(target_os = "macos")]
             provider_identity_path: data_dir.join("provider-identity"),
@@ -60,6 +62,15 @@ impl AppState {
                 gateway_config: None,
             }),
         })
+    }
+
+    pub async fn provision_paid_offer(&self, path: &Path, preview: bool) -> anyhow::Result<String> {
+        let _lifecycle = self.lifecycle.lock().await;
+        anyhow::ensure!(
+            self.runtime.read().await.provider_handle.is_none(),
+            "stop the provider before provisioning an offer"
+        );
+        crate::paid::provision(path, &self.identity, preview).await
     }
 
     pub fn socket_path(&self) -> &Path {
@@ -163,23 +174,6 @@ impl AppState {
         &self,
         config: ProviderConfig,
     ) -> anyhow::Result<hellas_sdk::ProviderHandle> {
-        anyhow::ensure!(
-            !config.service.trim().is_empty() && !config.method.trim().is_empty(),
-            "Fetch service and method must be non-empty"
-        );
-        anyhow::ensure!(
-            !config.openai_api_key.trim().is_empty(),
-            "OpenAI API key must be non-empty"
-        );
-        let callers = config
-            .allowed_callers
-            .iter()
-            .map(|key| decode_public_key(key))
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        anyhow::ensure!(
-            !callers.is_empty(),
-            "at least one allowed caller is required"
-        );
         let provider_identity = self
             .provider_identity
             .get_or_try_init(|| async {
@@ -191,21 +185,13 @@ impl AppState {
                 .map(Arc::new)
             })
             .await?;
-        hellas_sdk::start_openai_provider(hellas_sdk::OpenAiProviderOptions {
-            port: config.port,
-            identity: self.identity.clone(),
-            enrollment: provider_identity.enrollment().clone(),
-            root: provider_identity.root(),
-            state_directory: self.provider_state_directory.clone(),
-            service: config.service,
-            method: config.method,
-            bearer_token: config.openai_api_key,
-            allowed_callers: callers,
-            fetch_max_in_flight: hellas_rpc::DEFAULT_FETCH_MAX_IN_FLIGHT,
-            fetch_queue_capacity: hellas_rpc::DEFAULT_FETCH_QUEUE_CAPACITY,
-            retained_transcript_capacity: hellas_rpc::DEFAULT_FETCH_RETAINED_TRANSCRIPT_CAPACITY,
-            fetch_replay_max_in_flight: hellas_rpc::DEFAULT_FETCH_REPLAY_MAX_IN_FLIGHT,
-        })
+        crate::provider_setup::start(
+            config,
+            self.identity.clone(),
+            provider_identity.enrollment().clone(),
+            provider_identity.root(),
+            self.provider_state_directory.clone(),
+        )
         .await
     }
 
@@ -220,7 +206,7 @@ impl AppState {
     pub async fn set_gateway_enabled(
         &self,
         enabled: bool,
-        config: Option<RunRequest>,
+        config: Option<GatewayConfig>,
     ) -> anyhow::Result<AppStatus> {
         let _lifecycle = self.lifecycle.lock().await;
         if !enabled {
@@ -252,14 +238,18 @@ impl AppState {
             runtime
                 .gateway_config
                 .clone()
-                .context("configure a trusted Fetch provider before starting the gateway")?
+                .context("configure paid providers and HTTP routes before starting the gateway")?
         };
-        let options = self.fetch_gateway_options(&config)?;
         self.runtime.write().await.gateway = ServiceStatus {
             state: ServiceState::Starting,
             detail: "Binding a private loopback endpoint".into(),
         };
-        match hellas_sdk::gateway::start_fetch(options).await {
+        let started = async {
+            let options = self.http_gateway_options(&config).await?;
+            hellas_sdk::gateway::start_http(options).await
+        }
+        .await;
+        match started {
             Ok(handle) => {
                 let access = GatewayAccess {
                     address: format!("http://{}", handle.address()),
@@ -268,7 +258,7 @@ impl AppState {
                 let mut runtime = self.runtime.write().await;
                 runtime.gateway = ServiceStatus {
                     state: ServiceState::Running,
-                    detail: format!("Responses endpoint at {}/v1/responses", access.address),
+                    detail: format!("Paid HTTP gateway at {}", access.address),
                 };
                 runtime.gateway_access = Some(access);
                 runtime.gateway_handle = Some(handle);
@@ -289,29 +279,38 @@ impl AppState {
         self.runtime.read().await.gateway_access.clone()
     }
 
-    fn fetch_gateway_options(
+    async fn http_gateway_options(
         &self,
-        request: &RunRequest,
-    ) -> anyhow::Result<hellas_sdk::gateway::FetchGatewayOptions> {
-        if !matches!(request.kind, RunKind::Fetch) {
-            bail!("the minimal loopback gateway supports sealed Fetch Responses")
-        }
-        let (node_id, node_addrs, execution_environment, assurance, provider_trust) =
-            self.remote_fetch_parameters(request)?;
-        Ok(hellas_sdk::gateway::FetchGatewayOptions {
+        config: &GatewayConfig,
+    ) -> anyhow::Result<hellas_sdk::gateway::HttpGatewayOptions> {
+        let bytes = hellas_private::read_bounded_regular_file(
+            Path::new(&config.http_routes_path),
+            4 << 20,
+        )?;
+        let routes = serde_json::from_slice(&bytes).context("invalid HTTP routes")?;
+        let assurance = match config.assurance {
+            AssuranceInput::ProducerSigned => hellas_rpc::Assurance::ProducerSigned,
+            AssuranceInput::AppleAppAttest => hellas_rpc::Assurance::AppleAppAttest,
+        };
+        let options = hellas_sdk::paid_gateway::load_pool_options(
+            Path::new(&config.paid_pool_path),
+            assurance,
+        )?;
+        let paid =
+            hellas_sdk::paid_gateway::PaidGateway::open(options, self.identity.clone()).await?;
+        Ok(hellas_sdk::gateway::HttpGatewayOptions {
+            config: routes,
+            paid,
+            archive: hellas_sdk::gateway::ArchiveOptions {
+                directory: self.archive_directory.clone(),
+                zdr: config.zdr,
+            },
             host: "127.0.0.1".into(),
             port: Some(0),
-            node_id: Some(node_id),
-            node_addrs,
-            retries: 1,
-            service: request.service.clone(),
-            method: request.method.clone(),
-            execution_environment,
-            request_overrides: serde_json::Map::new(),
-            provider_trust,
-            caller_key: self.identity.caller_key().clone(),
-            assurance,
-            secret_key: self.identity.transport_key(),
+            bearer_token_file: None,
+            allow_remote: false,
+            wrap: None,
+            wrap_args: Vec::new(),
         })
     }
 
@@ -334,6 +333,20 @@ impl AppState {
         }
         let (node_id, node_addrs, execution_environment, assurance, provider_trust) =
             self.remote_fetch_parameters(request)?;
+        if let Some(path) = &request.paid_config_path {
+            let events = crate::paid::run(
+                Path::new(path),
+                request,
+                &self.identity,
+                node_id,
+                node_addrs,
+                execution_environment,
+                assurance,
+                provider_trust,
+            )
+            .await?;
+            return Ok(Box::pin(futures::stream::iter(events.into_iter().map(Ok))));
+        }
         let client = self
             .client
             .get_or_try_init(|| hellas_sdk::HellasClient::open_with_identity(self.identity.clone()))
@@ -377,10 +390,14 @@ impl AppState {
             .trust_anchor
             .parse()
             .context("invalid provider genesis content ID")?;
-        let execution_environment = request
-            .execution_environment
-            .parse()
-            .context("invalid execution-environment content ID")?;
+        let execution_environment = match request.execution_environment.as_str() {
+            "http" => hellas_rpc::FetchEnvironment::Http.manifest_id(),
+            "openai-responses" => hellas_rpc::FetchEnvironment::OpenAiResponses.manifest_id(),
+            "codex-responses" => hellas_rpc::FetchEnvironment::CodexResponses.manifest_id(),
+            value => value
+                .parse()
+                .context("invalid execution-environment content ID")?,
+        };
         let assurance = match request.assurance {
             AssuranceInput::ProducerSigned => hellas_rpc::Assurance::ProducerSigned,
             AssuranceInput::AppleAppAttest => hellas_rpc::Assurance::AppleAppAttest,
@@ -438,8 +455,7 @@ fn decode_hash(value: &str) -> anyhow::Result<[u8; 32]> {
     Ok(output)
 }
 
-#[cfg(target_os = "macos")]
-fn decode_public_key(value: &str) -> anyhow::Result<hellas_rpc::PublicKey> {
+pub(crate) fn decode_public_key(value: &str) -> anyhow::Result<hellas_rpc::PublicKey> {
     if value.len() != 66 {
         bail!("allowed caller public keys must contain 66 hexadecimal characters")
     }
@@ -450,4 +466,39 @@ fn decode_public_key(value: &str) -> anyhow::Result<hellas_rpc::PublicKey> {
             u8::from_str_radix(text, 16).context("allowed caller public key is not hexadecimal")?;
     }
     Ok(hellas_rpc::PublicKey::Secp256k1(output))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn gateway_without_a_paid_pool_fails_without_exposing_an_unpaid_listener() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::open(directory.path()).unwrap();
+        let routes = directory.path().join("http.json");
+        std::fs::write(&routes, r#"{"service":"http","method":"request","routes":[{"path":"/v1/messages","method":"POST","url":"https://example.com/v1/messages","credential":"account"}]}"#).unwrap();
+        let result = state
+            .set_gateway_enabled(
+                true,
+                Some(GatewayConfig {
+                    paid_pool_path: directory
+                        .path()
+                        .join("missing-pool.json")
+                        .display()
+                        .to_string(),
+                    http_routes_path: routes.display().to_string(),
+                    assurance: AssuranceInput::ProducerSigned,
+                    zdr: true,
+                }),
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(
+            state.status().await.gateway.state,
+            ServiceState::Failed
+        ));
+        assert!(state.gateway_access().await.is_none());
+        assert!(state.runtime.read().await.gateway_handle.is_none());
+    }
 }

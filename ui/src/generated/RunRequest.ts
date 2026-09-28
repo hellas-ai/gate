@@ -2,4 +2,4 @@
 import type { AssuranceInput } from "./AssuranceInput.ts";
 import type { RunKind } from "./RunKind.ts";
 
-export type RunRequest = { kind: RunKind, target: string, nodeAddresses: Array<string>, input: string, trustAnchor: string, service: string, method: string, executionEnvironment: string, assurance: AssuranceInput, appleAppId: string, appleCdHashes: Array<string>, };
+export type RunRequest = { paidConfigPath?: string, kind: RunKind, target: string, nodeAddresses: Array<string>, input: string, trustAnchor: string, service: string, method: string, executionEnvironment: string, assurance: AssuranceInput, appleAppId: string, appleCdHashes: Array<string>, };

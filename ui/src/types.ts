@@ -12,3 +12,4 @@ export type { RunKind } from "./generated/RunKind.ts";
 export type { RunRequest } from "./generated/RunRequest.ts";
 export type { ServiceState } from "./generated/ServiceState.ts";
 export type { ServiceStatus } from "./generated/ServiceStatus.ts";
+export type { GatewayConfig } from "./generated/GatewayConfig.ts";

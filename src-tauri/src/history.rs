@@ -362,6 +362,7 @@ mod tests {
 
     fn request() -> RunRequest {
         RunRequest {
+            paid_config_path: None,
             kind: RunKind::Fetch,
             target: "provider-node".into(),
             node_addresses: Vec::new(),

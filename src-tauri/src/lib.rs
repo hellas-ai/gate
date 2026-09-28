@@ -9,3 +9,7 @@ pub mod host_control;
 pub mod identity;
 pub mod provider_identity;
 pub mod state;
+
+mod paid;
+
+mod provider_setup;
