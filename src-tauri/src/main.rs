@@ -35,6 +35,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
+            commands::export_offers,
+            commands::provision_paid_offer,
             commands::set_provider_enabled,
             commands::set_gateway_enabled,
             commands::get_gateway_access,
@@ -69,7 +71,20 @@ fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
                     let _ = window.set_focus();
                 }
             }
-            "quit" => app.exit(0),
+            "quit" => {
+                let app = app.clone();
+                let state = app.state::<Arc<AppState>>().inner().clone();
+                tauri::async_runtime::spawn(async move {
+                    match state.shutdown().await {
+                        Ok(false) => {}
+                        Ok(true) => app.exit(0),
+                        Err(error) => {
+                            tracing::error!(%error, "Gate shutdown failed");
+                            app.exit(1);
+                        }
+                    }
+                });
+            }
             _ => {}
         });
     if let Some(icon) = app.default_window_icon() {

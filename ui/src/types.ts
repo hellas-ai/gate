@@ -12,3 +12,6 @@ export type { RunKind } from "./generated/RunKind.ts";
 export type { RunRequest } from "./generated/RunRequest.ts";
 export type { ServiceState } from "./generated/ServiceState.ts";
 export type { ServiceStatus } from "./generated/ServiceStatus.ts";
+
+export type { ProviderOffer } from "./generated/ProviderOffer.ts";
+export type { WorkTarget } from "./generated/WorkTarget.ts";

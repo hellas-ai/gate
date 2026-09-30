@@ -58,7 +58,11 @@ impl History {
         statement.bind_text(1, &id)?;
         statement.bind_i64(2, now)?;
         statement.bind_text(3, &format!("{:?}", request.kind))?;
-        statement.bind_text(4, &request.target)?;
+        statement.bind_text(
+            4,
+            &hellas_rpc::ContentId::hash(serde_json::to_string(&request.target)?.as_bytes())
+                .to_string(),
+        )?;
         statement.bind_text(5, &request_json)?;
         statement.done()?;
         Ok(id)
@@ -363,13 +367,11 @@ mod tests {
     fn request() -> RunRequest {
         RunRequest {
             kind: RunKind::Fetch,
-            target: "provider-node".into(),
-            node_addresses: Vec::new(),
-            input: r#"{"model":"test","input":"hello"}"#.into(),
-            trust_anchor: "genesis".into(),
-            service: "openai".into(),
-            method: "responses".into(),
-            execution_environment: "environment".into(),
+            target: crate::dto::WorkTarget::Authorized {
+                offer: "fixture-offer".into(),
+                resource: "responses".into(),
+            },
+            input: "hello".into(),
             assurance: AssuranceInput::ProducerSigned,
             apple_app_id: String::new(),
             apple_cd_hashes: Vec::new(),
@@ -389,7 +391,7 @@ mod tests {
         assert_eq!(entries[0].status, "complete");
         assert_eq!(entries[0].result, "chunk\n");
         assert_eq!(entries[0].verification, "verified");
-        assert!(entries[0].request.contains("trustAnchor"));
+        assert!(entries[0].request.contains("fixture-offer"));
         assert!(history.delete(&id).unwrap());
         assert!(history.list(10).unwrap().is_empty());
     }
