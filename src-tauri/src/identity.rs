@@ -26,6 +26,34 @@ fn create(path: &Path) -> anyhow::Result<ClientIdentity> {
     bytes.extend_from_slice(&identity.transport_secret_bytes());
     bytes.extend_from_slice(&identity.caller_secret_bytes());
 
+    decode(&persist(path, &bytes)?)
+}
+
+pub fn contact(
+    path: &Path,
+    identity: &ClientIdentity,
+) -> anyhow::Result<hellas_rpc::protocol::work_grant::records::Principal> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == ErrorKind::NotFound => persist(
+            path,
+            &hellas_rpc::ProducerSigningKey::generate().to_secret_bytes(),
+        )?,
+        Err(error) => return Err(error.into()),
+    };
+    let root = hellas_rpc::ProducerSigningKey::from_secret_bytes(
+        bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid contact root"))?,
+    )?;
+    Ok(
+        hellas_rpc::protocol::work_grant::records::Principal::verify(
+            identity.contact_enrollment(&root)?,
+        )?,
+    )
+}
+
+fn persist(path: &Path, bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     let directory = path.parent().context("identity path has no parent")?;
     let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
     #[cfg(unix)]
@@ -33,16 +61,16 @@ fn create(path: &Path) -> anyhow::Result<ClientIdentity> {
         use std::os::unix::fs::PermissionsExt;
         fs::Permissions::from_mode(0o600)
     })?;
-    temporary.write_all(&bytes)?;
+    temporary.write_all(bytes)?;
     temporary.flush()?;
     temporary.as_file().sync_all()?;
     match temporary.persist_noclobber(path) {
         Ok(_) => {
             #[cfg(unix)]
             fs::File::open(directory)?.sync_all()?;
-            Ok(identity)
+            Ok(bytes.to_vec())
         }
-        Err(_) if path.exists() => decode(&fs::read(path)?),
+        Err(_) if path.exists() => Ok(fs::read(path)?),
         Err(error) => Err(error.error).context("persisting Gate identity failed"),
     }
 }
@@ -87,6 +115,29 @@ mod tests {
         let second = load_or_create(&path).unwrap();
         assert_eq!(first.node_id(), second.node_id());
         assert_eq!(producer_id(&first), producer_id(&second));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn contact_root_survives_restart_and_is_distinct_from_the_producer() {
+        let directory = tempfile::tempdir().unwrap();
+        let identity = load_or_create(&directory.path().join("identity")).unwrap();
+        let path = directory.path().join("contact-root");
+        let first = contact(&path, &identity).unwrap();
+        let second = contact(&path, &identity).unwrap();
+        assert_eq!(first, second);
+        assert_ne!(
+            first.bundle().genesis.statement.root_public_key,
+            identity.caller_key().public_key()
+        );
+        assert_eq!(first.transport(), *identity.node_id().as_bytes());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

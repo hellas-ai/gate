@@ -66,32 +66,18 @@ function render(): void {
 function renderRun(content: HTMLElement): void {
   content.innerHTML = `
     <header><p class="eyebrow">Verified execution</p><h1>Run on Hellas</h1>
-      <p>Choose the peer and trust anchor explicitly. Gate keeps the complete transcript locally.</p></header>
+      <p>Choose paid or authorized work and select its provider trust policy. Gate keeps the complete transcript locally.</p></header>
     <section class="panel composer">
       <div class="segmented">
         <button class="selected" data-kind="fetch">Sealed Fetch</button>
       </div>
-      <div class="field-row">
-        <label>Target<input id="target" placeholder="provider endpoint or relay target" /></label>
-        <label>Trust anchor<input id="trust" placeholder="provider genesis / trusted pin" /></label>
-      </div>
-      <div class="field-row">
-        <label>Execution environment<input id="environment" placeholder="content ID" /></label>
-        <label>Assurance<select id="assurance"><option value="producerSigned">Producer signed</option><option value="appleAppAttest">Apple App Attest</option></select></label>
-      </div>
-      <div class="field-row">
-        <label>Fetch service<input id="service" value="openai" /></label>
-        <label>Fetch method<input id="method" value="responses" /></label>
-      </div>
-      <div class="field-row">
-        <label>Apple app ID<input id="apple-app-id" placeholder="TEAMID.ai.hellas.gate" /></label>
-        <label>Allowed CDHashes<input id="apple-cdhashes" placeholder="hex, comma separated" /></label>
-      </div>
-      <label>OpenAI Responses request<textarea id="input" rows="8" placeholder='{"model":"gpt-5","input":"Hello","stream":true}'></textarea></label>
+      ${offerForm("")}
+      <label>Request JSON<textarea id="input" rows="8" placeholder='{"model":"gpt-5","input":"Hello","stream":true}'></textarea></label>
       <div class="actions"><span id="run-state" class="muted">${escapeHtml(runState)}</span><button id="run" class="primary">Run</button></div>
     </section>
     <section class="panel output"><div class="panel-title">Output</div><pre id="output">${escapeHtml(output || "No execution yet.")}</pre></section>`;
 
+  bindFundingForm(content, "");
   let kind: RunKind = "fetch";
   content.querySelectorAll<HTMLButtonElement>("[data-kind]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -101,24 +87,12 @@ function renderRun(content: HTMLElement): void {
     });
   });
   content.querySelector<HTMLButtonElement>("#run")?.addEventListener("click", async () => {
-    const target = value("#target");
-    const trustAnchor = value("#trust");
     const input = value("#input");
     output = "";
     setRunState("Starting…");
     try {
       await api.run({
-        kind,
-        target,
-        trustAnchor,
-        input,
-        nodeAddresses: [],
-        executionEnvironment: value("#environment"),
-        service: value("#service"),
-        method: value("#method"),
-        assurance: value("#assurance") === "appleAppAttest" ? "appleAppAttest" : "producerSigned",
-        appleAppId: value("#apple-app-id"),
-        appleCdHashes: value("#apple-cdhashes").split(",").map((item) => item.trim()).filter(Boolean),
+        ...offerConfig(""), kind, input,
       }, receiveEvent);
     } catch (error) {
       setRunState(errorMessage(error));
@@ -140,7 +114,7 @@ function renderService(content: HTMLElement, service: "provider" | "gateway"): v
   const current = status?.[service];
   const title = service === "provider" ? "Serve sealed Fetch" : "Loopback gateway";
   const description = service === "provider"
-    ? "Offer OpenAI Responses through your attested Hellas identity."
+    ? "Serve paid and authorized Fetch through your attested Hellas identity."
     : "Expose an authenticated OpenAI-compatible endpoint only on this machine.";
   content.innerHTML = `
     <header><p class="eyebrow">${service}</p><h1>${title}</h1><p>${description}</p></header>
@@ -150,6 +124,23 @@ function renderService(content: HTMLElement, service: "provider" | "gateway"): v
       <button id="toggle" class="primary">${current?.state === "running" ? "Stop" : "Start"}</button>
     </section>
     ${service === "provider" ? providerForm() : gatewayForm()}`;
+  if (service === "gateway") bindFundingForm(content, "gateway-");
+  for (const [id, preview] of [["preview-bond", true], ["provision-paid-offer", false]] as const) {
+    content.querySelector(`#${id}`)?.addEventListener("click", async () => {
+      try {
+        const result = await api.provisionPaidOffer(value("#paid-offer-config"), preview);
+        const output = content.querySelector<HTMLTextAreaElement>("#paid-offer-result");
+        if (output) output.value = result;
+      } catch (error) { window.alert(errorMessage(error)); }
+    });
+  }
+  content.querySelector<HTMLButtonElement>("#export-offers")?.addEventListener("click", async () => {
+    try {
+      const offers = await api.exportOffers();
+      const target = content.querySelector("#offers");
+      if (target) target.innerHTML = `<p class="muted">Copy each Offer to its contact. Import within five minutes; export again to renew.</p>` + offers.map((item) => `<label>Contact ${escapeHtml(item.contact)}<textarea rows="3" readonly>${escapeHtml(item.offer)}</textarea></label>`).join("");
+    } catch (error) { window.alert(errorMessage(error)); }
+  });
   content.querySelector<HTMLButtonElement>("#toggle")?.addEventListener("click", async () => {
     try {
       const running = status?.[service].state === "running";
@@ -177,32 +168,38 @@ function providerForm(): string {
     <label>OpenAI API key<input id="provider-api-key" type="password" autocomplete="off" /></label></div>
     <div class="field-row"><label>Fetch service<input id="provider-service" value="openai" /></label>
     <label>Fetch method<input id="provider-method" value="responses" /></label></div>
-    <label>Allowed caller public keys<textarea id="provider-callers" rows="3" placeholder="one compressed secp256k1 key per line"></textarea></label>
+    <label>Paid Work config file<input id="provider-work-config" placeholder="/absolute/path/provider-work.json" /></label>
+    <label>HTTPS routes JSON<textarea id="provider-https" rows="4" placeholder="Optional array of routes, accounts and resource policies"></textarea></label>
+    <label>Imported contacts<textarea id="provider-contacts" rows="4" placeholder="one base64 contact enrollment per line">${escapeHtml(localStorage.getItem("gate.contacts") ?? "")}</textarea></label>
+    <label>Requests per contact per day<input id="provider-quota" type="number" min="0" value="${escapeHtml(localStorage.getItem("gate.quota") ?? "100")}" /></label>
+    <p class="muted">Each contact can use the configured accounts within this daily request allowance. Jobs have a five-minute deadline. To remove a contact, stop the provider and restart with the revised list. Removed grants remain revoked.</p>
+    <label>Paid offer config file<input id="paid-offer-config" placeholder="/absolute/path/offer.json" /></label>
+    <div class="actions"><button id="preview-bond">Preview bond</button><button id="provision-paid-offer">Provision paid offer</button></div>
+    <textarea id="paid-offer-result" rows="5" readonly placeholder="Copy the provisioned fields into the client's pool configuration"></textarea>
+    <button id="export-offers">Export Offers for enabled contacts</button><div id="offers"></div>
     <div class="field-row"><label>Port<input id="provider-port" type="number" min="1" max="65535" placeholder="automatic" /></label></div>
     <p class="muted">The API key crosses the typed IPC boundary once and remains only in native memory for this provider run.</p></section>`;
 }
 
 function providerConfig(): ProviderConfig {
   const rawPort = value("#provider-port");
+  localStorage.setItem("gate.contacts", value("#provider-contacts"));
+  localStorage.setItem("gate.quota", value("#provider-quota"));
   return {
     service: value("#provider-service"),
     method: value("#provider-method"),
     openaiApiKey: value("#provider-api-key"),
-    allowedCallers: value("#provider-callers").split(/[,\n]/).map((item) => item.trim()).filter(Boolean),
+    workConfigPath: value("#provider-work-config") || undefined,
+    httpsConfig: value("#provider-https") || undefined,
+    contacts: value("#provider-contacts").split(/\n/).map((item) => item.trim()).filter(Boolean),
+    requestsPerDay: Number(value("#provider-quota")),
     port: rawPort ? Number(rawPort) : undefined,
   };
 }
 
 function gatewayForm(): string {
   return `<section class="panel"><div class="panel-title">Local access</div>
-    <div class="field-row"><label>Provider endpoint<input id="gateway-target" placeholder="Hellas endpoint ID" /></label>
-    <label>Provider genesis<input id="gateway-trust" placeholder="trusted content ID" /></label></div>
-    <div class="field-row"><label>Execution environment<input id="gateway-environment" placeholder="Fetch manifest content ID" /></label>
-    <label>Assurance<select id="gateway-assurance"><option value="producerSigned">Producer signed</option><option value="appleAppAttest">Apple App Attest</option></select></label></div>
-    <div class="field-row"><label>Fetch service<input id="gateway-service" value="openai" /></label>
-    <label>Fetch method<input id="gateway-method" value="responses" /></label></div>
-    <div class="field-row"><label>Apple app ID<input id="gateway-apple-app-id" placeholder="TEAMID.ai.hellas.gate" /></label>
-    <label>Allowed CDHashes<input id="gateway-apple-cdhashes" placeholder="hex, comma separated" /></label></div>
+    ${offerForm("gateway-")}
     <div class="field-row"><label>Bind address<input value="127.0.0.1 (ephemeral port)" readonly /></label>
     <label>Backend<input value="Verified sealed Fetch Responses" readonly /></label></div>
     <p class="muted">A fresh bearer is generated for each running instance.</p>
@@ -210,19 +207,54 @@ function gatewayForm(): string {
 }
 
 function gatewayConfig(): RunRequest {
+  return { ...offerConfig("gateway-"), kind: "fetch", input: "{}" };
+}
+
+function offerForm(prefix: string): string {
+  const appId = localStorage.getItem("gate.apple-app-id") ?? status?.identity.appleAppId ?? "";
+  const hashes = localStorage.getItem("gate.apple-cdhashes") ?? status?.identity.appleCdHashes.join(", ") ?? "";
+  const assurance = localStorage.getItem("gate.assurance") ?? "appleAppAttest";
+  const funding = localStorage.getItem("gate.funding") ?? "authorized";
+  return `<label>Funding<select id="${prefix}funding"><option value="authorized" ${funding === "authorized" ? "selected" : ""}>Authorized</option><option value="paid" ${funding === "paid" ? "selected" : ""}>Paid</option></select></label>
+    <div id="${prefix}authorized-fields"><label>Resource name<input id="${prefix}resource" value="${escapeHtml(localStorage.getItem("gate.resource") ?? "responses")}" /></label>
+    <label>Imported Offer<textarea id="${prefix}offer" rows="3" placeholder="paste the base64 Offer exported for this contact">${escapeHtml(localStorage.getItem("gate.offer") ?? "")}</textarea></label>
+    </div><div id="${prefix}paid-fields"><label>Paid pool config file<input id="${prefix}pool-config" value="${escapeHtml(localStorage.getItem("gate.pool-config") ?? "")}" placeholder="/absolute/path/pool.json" /></label>
+    <label>Provider endpoint ID<input id="${prefix}paid-provider" value="${escapeHtml(localStorage.getItem("gate.paid-provider") ?? "")}" /></label>
+    <div class="field-row"><label>Fetch service<input id="${prefix}paid-service" value="${escapeHtml(localStorage.getItem("gate.paid-service") ?? "")}" placeholder="For an open HTTPS policy" /></label>
+    <label>Fetch method<input id="${prefix}paid-method" value="${escapeHtml(localStorage.getItem("gate.paid-method") ?? "")}" placeholder="For an open HTTPS policy" /></label></div>
+    <p class="muted">The pool file contains your payment coins and the provider's signed offer. Apple app ID and CDHashes for paid targets come from that file.</p></div>
+    <label>Assurance<select id="${prefix}assurance"><option value="appleAppAttest" ${assurance === "appleAppAttest" ? "selected" : ""}>Apple App Attest</option><option value="producerSigned" ${assurance === "producerSigned" ? "selected" : ""}>Producer signed</option></select></label>
+    <div id="${prefix}authorized-trust" class="field-row"><label>Trusted Apple app ID<input id="${prefix}apple-app-id" value="${escapeHtml(appId)}" placeholder="TEAMID.ai.hellas.gate" /></label>
+    <label>Trusted CDHashes<input id="${prefix}apple-cdhashes" value="${escapeHtml(hashes)}" placeholder="from trusted release metadata, comma separated" /></label></div>`;
+}
+
+function offerConfig(prefix: string): Omit<RunRequest, "kind" | "input"> {
+  for (const field of ["funding", "resource", "pool-config", "paid-provider", "paid-service", "paid-method", "offer", "assurance", "apple-app-id", "apple-cdhashes"]) {
+    localStorage.setItem(`gate.${field}`, value(`#${prefix}${field}`));
+  }
   return {
-    kind: "fetch",
-    target: value("#gateway-target"),
-    nodeAddresses: [],
-    input: "{}",
-    trustAnchor: value("#gateway-trust"),
-    service: value("#gateway-service"),
-    method: value("#gateway-method"),
-    executionEnvironment: value("#gateway-environment"),
-    assurance: value("#gateway-assurance") === "appleAppAttest" ? "appleAppAttest" : "producerSigned",
-    appleAppId: value("#gateway-apple-app-id"),
-    appleCdHashes: value("#gateway-apple-cdhashes").split(",").map((item) => item.trim()).filter(Boolean),
+    target: value(`#${prefix}funding`) === "paid"
+      ? { funding: "paid", poolConfig: value(`#${prefix}pool-config`), provider: value(`#${prefix}paid-provider`),
+          route: value(`#${prefix}paid-service`) || value(`#${prefix}paid-method`)
+            ? { service: value(`#${prefix}paid-service`), method: value(`#${prefix}paid-method`) } : undefined }
+      : { funding: "authorized", offer: value(`#${prefix}offer`), resource: value(`#${prefix}resource`) },
+    assurance: value(`#${prefix}assurance`) === "appleAppAttest" ? "appleAppAttest" : "producerSigned",
+    appleAppId: value(`#${prefix}apple-app-id`),
+    appleCdHashes: value(`#${prefix}apple-cdhashes`).split(",").map((item) => item.trim()).filter(Boolean),
   };
+}
+
+function bindFundingForm(content: HTMLElement, prefix: string): void {
+  const select = content.querySelector<HTMLSelectElement>(`#${prefix}funding`);
+  const refresh = (): void => {
+    const paid = select?.value === "paid";
+    for (const field of ["authorized-fields", "authorized-trust", "paid-fields"]) {
+      const element = content.querySelector<HTMLElement>(`#${prefix}${field}`);
+      if (element) element.hidden = field === "paid-fields" ? !paid : paid;
+    }
+  };
+  select?.addEventListener("change", refresh);
+  refresh();
 }
 
 function renderHistory(content: HTMLElement): void {
@@ -256,7 +288,9 @@ function renderSettings(content: HTMLElement): void {
   content.innerHTML = `<header><p class="eyebrow">Host</p><h1>Settings & diagnostics</h1></header>
     <section class="panel definition"><div><span>App Attest</span><strong>${escapeHtml(identity?.attestation ?? "loading")}</strong></div>
     <p>${escapeHtml(identity?.detail ?? "")}</p><div><span>Local control socket</span><code>${escapeHtml(status?.socketPath ?? "")}</code></div>
-    <div><span>Caller public key</span><code>${escapeHtml(identity?.callerPublicKey ?? "")}</code></div>
+    <div><span>Contact ID</span><code>${escapeHtml(identity?.contactId ?? "")}</code></div>
+    <label>Export contact enrollment<textarea rows="4" readonly>${escapeHtml(identity?.contact ?? "")}</textarea></label>
+    <p>Copy this public contact enrollment to a provider to request a grant.</p>
     <div><span>Version</span><strong>${escapeHtml(status?.version ?? "")}</strong></div></section>`;
 }
 

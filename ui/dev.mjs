@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
 const source = dirname(fileURLToPath(import.meta.url));
-const output = "/tmp/hellas-gate-ui-dev";
+const output = join(source, "../target/ui-dev");
 
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });

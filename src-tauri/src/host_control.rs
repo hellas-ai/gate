@@ -76,6 +76,16 @@ struct Handler(Arc<AppState>);
 
 #[allow(refining_impl_trait)]
 impl HostControlHandler for Handler {
+    async fn grant_control(
+        &self,
+        _: hellas_rpc::pb::host::GrantControlRequest,
+    ) -> Result<hellas_rpc::pb::host::GrantControlResponse, WireStatus> {
+        Err(WireStatus::new(
+            hellas_wire::WireCode::Unimplemented,
+            "grant terms are managed by Gate provider configuration",
+        ))
+    }
+
     async fn get_host_status(
         &self,
         _request: GetHostStatusRequest,

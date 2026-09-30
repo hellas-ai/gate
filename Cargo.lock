@@ -1027,6 +1027,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "commonware-glue"
+version = "2026.7.0"
+source = "git+https://github.com/georgewhewell/commonware-monorepo?rev=4da2958e095dbff2236091e7294f6890806dc800#4da2958e095dbff2236091e7294f6890806dc800"
+dependencies = [
+ "bytes",
+ "commonware-actor",
+ "commonware-codec",
+ "commonware-consensus",
+ "commonware-cryptography",
+ "commonware-macros",
+ "commonware-p2p",
+ "commonware-parallel",
+ "commonware-resolver",
+ "commonware-runtime",
+ "commonware-storage",
+ "commonware-utils",
+ "futures",
+ "prometheus-client",
+ "rand_core 0.10.1",
+ "thiserror 2.0.20",
+ "tracing",
+]
+
+[[package]]
 name = "commonware-macros"
 version = "2026.7.0"
 source = "git+https://github.com/georgewhewell/commonware-monorepo?rev=4da2958e095dbff2236091e7294f6890806dc800#4da2958e095dbff2236091e7294f6890806dc800"
@@ -3067,22 +3091,38 @@ dependencies = [
  "base64ct",
  "bs58",
  "bytes",
+ "commonware-actor",
  "commonware-codec",
  "commonware-consensus",
  "commonware-cryptography",
+ "commonware-glue",
+ "commonware-p2p",
  "commonware-parallel",
+ "commonware-resolver",
+ "commonware-runtime",
  "commonware-storage",
  "commonware-utils",
+ "dirs",
+ "futures",
+ "futures-util",
  "hellas-genesis",
  "hellas-kernel",
  "hellas-rpc",
  "hellas-wire",
+ "hellas-work",
+ "hex",
+ "iroh",
  "p256",
+ "prometheus-client",
  "rand 0.10.2",
+ "rand_core 0.10.1",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "thiserror 2.0.20",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite",
  "tracing",
  "url",
 ]
@@ -3095,8 +3135,10 @@ dependencies = [
  "futures",
  "hellas-adaptors",
  "hellas-attestation",
+ "hellas-kernel",
  "hellas-rpc",
  "hellas-wire",
+ "hellas-work",
  "iroh",
  "iroh-mdns-address-lookup",
  "rand 0.10.2",
@@ -3114,7 +3156,6 @@ dependencies = [
  "async-trait",
  "futures-core",
  "futures-util",
- "hellas-chain",
  "hellas-kernel",
  "hellas-private",
  "hellas-rpc",
@@ -3139,9 +3180,11 @@ name = "hellas-gate"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "cc",
  "futures",
  "hellas-attestation",
+ "hellas-gateway",
  "hellas-private",
  "hellas-rpc",
  "hellas-sdk",
@@ -3167,6 +3210,8 @@ dependencies = [
  "anyhow",
  "async-stream",
  "axum",
+ "base64 0.22.1",
+ "flate2",
  "futures",
  "hellas-adaptors",
  "hellas-client",
@@ -3174,6 +3219,7 @@ dependencies = [
  "hellas-private",
  "hellas-rpc",
  "hellas-wire",
+ "httpdate",
  "iroh",
  "libc",
  "prometheus-client",
@@ -3186,6 +3232,7 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "zstd",
 ]
 
 [[package]]
@@ -3202,6 +3249,8 @@ version = "0.1.0"
 dependencies = [
  "hellas-xet",
  "k256",
+ "p256",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -3233,24 +3282,35 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-stream",
+ "base64 0.22.1",
  "futures",
  "hellas-adaptors",
  "hellas-executor",
+ "hellas-private",
  "hellas-rpc",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
+ "url",
+ "webpki-roots 1.0.9",
+ "x509-cert",
 ]
 
 [[package]]
 name = "hellas-rpc"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "base64ct",
+ "brotli",
  "bytes",
  "ed25519-dalek",
+ "flate2",
  "futures-core",
  "futures-util",
  "getrandom 0.2.17",
@@ -3275,6 +3335,7 @@ dependencies = [
  "syn 2.0.119",
  "thiserror 2.0.20",
  "tracing",
+ "url",
  "web-time",
 ]
 
@@ -3282,19 +3343,31 @@ dependencies = [
 name = "hellas-sdk"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "async-stream",
+ "futures",
  "futures-core",
  "hellas-attestation",
+ "hellas-chain",
  "hellas-client",
  "hellas-executor",
  "hellas-gateway",
+ "hellas-kernel",
+ "hellas-private",
  "hellas-providers",
  "hellas-rpc",
  "hellas-wire",
+ "hellas-work",
+ "hex",
  "iroh",
+ "prost",
+ "rand 0.10.2",
+ "serde",
+ "serde_json",
  "tempfile",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -3334,6 +3407,7 @@ name = "hellas-work"
 version = "0.1.0"
 dependencies = [
  "async-stream",
+ "base64 0.22.1",
  "futures",
  "hellas-kernel",
  "hellas-private",
@@ -3341,6 +3415,8 @@ dependencies = [
  "hellas-wire",
  "hellas-xet",
  "prost",
+ "serde",
+ "serde_bytes",
  "thiserror 2.0.20",
  "tokio",
  "tracing",

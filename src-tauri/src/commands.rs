@@ -56,12 +56,6 @@ pub async fn run_request(
     if request.input.trim().is_empty() {
         return Err(ApiError::new("invalid_request", "Input cannot be empty"));
     }
-    if request.target.trim().is_empty() || request.trust_anchor.trim().is_empty() {
-        return Err(ApiError::new(
-            "trust_required",
-            "A target and explicit trust anchor are required",
-        ));
-    }
 
     let run_id = state.history.begin(&request).map_err(ApiError::internal)?;
     on_event
@@ -90,9 +84,9 @@ pub async fn run_request(
 
     while let Some(event) = stream.next().await {
         match event {
-            Ok(hellas_sdk::client::FetchExecutionEvent::Chunk { event, .. }) => {
-                let record = serde_json::to_string(&event).map_err(ApiError::internal)?;
+            Ok(event) => {
                 let text = render_output_event(&event).map_err(ApiError::internal)?;
+                let record = serde_json::to_string(&event).map_err(ApiError::internal)?;
                 state
                     .history
                     .append_result(&run_id, &record)
@@ -100,49 +94,25 @@ pub async fn run_request(
                 on_event
                     .send(ExecutionEvent::Output { text })
                     .map_err(ApiError::internal)?;
-            }
-            Ok(hellas_sdk::client::FetchExecutionEvent::Done(
-                hellas_sdk::client::FetchOutcome::Completed { terminal, .. },
-            )) => {
-                let text = serde_json::to_string(&terminal.to_output_event())
-                    .map_err(ApiError::internal)?;
-                let verification =
-                    "Provider identity, signatures, commitments, and Fetch transcript verified";
-                state
-                    .history
-                    .append_result(&run_id, &text)
-                    .and_then(|()| state.history.complete(&run_id, verification))
-                    .map_err(ApiError::internal)?;
-                on_event
-                    .send(ExecutionEvent::Output { text })
-                    .and_then(|()| {
-                        on_event.send(ExecutionEvent::Verification {
+                if matches!(event, hellas_rpc::output::OutputEvent::Finished { .. }) {
+                    let verification =
+                        "Provider Open, funding, signatures, and complete Work result verified";
+                    state
+                        .history
+                        .complete(&run_id, verification)
+                        .map_err(ApiError::internal)?;
+                    on_event
+                        .send(ExecutionEvent::Verification {
                             summary: verification.into(),
                         })
-                    })
-                    .and_then(|()| {
-                        on_event.send(ExecutionEvent::Finished {
+                        .map_err(ApiError::internal)?;
+                    on_event
+                        .send(ExecutionEvent::Finished {
                             run_id: run_id.clone(),
                         })
-                    })
-                    .map_err(ApiError::internal)?;
-                return Ok(run_id);
-            }
-            Ok(hellas_sdk::client::FetchExecutionEvent::Done(
-                hellas_sdk::client::FetchOutcome::Failed { position, error },
-            )) => {
-                let message = format!("Fetch failed at byte {position}: {error}");
-                state
-                    .history
-                    .fail(&run_id, &message)
-                    .map_err(ApiError::internal)?;
-                on_event
-                    .send(ExecutionEvent::Failed {
-                        run_id: run_id.clone(),
-                        message,
-                    })
-                    .map_err(ApiError::internal)?;
-                return Ok(run_id);
+                        .map_err(ApiError::internal)?;
+                    return Ok(run_id);
+                }
             }
             Err(error) => {
                 let message = error.to_string();
@@ -201,4 +171,23 @@ pub async fn delete_history(state: State<'_, Arc<AppState>>, id: String) -> ApiR
 #[tauri::command]
 pub async fn clear_history(state: State<'_, Arc<AppState>>) -> ApiResult<usize> {
     state.history.clear().map_err(ApiError::internal)
+}
+
+#[tauri::command]
+pub async fn export_offers(
+    state: State<'_, Arc<AppState>>,
+) -> ApiResult<Vec<crate::dto::ProviderOffer>> {
+    state.export_offers().await.map_err(ApiError::internal)
+}
+
+#[tauri::command]
+pub async fn provision_paid_offer(
+    state: State<'_, Arc<AppState>>,
+    path: String,
+    preview: bool,
+) -> ApiResult<String> {
+    state
+        .provision_paid_offer(std::path::Path::new(&path), preview)
+        .await
+        .map_err(ApiError::internal)
 }

@@ -44,3 +44,5 @@ button:hover { border-color: #56637a; }.primary { border-color: #6388c3; color: 
 .pill { padding: 4px 8px; border-radius: 99px; color: #aeb7c7; background: #262d39; font-size: 11px; text-transform: uppercase; }.pill.failed { color: #ffaaa6; background: #402225; }.pill.complete { color: #8ae3b6; background: #183329; }
 .definition > div { display: flex; justify-content: space-between; gap: 24px; padding: 13px 0; border-bottom: 1px solid #292f3a; }.definition span { color: #8f98a9; }.definition code { overflow-wrap: anywhere; text-align: right; }
 @media (max-width: 850px) { .shell { grid-template-columns: 170px 1fr; } main { width: 100%; padding-inline: 24px; }.field-row { grid-template-columns: 1fr; } }
+
+[hidden] { display: none !important; }

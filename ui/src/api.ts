@@ -7,6 +7,7 @@ import type {
   GatewayAccess,
   HistoryEntry,
   ProviderConfig,
+  ProviderOffer,
   RunRequest,
 } from "./types.ts";
 
@@ -47,6 +48,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 
 export const api = {
   status: (): Promise<AppStatus> => call("get_status"),
+  provisionPaidOffer: (path: string, preview: boolean): Promise<string> => call("provision_paid_offer", { path, preview }),
+  exportOffers: (): Promise<ProviderOffer[]> => call("export_offers"),
   setProvider: (enabled: boolean, config?: ProviderConfig): Promise<AppStatus> =>
     call("set_provider_enabled", { enabled, config }),
   setGateway: (enabled: boolean, config?: RunRequest): Promise<AppStatus> =>
