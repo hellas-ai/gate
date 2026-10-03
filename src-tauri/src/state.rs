@@ -736,6 +736,72 @@ fn paid_route(
 mod tests {
     use super::*;
 
+    /// Run the test executable inside a signed, provisioned .app. The pins come
+    /// from that app's signing metadata, not from the imported Offer.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "requires a provisioned App Attest bundle and HELLAS_GATE_TEST_APP_ID/CDHASH"]
+    async fn provisioned_provider_opens_pinned_grant_sessions_after_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let provider_dir = directory.path().join("provider");
+        let client_dir = directory.path().join("client");
+        std::fs::create_dir_all(&provider_dir).unwrap();
+        std::fs::create_dir_all(&client_dir).unwrap();
+        let client = AppState::open(&client_dir).unwrap();
+        let mut enrollment = None;
+        for _ in 0..2 {
+            let provider = AppState::open(&provider_dir).unwrap();
+            provider
+                .set_provider_enabled(
+                    true,
+                    Some(ProviderConfig {
+                        service: "openai".into(),
+                        method: "responses".into(),
+                        openai_api_key: "unused-handshake-fixture".into(),
+                        work_config_path: None,
+                        https_config: None,
+                        contacts: vec![STANDARD.encode(client.contact.bundle().canonical_bytes())],
+                        requests_per_day: 2,
+                        port: Some(0),
+                    }),
+                )
+                .await
+                .unwrap();
+            let genesis = provider
+                .provider_identity
+                .get()
+                .unwrap()
+                .enrollment()
+                .content_id();
+            if let Some(previous) = enrollment {
+                assert_eq!(previous, genesis, "restart preserves the enrolled identity");
+            }
+            enrollment = Some(genesis);
+            let offers = provider.export_offers().await.unwrap();
+            assert_eq!(offers.len(), 1);
+            let target = client
+                .client_for(&WorkClientConfig {
+                    target: WorkTarget::Authorized {
+                        offer: offers[0].offer.clone(),
+                        resource: "responses".into(),
+                    },
+                    assurance: AssuranceInput::AppleAppAttest,
+                    apple_app_id: std::env::var("HELLAS_GATE_TEST_APP_ID").unwrap(),
+                    apple_cd_hashes: vec![std::env::var("HELLAS_GATE_TEST_CDHASH").unwrap()],
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                target.environment,
+                hellas_rpc::FetchEnvironment::OpenAiResponses.manifest_id()
+            );
+            target.backend.drain().await.unwrap();
+            client.client.lock().await.take();
+            provider.shutdown().await.unwrap();
+        }
+        client.shutdown().await.unwrap();
+    }
+
     #[tokio::test]
     async fn invalid_http_pool_exposes_no_listener_and_retains_configuration() {
         let directory = tempfile::tempdir().unwrap();
