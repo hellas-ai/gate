@@ -47,7 +47,7 @@
           shellHook = ''
             export CARGO_TARGET_DIR="''${CARGO_TARGET_DIR:-$PWD/target}"
           '' + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
-            export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+            export DEVELOPER_DIR="''${GATE_DEVELOPER_DIR:-$(/usr/bin/xcode-select -p)}"
             # Native archives must use the same LLVM as Xcode's linker.
             export CC=/usr/bin/clang
             export CXX=/usr/bin/clang++

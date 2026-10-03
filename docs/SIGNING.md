@@ -10,10 +10,16 @@ profile.
 
 For the attested provider to start, a provisioned build must use:
 
+- macOS 27 and an executable linked against the macOS 27 SDK or newer;
 - bundle identifier `ai.hellas.gate`;
 - an Apple provisioning profile whose App ID matches that identifier; and
 - the `com.apple.developer.devicecheck.app-attest-opt-in` entitlement with the
   value `CDhash` in that profile.
+
+The Nix shell uses the Xcode selected by `xcode-select`. Set
+`GATE_DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` before
+`nix develop` to select another installation. An executable linked against an
+older SDK can receive evidence without CDHash extensions; Gate rejects it.
 
 Build the app ad-hoc first, then embed the provisioning profile and apply the
 final Developer ID signature in one validated step:
@@ -21,7 +27,7 @@ final Developer ID signature in one validated step:
 ```sh
 APPLE_SIGNING_IDENTITY=- cargo tauri build
 ./macos/sign.sh path/to/gate.provisionprofile \
-  /tmp/hellas-gate-target/release/bundle/macos/Hellas\ Gate.app
+  target/release/bundle/macos/Hellas\ Gate.app
 ```
 
 `macos/sign.sh` embeds the profile and signs with the entitlements extracted
