@@ -60,13 +60,15 @@ mod platform {
             .duration_since(UNIX_EPOCH)
             .context("system clock is before the Unix epoch")?
             .as_secs();
-        let credential_identity = apple_credential_identity(&credential.attestation)?;
+        let credential_identity = apple_credential_identity(&credential.attestation)
+            .context("reading Apple credential identity")?;
         let registered = register_apple(
             &credential,
             credential_identity.rp_id_hash,
             apple_app_attest_root_ca(),
             AnchorTime(validation_time),
-        )?;
+        )
+        .context("registering Apple App Attest credential")?;
         let statement = provider_statement(client, installation_nonce, &credential, &registered);
         let genesis = SignedProviderGenesis {
             root_proof: root.prove_statement(&statement.canonical_bytes()).await?,
@@ -116,13 +118,15 @@ mod platform {
             attestation: platform.attestation_object.clone(),
             client_data_hash: platform.client_data_hash,
         };
-        let credential_identity = apple_credential_identity(&credential.attestation)?;
+        let credential_identity = apple_credential_identity(&credential.attestation)
+            .context("reading persisted Apple credential identity")?;
         let registered = register_apple(
             &credential,
             credential_identity.rp_id_hash,
             apple_app_attest_root_ca(),
             AnchorTime(platform.validation_time),
-        )?;
+        )
+        .context("registering persisted Apple App Attest credential")?;
         let statement = &enrollment.genesis.statement;
         anyhow::ensure!(
             statement.producer_public_key == client.caller_key().public_key()
@@ -137,7 +141,8 @@ mod platform {
                 expected_rp_id_hash: credential_identity.rp_id_hash,
                 allowed_cd_hashes: vec![credential_identity.cd_hash],
             },
-        )?;
+        )
+        .context("verifying persisted Apple provider genesis")?;
         Ok(())
     }
 
