@@ -21,10 +21,13 @@ required-features = ["desktop"]
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
+hellas-gateway = { path = "../../hellas/crates/gateway" }
 futures = "0.3"
 hellas-attestation = { path = "../../hellas/crates/attestation", features = ["apple-app-attest"] }
-hellas-rpc = { path = "../../hellas/crates/rpc", features = ["host-control", "execute", "fetch", "courtesy"] }
-hellas-sdk = { path = "../../hellas/crates/sdk", default-features = false, features = ["apple-verifier", "client", "gateway", "local-control", "provider"] }
+hellas-private = { path = "../../hellas/crates/private" }
+hellas-rpc = { path = "../../hellas/crates/rpc", features = ["host-control", "execute", "fetch", "work"] }
+hellas-sdk = { path = "../../hellas/crates/sdk", default-features = false, features = ["apple-verifier", "client", "grant-gateway", "local-control", "grant-provider", "paid-gateway", "paid-provider"] }
 hellas-wire = { path = "../../hellas/crates/wire", features = ["unix"] }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }

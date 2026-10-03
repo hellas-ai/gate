@@ -8,13 +8,13 @@ mod platform {
     use anyhow::{Context, bail};
     use hellas_attestation::{
         AnchorTime, AppleCredential, ApplePolicy, RegisteredAppleCredential, RootProver,
-        apple_app_attest_root_ca, apple_client_data_hash, apple_credential_identity,
-        register_apple, verify_apple_assertion,
+        apple_app_attest_root_ca, apple_credential_identity, register_apple,
+        verify_apple_provider_genesis,
     };
     use hellas_rpc::{
         AppleAppAttestEnrollment, DagCborDecoder, DagCborEncoder, Digest, PlatformCredential,
         PlatformEnrollment, ProviderEnrollmentBundle, ProviderGenesisStatement, PublicKey,
-        RootKind, RootProof, SignedProviderGenesis,
+        RootKind, SignedProviderGenesis,
     };
     use hellas_sdk::ClientIdentity;
 
@@ -60,13 +60,15 @@ mod platform {
             .duration_since(UNIX_EPOCH)
             .context("system clock is before the Unix epoch")?
             .as_secs();
-        let credential_identity = apple_credential_identity(&credential.attestation)?;
+        let credential_identity = apple_credential_identity(&credential.attestation)
+            .context("reading Apple credential identity")?;
         let registered = register_apple(
             &credential,
             credential_identity.rp_id_hash,
             apple_app_attest_root_ca(),
             AnchorTime(validation_time),
-        )?;
+        )
+        .context("registering Apple App Attest credential")?;
         let statement = provider_statement(client, installation_nonce, &credential, &registered);
         let genesis = SignedProviderGenesis {
             root_proof: root.prove_statement(&statement.canonical_bytes()).await?,
@@ -116,39 +118,31 @@ mod platform {
             attestation: platform.attestation_object.clone(),
             client_data_hash: platform.client_data_hash,
         };
-        let credential_identity = apple_credential_identity(&credential.attestation)?;
+        let credential_identity = apple_credential_identity(&credential.attestation)
+            .context("reading persisted Apple credential identity")?;
         let registered = register_apple(
             &credential,
             credential_identity.rp_id_hash,
             apple_app_attest_root_ca(),
             AnchorTime(platform.validation_time),
-        )?;
+        )
+        .context("registering persisted Apple App Attest credential")?;
         let statement = &enrollment.genesis.statement;
         anyhow::ensure!(
-            statement.root_kind == RootKind::SecureEnclave
-                && statement.root_public_key == PublicKey::P256(registered.public_key)
-                && statement.producer_public_key == client.caller_key().public_key()
+            statement.producer_public_key == client.caller_key().public_key()
                 && statement.transport_public_key
-                    == PublicKey::Ed25519(*client.node_id().as_bytes())
-                && statement.platform_credential
-                    == PlatformCredential::Registered(credential.content_id()),
+                    == PublicKey::Ed25519(*client.node_id().as_bytes()),
             "persisted Apple provider identity does not match this Gate installation"
         );
-        let RootProof::AppleAppAttest(assertion) = &enrollment.genesis.root_proof else {
-            bail!("Apple provider identity requires an App Attest root proof");
-        };
-        verify_apple_assertion(
-            assertion,
-            &apple_client_data_hash(&statement.canonical_bytes()),
-            &RegisteredAppleCredential {
-                id: credential.content_id(),
-                public_key: registered.public_key,
-            },
+        verify_apple_provider_genesis(
+            &enrollment.genesis,
+            &registered,
             &ApplePolicy {
                 expected_rp_id_hash: credential_identity.rp_id_hash,
                 allowed_cd_hashes: vec![credential_identity.cd_hash],
             },
-        )?;
+        )
+        .context("verifying persisted Apple provider genesis")?;
         Ok(())
     }
 

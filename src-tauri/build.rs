@@ -1,4 +1,6 @@
 fn main() {
+    println!("cargo:rerun-if-env-changed=HELLAS_GATE_TRUST_APP_ID");
+    println!("cargo:rerun-if-env-changed=HELLAS_GATE_TRUST_CDHASHES");
     #[cfg(target_os = "macos")]
     {
         cc::Build::new()

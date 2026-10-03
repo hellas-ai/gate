@@ -1,6 +1,6 @@
 .PHONY: bindings check dev ui-check ui-build
 
-export CARGO_TARGET_DIR ?= /tmp/hellas-gate-target
+export CARGO_TARGET_DIR ?= $(CURDIR)/target
 
 bindings:
 	cargo test --locked -p hellas-gate --lib export_bindings

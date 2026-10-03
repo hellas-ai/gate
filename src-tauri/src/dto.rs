@@ -30,6 +30,10 @@ pub enum ServiceState {
 pub struct IdentityStatus {
     pub producer_id: String,
     pub caller_public_key: String,
+    pub contact: String,
+    pub contact_id: String,
+    pub apple_app_id: String,
+    pub apple_cd_hashes: Vec<String>,
     pub node_id: String,
     pub attestation: String,
     pub detail: String,
@@ -54,23 +58,75 @@ pub struct AppStatus {
 #[serde(rename_all = "camelCase")]
 pub struct RunRequest {
     pub kind: RunKind,
-    pub target: String,
-    #[serde(default)]
-    pub node_addresses: Vec<String>,
     pub input: String,
-    pub trust_anchor: String,
-    #[serde(default)]
-    pub service: String,
-    #[serde(default)]
-    pub method: String,
-    #[serde(default)]
-    pub execution_environment: String,
+    #[serde(flatten)]
+    pub client: WorkClientConfig,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct WorkClientConfig {
+    pub target: WorkTarget,
     #[serde(default)]
     pub assurance: AssuranceInput,
     #[serde(default)]
     pub apple_app_id: String,
     #[serde(default)]
     pub apple_cd_hashes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum GatewayConfig {
+    Responses {
+        #[serde(flatten)]
+        client: WorkClientConfig,
+    },
+    Http {
+        paid_pool_path: String,
+        http_routes_path: String,
+        assurance: AssuranceInput,
+        zdr: bool,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(
+    tag = "funding",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum WorkTarget {
+    Authorized {
+        offer: String,
+        resource: String,
+    },
+    Paid {
+        pool_config: String,
+        provider: String,
+        #[cfg_attr(feature = "desktop", ts(optional))]
+        route: Option<FetchRouteInput>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FetchRouteInput {
+    pub service: String,
+    pub method: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -142,10 +198,24 @@ pub struct ProviderConfig {
     pub service: String,
     pub method: String,
     pub openai_api_key: String,
+    #[cfg_attr(feature = "desktop", ts(optional))]
+    pub work_config_path: Option<String>,
+    #[cfg_attr(feature = "desktop", ts(optional))]
+    pub https_config: Option<String>,
     #[serde(default)]
-    pub allowed_callers: Vec<String>,
+    pub contacts: Vec<String>,
+    pub requests_per_day: u32,
     #[cfg_attr(feature = "desktop", ts(optional))]
     pub port: Option<u16>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderOffer {
+    pub contact: String,
+    pub offer: String,
 }
 
 #[cfg(test)]

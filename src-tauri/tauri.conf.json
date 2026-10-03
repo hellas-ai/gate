@@ -7,7 +7,7 @@
     "beforeDevCommand": "node ui/dev.mjs",
     "beforeBuildCommand": "tsc --noEmit -p ui/tsconfig.json && node ui/build.mjs",
     "devUrl": "http://localhost:1420",
-    "frontendDist": "/tmp/hellas-gate-ui-dist"
+    "frontendDist": "../target/ui-dist"
   },
   "app": {
     "withGlobalTauri": true,
