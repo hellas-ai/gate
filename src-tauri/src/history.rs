@@ -316,7 +316,10 @@ struct Sqlite3Statement {
     _private: [u8; 0],
 }
 
-#[link(name = "sqlite3")]
+#[cfg(windows)]
+use libsqlite3_sys as _;
+
+#[cfg_attr(not(windows), link(name = "sqlite3"))]
 unsafe extern "C" {
     fn sqlite3_open_v2(
         filename: *const c_char,

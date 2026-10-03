@@ -40,6 +40,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ts-rs = { version = "12", features = ["serde-compat"], optional = true }
 
+[target.'cfg(windows)'.dependencies]
+# Windows has no system SQLite: compile the amalgamation in. Elsewhere the
+# FFI in history.rs links the platform's libsqlite3.
+libsqlite3-sys = { version = "0.38", features = ["bundled"] }
+
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }
 
