@@ -3207,7 +3207,6 @@ dependencies = [
 name = "hellas-gateway"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-stream",
  "axum",
  "base64 0.22.1",
@@ -3232,6 +3231,7 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "url",
  "zstd",
 ]
 
@@ -3280,7 +3280,6 @@ dependencies = [
 name = "hellas-providers"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-stream",
  "base64 0.22.1",
  "futures",

@@ -5,7 +5,8 @@ use tauri::State;
 use tauri::ipc::Channel;
 
 use crate::dto::{
-    AppStatus, ExecutionEvent, GatewayAccess, HistoryEntry, ProviderConfig, RunRequest,
+    AppStatus, ExecutionEvent, GatewayAccess, GatewayConfig, HistoryEntry, ProviderConfig,
+    RunRequest,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -31,7 +32,7 @@ pub async fn set_provider_enabled(
 pub async fn set_gateway_enabled(
     state: State<'_, Arc<AppState>>,
     enabled: bool,
-    config: Option<RunRequest>,
+    config: Option<GatewayConfig>,
 ) -> ApiResult<AppStatus> {
     state
         .set_gateway_enabled(enabled, config)

@@ -58,14 +58,44 @@ pub struct AppStatus {
 #[serde(rename_all = "camelCase")]
 pub struct RunRequest {
     pub kind: RunKind,
-    pub target: WorkTarget,
     pub input: String,
+    #[serde(flatten)]
+    pub client: WorkClientConfig,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct WorkClientConfig {
+    pub target: WorkTarget,
     #[serde(default)]
     pub assurance: AssuranceInput,
     #[serde(default)]
     pub apple_app_id: String,
     #[serde(default)]
     pub apple_cd_hashes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum GatewayConfig {
+    Responses {
+        #[serde(flatten)]
+        client: WorkClientConfig,
+    },
+    Http {
+        paid_pool_path: String,
+        http_routes_path: String,
+        assurance: AssuranceInput,
+        zdr: bool,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

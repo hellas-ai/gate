@@ -149,6 +149,19 @@ then choose Provision paid offer. Copy the returned `provider`, `bond` and
 funding. Provisioning uses Gate's attested enrollment and its existing settlement
 identity; it reserves the staked coins in the provider journal before exporting.
 
+### HTTP gateway
+
+Gateway offers two protocols. Responses uses the selected authorized or paid
+Work target. HTTP uses a paid pool file and an HTTP routes file in the format
+from `../hellas/docs/paid-gateway.md`, and forwards the configured HTTP routes
+through that pool. Both listeners bind loopback and require the displayed bearer.
+A missing or invalid pool leaves the listener stopped.
+
+HTTP archives request and response bodies under Gate's private `gateway-archive`
+directory by default. Enable “Do not archive request or response bodies” to use
+ZDR. Gateway configuration is retained when stopped; provider credentials remain
+at upstream egress and never become gateway credentials.
+
 ### HTTPS resources
 
 Serve accepts an optional HTTPS routes JSON array beside the OpenAI API key.

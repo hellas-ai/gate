@@ -11,7 +11,7 @@
   };
 
   outputs = { nixpkgs, rust-overlay, flake-utils, ... }:
-    flake-utils.lib.eachDefaultSystem (system:
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (system:
       let
         pkgs = import nixpkgs {
           inherit system;
@@ -48,6 +48,10 @@
             export CARGO_TARGET_DIR="''${CARGO_TARGET_DIR:-$PWD/target}"
           '' + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
             export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+            # Native archives must use the same LLVM as Xcode's linker.
+            export CC=/usr/bin/clang
+            export CXX=/usr/bin/clang++
+            export AR=/usr/bin/ar
             export SDKROOT="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
             export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/usr/bin/clang
             export CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER=/usr/bin/clang

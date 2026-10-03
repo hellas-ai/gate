@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(policies.len(), 2);
         assert_eq!(policies[0].name, "responses");
         assert_eq!(policies[1].https.as_ref(), Some(&template));
-        provider.shutdown().await;
+        provider.shutdown().await.unwrap();
         assert!(
             !directory.path().join("chain").exists(),
             "authorized-only provider starts no chain node"
