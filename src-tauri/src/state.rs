@@ -806,7 +806,7 @@ mod tests {
     async fn invalid_http_pool_exposes_no_listener_and_retains_configuration() {
         let directory = tempfile::tempdir().unwrap();
         let routes = directory.path().join("routes.json");
-        std::fs::write(&routes, "{}").unwrap();
+        std::fs::write(&routes, r#"{"service":"http","method":"fetch"}"#).unwrap();
         let state = AppState::open(directory.path()).unwrap();
         let config = GatewayConfig::Http {
             paid_pool_path: directory
@@ -818,7 +818,11 @@ mod tests {
             assurance: AssuranceInput::ProducerSigned,
             zdr: true,
         };
-        assert!(state.set_gateway_enabled(true, Some(config)).await.is_err());
+        let error = state
+            .set_gateway_enabled(true, Some(config))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("missing-pool.json"), "{error}");
         assert!(matches!(
             state.status().await.gateway.state,
             ServiceState::Failed
