@@ -60,7 +60,7 @@ impl History {
         statement.bind_text(3, &format!("{:?}", request.kind))?;
         statement.bind_text(
             4,
-            &hellas_rpc::ContentId::hash(serde_json::to_string(&request.target)?.as_bytes())
+            &hellas_rpc::ContentId::hash(serde_json::to_string(&request.client.target)?.as_bytes())
                 .to_string(),
         )?;
         statement.bind_text(5, &request_json)?;
@@ -367,14 +367,16 @@ mod tests {
     fn request() -> RunRequest {
         RunRequest {
             kind: RunKind::Fetch,
-            target: crate::dto::WorkTarget::Authorized {
-                offer: "fixture-offer".into(),
-                resource: "responses".into(),
-            },
             input: "hello".into(),
-            assurance: AssuranceInput::ProducerSigned,
-            apple_app_id: String::new(),
-            apple_cd_hashes: Vec::new(),
+            client: crate::dto::WorkClientConfig {
+                target: crate::dto::WorkTarget::Authorized {
+                    offer: "fixture-offer".into(),
+                    resource: "responses".into(),
+                },
+                assurance: AssuranceInput::ProducerSigned,
+                apple_app_id: String::new(),
+                apple_cd_hashes: Vec::new(),
+            },
         }
     }
 

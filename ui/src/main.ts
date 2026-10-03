@@ -4,6 +4,7 @@ import type {
   AppStatus,
   ExecutionEvent,
   GatewayAccess,
+  GatewayConfig,
   HistoryEntry,
   ProviderConfig,
   RunKind,
@@ -141,6 +142,20 @@ function renderService(content: HTMLElement, service: "provider" | "gateway"): v
       if (target) target.innerHTML = `<p class="muted">Copy each Offer to its contact. Import within five minutes; export again to renew.</p>` + offers.map((item) => `<label>Contact ${escapeHtml(item.contact)}<textarea rows="3" readonly>${escapeHtml(item.offer)}</textarea></label>`).join("");
     } catch (error) { window.alert(errorMessage(error)); }
   });
+  const protocol = content.querySelector<HTMLSelectElement>("#gateway-kind");
+  if (protocol) {
+    protocol.value = localStorage.getItem("gate.gateway-kind") ?? "responses";
+    const assurance = content.querySelector<HTMLSelectElement>("#gateway-http-assurance");
+    if (assurance) assurance.value = localStorage.getItem("gate.http-assurance") ?? "appleAppAttest";
+    const refreshProtocol = (): void => {
+      for (const kind of ["responses", "http"]) {
+        const fields = content.querySelector<HTMLElement>(`#gateway-${kind}`);
+        if (fields) fields.hidden = protocol.value !== kind;
+      }
+    };
+    protocol.addEventListener("change", refreshProtocol);
+    refreshProtocol();
+  }
   content.querySelector<HTMLButtonElement>("#toggle")?.addEventListener("click", async () => {
     try {
       const running = status?.[service].state === "running";
@@ -199,15 +214,34 @@ function providerConfig(): ProviderConfig {
 
 function gatewayForm(): string {
   return `<section class="panel"><div class="panel-title">Local access</div>
-    ${offerForm("gateway-")}
+    <label>Protocol<select id="gateway-kind"><option value="responses">Responses</option><option value="http">HTTP</option></select></label>
+    <div id="gateway-responses">${offerForm("gateway-")}</div>
+    <div id="gateway-http" hidden>
+      <label>Paid pool file<input id="gateway-http-pool" value="${escapeHtml(localStorage.getItem("gate.http-pool") ?? "")}" /></label>
+      <label>HTTP routes file<input id="gateway-http-routes" value="${escapeHtml(localStorage.getItem("gate.http-routes") ?? "")}" /></label>
+      <label>Provider assurance<select id="gateway-http-assurance"><option value="appleAppAttest">Apple App Attest</option><option value="producerSigned">Producer signed</option></select></label>
+      <label><input id="gateway-zdr" type="checkbox" ${localStorage.getItem("gate.zdr") === "true" ? "checked" : ""} /> Do not archive request or response bodies</label>
+    </div>
     <div class="field-row"><label>Bind address<input value="127.0.0.1 (ephemeral port)" readonly /></label>
-    <label>Backend<input value="Verified sealed Fetch Responses" readonly /></label></div>
+    </div>
     <p class="muted">A fresh bearer is generated for each running instance.</p>
     ${gatewayAccess ? `<div class="definition"><div><span>Base URL</span><code>${escapeHtml(gatewayAccess.address)}</code></div><div><span>Bearer</span><code>${escapeHtml(gatewayAccess.bearer)}</code></div></div>` : ""}</section>`;
 }
 
-function gatewayConfig(): RunRequest {
-  return { ...offerConfig("gateway-"), kind: "fetch", input: "{}" };
+function gatewayConfig(): GatewayConfig {
+  localStorage.setItem("gate.gateway-kind", value("#gateway-kind"));
+  if (value("#gateway-kind") === "http") {
+    const paidPoolPath = value("#gateway-http-pool");
+    const httpRoutesPath = value("#gateway-http-routes");
+    const assurance = value("#gateway-http-assurance") === "producerSigned" ? "producerSigned" : "appleAppAttest";
+    const zdr = document.querySelector<HTMLInputElement>("#gateway-zdr")?.checked ?? false;
+    localStorage.setItem("gate.http-pool", paidPoolPath);
+    localStorage.setItem("gate.http-routes", httpRoutesPath);
+    localStorage.setItem("gate.http-assurance", assurance);
+    localStorage.setItem("gate.zdr", String(zdr));
+    return { kind: "http", paidPoolPath, httpRoutesPath, assurance, zdr };
+  }
+  return { ...offerConfig("gateway-"), kind: "responses" };
 }
 
 function offerForm(prefix: string): string {

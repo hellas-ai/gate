@@ -19,8 +19,8 @@ use tokio::sync::{Mutex, OnceCell, RwLock};
 
 use crate::apple;
 use crate::dto::{
-    AppStatus, AssuranceInput, GatewayAccess, IdentityStatus, ProviderConfig, RunKind, RunRequest,
-    ServiceState, ServiceStatus, WorkTarget,
+    AppStatus, AssuranceInput, GatewayAccess, GatewayConfig, IdentityStatus, ProviderConfig,
+    RunKind, RunRequest, ServiceState, ServiceStatus, WorkClientConfig, WorkTarget,
 };
 use crate::history::History;
 use crate::identity;
@@ -41,13 +41,14 @@ struct RuntimeStatus {
     gateway: ServiceStatus,
     gateway_access: Option<GatewayAccess>,
     gateway_handle: Option<hellas_sdk::gateway::GatewayHandle>,
-    gateway_config: Option<RunRequest>,
+    gateway_config: Option<GatewayConfig>,
 }
 
 pub struct AppState {
     pub history: History,
     socket_path: PathBuf,
     counter_directory: PathBuf,
+    archive_directory: PathBuf,
     identity: hellas_sdk::ClientIdentity,
     chain: crate::chain::ChainNode,
     #[cfg(target_os = "macos")]
@@ -70,6 +71,7 @@ impl AppState {
             history: History::open(&data_dir.join("history.sqlite3"))?,
             socket_path: data_dir.join("gate.sock"),
             counter_directory: data_dir.join("apple-assertion-counters"),
+            archive_directory: data_dir.join("gateway-archive"),
             identity,
             chain: crate::chain::ChainNode::new(data_dir.join("chain")),
             #[cfg(target_os = "macos")]
@@ -158,8 +160,14 @@ impl AppState {
                 };
                 runtime.provider_handle.take()
             };
-            if let Some(handle) = handle {
-                handle.shutdown().await;
+            if let Some(handle) = handle
+                && let Err(error) = handle.shutdown().await
+            {
+                self.runtime.write().await.provider = ServiceStatus {
+                    state: ServiceState::Failed,
+                    detail: error.to_string(),
+                };
+                return Err(error.into());
             }
             self.runtime.write().await.provider = stopped("Stopped by user");
             return Ok(self.status().await);
@@ -243,7 +251,7 @@ impl AppState {
     pub async fn set_gateway_enabled(
         &self,
         enabled: bool,
-        config: Option<RunRequest>,
+        config: Option<GatewayConfig>,
     ) -> anyhow::Result<AppStatus> {
         let _lifecycle = self.lifecycle.lock().await;
         anyhow::ensure!(
@@ -282,25 +290,11 @@ impl AppState {
                 .clone()
                 .context("configure a trusted Fetch provider before starting the gateway")?
         };
-        let target = self.client_for(&config).await?;
-        anyhow::ensure!(
-            target.environment == hellas_rpc::FetchEnvironment::OpenAiResponses.manifest_id(),
-            "the Responses gateway requires an OpenAI Responses resource"
-        );
-        let options = hellas_gateway::FetchGatewayOptions {
-            host: "127.0.0.1".into(),
-            port: Some(0),
-            provider: target.provider,
-            service: target.service,
-            method: target.method,
-            request_overrides: Default::default(),
-            work: target.backend,
-        };
         self.runtime.write().await.gateway = ServiceStatus {
             state: ServiceState::Starting,
             detail: "Binding a private loopback endpoint".into(),
         };
-        match hellas_gateway::start_fetch(options).await {
+        match self.start_gateway(&config).await {
             Ok(handle) => {
                 let access = GatewayAccess {
                     address: format!("http://{}", handle.address()),
@@ -309,7 +303,7 @@ impl AppState {
                 let mut runtime = self.runtime.write().await;
                 runtime.gateway = ServiceStatus {
                     state: ServiceState::Running,
-                    detail: format!("Responses endpoint at {}/v1/responses", access.address),
+                    detail: format!("Gateway at {}", access.address),
                 };
                 runtime.gateway_access = Some(access);
                 runtime.gateway_handle = Some(handle);
@@ -323,6 +317,77 @@ impl AppState {
                     detail: error.to_string(),
                 };
                 Err(error)
+            }
+        }
+    }
+
+    async fn start_gateway(
+        &self,
+        config: &GatewayConfig,
+    ) -> anyhow::Result<hellas_sdk::gateway::GatewayHandle> {
+        match config {
+            GatewayConfig::Responses { client } => {
+                let target = self.client_for(client).await?;
+                anyhow::ensure!(
+                    target.environment
+                        == hellas_rpc::FetchEnvironment::OpenAiResponses.manifest_id(),
+                    "the Responses gateway requires an OpenAI Responses resource"
+                );
+                let options = hellas_gateway::FetchGatewayOptions {
+                    host: "127.0.0.1".into(),
+                    port: Some(0),
+                    provider: target.provider,
+                    service: target.service,
+                    method: target.method,
+                    request_overrides: Default::default(),
+                    work: target.backend,
+                };
+
+                Ok(hellas_gateway::start_fetch(options).await?)
+            }
+            GatewayConfig::Http {
+                paid_pool_path,
+                http_routes_path,
+                assurance: required,
+                zdr,
+            } => {
+                let bytes = hellas_private::read_bounded_regular_file(
+                    Path::new(http_routes_path),
+                    4 << 20,
+                )?;
+                let routes = serde_json::from_slice(&bytes).context("invalid HTTP routes")?;
+                let options = hellas_sdk::paid_gateway::load_pool_options(
+                    Path::new(paid_pool_path),
+                    assurance(*required),
+                )?;
+                let entry = options
+                    .providers
+                    .first()
+                    .context("paid pool has no providers")?;
+                let node = self.chain.get(&entry.config).await?;
+                let paid = hellas_sdk::paid_gateway::PaidGateway::open(
+                    options,
+                    self.identity.clone(),
+                    node,
+                )
+                .await?;
+                Ok(
+                    hellas_sdk::gateway::start_http(hellas_sdk::gateway::HttpGatewayOptions {
+                        config: routes,
+                        paid,
+                        archive: hellas_sdk::gateway::ArchiveOptions {
+                            directory: self.archive_directory.clone(),
+                            zdr: *zdr,
+                        },
+                        host: "127.0.0.1".into(),
+                        port: Some(0),
+                        bearer_token_file: None,
+                        allow_remote: false,
+                        wrap: None,
+                        wrap_args: Vec::new(),
+                    })
+                    .await?,
+                )
             }
         }
     }
@@ -346,19 +411,20 @@ impl AppState {
             )
         };
         let client = self.client.lock().await.take();
-        let result = if let Some(gateway) = gateway {
-            gateway.shutdown().await
+        let gateway_result = if let Some(gateway) = gateway {
+            gateway.shutdown().await.map_err(anyhow::Error::from)
+        } else if let Some((_, client)) = client {
+            client.backend.drain().await.map_err(anyhow::Error::from)
         } else {
-            if let Some((_, client)) = client {
-                client.backend.drain().await;
-            }
             Ok(())
         };
-        if let Some(provider) = provider {
-            provider.shutdown().await;
-        }
-        self.chain.shutdown().await?;
-        result?;
+        let provider_result = if let Some(provider) = provider {
+            provider.shutdown().await.map_err(anyhow::Error::from)
+        } else {
+            Ok(())
+        };
+        let chain_result = self.chain.shutdown().await;
+        gateway_result.and(provider_result).and(chain_result)?;
         Ok(true)
     }
 
@@ -385,7 +451,11 @@ impl AppState {
         request: &RunRequest,
     ) -> anyhow::Result<hellas_gateway::WorkOutputStream<hellas_rpc::output::OutputEvent>> {
         let _lifecycle = self.lifecycle.lock().await;
-        let target = self.client_for(request).await?;
+        anyhow::ensure!(
+            matches!(request.kind, RunKind::Fetch),
+            "select a Fetch target"
+        );
+        let target = self.client_for(&request.client).await?;
         Ok(target.backend.fetch(WorkFetchRequest {
             provider: target.provider,
             service: target.service,
@@ -394,12 +464,9 @@ impl AppState {
         })?)
     }
 
-    async fn client_for(&self, request: &RunRequest) -> anyhow::Result<ClientTarget> {
+    async fn client_for(&self, request: &WorkClientConfig) -> anyhow::Result<ClientTarget> {
         anyhow::ensure!(!self.runtime.read().await.stopping, "Gate is shutting down");
-        anyhow::ensure!(
-            matches!(request.kind, RunKind::Fetch),
-            "select a Fetch target"
-        );
+
         let key = serde_json::to_string(&(
             &request.target,
             &request.assurance,
@@ -417,7 +484,7 @@ impl AppState {
             "stop the gateway before switching target or trust policy"
         );
         if let Some((_, previous)) = client.take() {
-            previous.backend.drain().await;
+            previous.backend.drain().await?;
         }
         let target = match &request.target {
             WorkTarget::Authorized {
@@ -546,7 +613,11 @@ impl AppState {
         .await
     }
 
-    fn pinned_offer(&self, request: &RunRequest, record: &str) -> anyhow::Result<PinnedOffer> {
+    fn pinned_offer(
+        &self,
+        request: &WorkClientConfig,
+        record: &str,
+    ) -> anyhow::Result<PinnedOffer> {
         let bytes = decode_record(
             record,
             hellas_rpc::protocol::work_grant::records::MAX_OFFER_BYTES,
@@ -659,4 +730,42 @@ fn paid_route(
         );
     }
     Ok(route)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn invalid_http_pool_exposes_no_listener_and_retains_configuration() {
+        let directory = tempfile::tempdir().unwrap();
+        let routes = directory.path().join("routes.json");
+        std::fs::write(&routes, "{}").unwrap();
+        let state = AppState::open(directory.path()).unwrap();
+        let config = GatewayConfig::Http {
+            paid_pool_path: directory
+                .path()
+                .join("missing-pool.json")
+                .display()
+                .to_string(),
+            http_routes_path: routes.display().to_string(),
+            assurance: AssuranceInput::ProducerSigned,
+            zdr: true,
+        };
+        assert!(state.set_gateway_enabled(true, Some(config)).await.is_err());
+        assert!(matches!(
+            state.status().await.gateway.state,
+            ServiceState::Failed
+        ));
+        assert!(state.gateway_access().await.is_none());
+        assert!(state.runtime.read().await.gateway_handle.is_none());
+        assert!(matches!(
+            state.runtime.read().await.gateway_config,
+            Some(GatewayConfig::Http { zdr: true, .. })
+        ));
+        assert!(state.set_gateway_enabled(true, None).await.is_err());
+        assert!(state.shutdown().await.unwrap());
+        assert!(!state.shutdown().await.unwrap());
+        assert!(!directory.path().join("chain").exists());
+    }
 }

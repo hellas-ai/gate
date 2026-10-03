@@ -15,3 +15,6 @@ export type { ServiceStatus } from "./generated/ServiceStatus.ts";
 
 export type { ProviderOffer } from "./generated/ProviderOffer.ts";
 export type { WorkTarget } from "./generated/WorkTarget.ts";
+
+export type { GatewayConfig } from "./generated/GatewayConfig.ts";
+export type { WorkClientConfig } from "./generated/WorkClientConfig.ts";

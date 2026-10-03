@@ -5,6 +5,7 @@ import type {
   AppStatus,
   ExecutionEvent,
   GatewayAccess,
+  GatewayConfig,
   HistoryEntry,
   ProviderConfig,
   ProviderOffer,
@@ -52,7 +53,7 @@ export const api = {
   exportOffers: (): Promise<ProviderOffer[]> => call("export_offers"),
   setProvider: (enabled: boolean, config?: ProviderConfig): Promise<AppStatus> =>
     call("set_provider_enabled", { enabled, config }),
-  setGateway: (enabled: boolean, config?: RunRequest): Promise<AppStatus> =>
+  setGateway: (enabled: boolean, config?: GatewayConfig): Promise<AppStatus> =>
     call("set_gateway_enabled", { enabled, config }),
   gatewayAccess: (): Promise<GatewayAccess> => call("get_gateway_access"),
   history: (limit = 100): Promise<HistoryEntry[]> => call("list_history", { limit }),

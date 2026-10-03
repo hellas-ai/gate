@@ -25,6 +25,7 @@ base64 = "0.22"
 hellas-gateway = { path = "../../hellas/crates/gateway" }
 futures = "0.3"
 hellas-attestation = { path = "../../hellas/crates/attestation", features = ["apple-app-attest"] }
+hellas-private = { path = "../../hellas/crates/private" }
 hellas-rpc = { path = "../../hellas/crates/rpc", features = ["host-control", "execute", "fetch", "work"] }
 hellas-sdk = { path = "../../hellas/crates/sdk", default-features = false, features = ["apple-verifier", "client", "grant-gateway", "local-control", "grant-provider", "paid-gateway", "paid-provider"] }
 hellas-wire = { path = "../../hellas/crates/wire", features = ["unix"] }
