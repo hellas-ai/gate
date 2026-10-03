@@ -39,3 +39,21 @@ App Attest keys are created and retained by Apple's service. Gate persists only
 the opaque key identifier and the canonical Hellas enrollment bundle in its
 private application data directory. A persisted enrollment is fully verified
 against the current Gate transport/caller identity before it is reused.
+
+## Native grant-session smoke test
+
+`state::tests::provisioned_provider_opens_pinned_grant_sessions_after_restart`
+is ignored by normal tests because it calls Apple's enrollment service. Build
+Gate's library test executable, place it at `Contents/MacOS/hellas-gate` in a
+copy of the app bundle, and sign that bundle with the same provisioning profile
+and hardened-runtime entitlements as Gate. Set `HELLAS_GATE_TEST_APP_ID` to the
+profile's application identifier and `HELLAS_GATE_TEST_CDHASH` to the signed
+test executable's full SHA-256 CodeDirectory hash. Run that test with `--ignored`.
+It opens an authenticated remote grant session, restarts the provider, and opens
+another session using the persisted enrollment. It uses temporary state and
+makes no requests to the configured OpenAI backend.
+
+The SDK test
+`provider::grant_tests::contact_offer_open_tls_responses_gateway_and_revocation_preserve_quota`
+separately exercises real local TLS requests, verified responses, quota exhaustion,
+restart and revocation on each native platform without external API credentials.
