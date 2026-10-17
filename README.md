@@ -4,7 +4,8 @@ Gate is the small native desktop host for Hellas. It is one Tauri process and
 one vanilla TypeScript UI. There is no companion daemon, internal HTTP control
 plane, browser-side Rust, or second implementation of the Hellas protocol.
 
-The native process wires together the reusable pieces in `../hellas`:
+The native process wires together the reusable pieces in
+[Hellas](https://github.com/hellas-ai/hellas):
 
 - a verified sealed-Fetch client with a stable caller and transport identity;
 - an Apple App Attest provider for OpenAI Responses and HTTPS resources;
@@ -33,21 +34,11 @@ Rust and frontend build output stay under this worktree’s `target/` directory.
 Set `CARGO_TARGET_DIR` to override the Rust output location; the flake, Makefile,
 and CI all respect it.
 
-Gate uses local path dependencies from a sibling Hellas checkout. From a fresh
-Gate clone, prepare the exact published revision recorded in `.hellas-revision`:
+Cargo fetches Hellas from the Git revision pinned in `src-tauri/Cargo.toml`.
+To update Hellas, change its dependency revisions together, reconcile
+the desktop SDK calls, and regenerate `Cargo.lock`.
 
-```sh
-git clone https://github.com/hellas-ai/hellas.git ../hellas
-git -C ../hellas checkout --detach "$(cat .hellas-revision)"
-```
-
-If `../hellas` already contains your work, keep it intact and create a separate
-parent directory with sibling `gate` and `hellas` checkouts for the pinned build.
-CI uses the same revision and layout. To update Hellas deliberately, change
-`.hellas-revision`, reconcile the desktop SDK calls, and regenerate `Cargo.lock`
-against that checkout.
-
-Then run:
+From a Gate checkout, run:
 
 ```sh
 nix develop
@@ -107,7 +98,8 @@ assets. Gate's provider configuration owns its contact grants.
 Choose Paid in Run or Gateway, provide an absolute pool-file path and select a
 provider endpoint ID from that pool. For an open HTTPS policy, also enter the
 provider's Fetch service and method; a sealed policy supplies them. The pool uses the SDK's `load_pool_options`
-format in `../hellas/docs/paid-gateway.md`: provider work config, client journal,
+format in [Hellas's paid gateway guide](https://github.com/hellas-ai/hellas/blob/master/docs/paid-gateway.md):
+provider work config, client journal,
 bond, payment coins, omission bond and mandatory `provider_genesis`. Use the
 signed offer object exported by provisioning for `provider_genesis`; Gate derives
 the pin and verifies Open before submitting work. Apple app ID and CDHashes for
@@ -153,7 +145,8 @@ identity; it reserves the staked coins in the provider journal before exporting.
 
 Gateway offers two protocols. Responses uses the selected authorized or paid
 Work target. HTTP uses a paid pool file and an HTTP routes file in the format
-from `../hellas/docs/paid-gateway.md`, and forwards the configured HTTP routes
+from [Hellas's paid gateway guide](https://github.com/hellas-ai/hellas/blob/master/docs/paid-gateway.md),
+and forwards the configured HTTP routes
 through that pool. Both listeners bind loopback and require the displayed bearer.
 A missing or invalid pool leaves the listener stopped.
 

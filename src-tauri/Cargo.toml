@@ -22,13 +22,13 @@ required-features = ["desktop"]
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
-hellas-gateway = { path = "../../hellas/crates/gateway" }
 futures = "0.3"
-hellas-attestation = { path = "../../hellas/crates/attestation", features = ["apple-app-attest"] }
-hellas-private = { path = "../../hellas/crates/private" }
-hellas-rpc = { path = "../../hellas/crates/rpc", features = ["host-control", "execute", "fetch", "work"] }
-hellas-sdk = { path = "../../hellas/crates/sdk", default-features = false, features = ["apple-verifier", "client", "grant-gateway", "local-control", "grant-provider", "paid-gateway", "paid-provider"] }
-hellas-wire = { path = "../../hellas/crates/wire", features = ["unix"] }
+hellas-attestation = { git = "https://github.com/hellas-ai/hellas", rev = "9c342ba19bbcef6519c8065a19b0af76dc42f77b", features = ["apple-app-attest"] }
+hellas-gateway = { git = "https://github.com/hellas-ai/hellas", rev = "9c342ba19bbcef6519c8065a19b0af76dc42f77b" }
+hellas-private = { git = "https://github.com/hellas-ai/hellas", rev = "9c342ba19bbcef6519c8065a19b0af76dc42f77b" }
+hellas-rpc = { git = "https://github.com/hellas-ai/hellas", rev = "9c342ba19bbcef6519c8065a19b0af76dc42f77b", features = ["host-control", "execute", "fetch", "work"] }
+hellas-sdk = { git = "https://github.com/hellas-ai/hellas", rev = "9c342ba19bbcef6519c8065a19b0af76dc42f77b", default-features = false, features = ["apple-verifier", "client", "grant-gateway", "local-control", "grant-provider", "paid-gateway", "paid-provider"] }
+hellas-wire = { git = "https://github.com/hellas-ai/hellas", rev = "9c342ba19bbcef6519c8065a19b0af76dc42f77b", features = ["unix"] }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
