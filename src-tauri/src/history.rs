@@ -1,18 +1,20 @@
-use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::ffi::{CStr, CString, c_int};
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use libsqlite3_sys::{
+    SQLITE_DONE, SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_FULLMUTEX, SQLITE_OPEN_READWRITE,
+    SQLITE_ROW, SQLITE_TRANSIENT, sqlite3, sqlite3_bind_int64, sqlite3_bind_text,
+    sqlite3_busy_timeout, sqlite3_changes, sqlite3_close, sqlite3_column_int64,
+    sqlite3_column_text, sqlite3_errmsg, sqlite3_exec, sqlite3_finalize, sqlite3_free,
+    sqlite3_open_v2, sqlite3_prepare_v2, sqlite3_step, sqlite3_stmt,
+};
+
 use crate::dto::{HistoryEntry, RunRequest};
 
 static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
-const SQLITE_OK: c_int = 0;
-const SQLITE_ROW: c_int = 100;
-const SQLITE_DONE: c_int = 101;
-const SQLITE_OPEN_READWRITE: c_int = 0x0000_0002;
-const SQLITE_OPEN_CREATE: c_int = 0x0000_0004;
-const SQLITE_OPEN_FULLMUTEX: c_int = 0x0001_0000;
 
 pub struct History {
     path: PathBuf,
@@ -134,7 +136,7 @@ impl History {
     }
 }
 
-struct Database(*mut Sqlite3);
+struct Database(*mut sqlite3);
 
 impl Database {
     fn open(path: &Path) -> anyhow::Result<Self> {
@@ -213,7 +215,7 @@ impl Drop for Database {
 
 struct Statement<'a> {
     database: &'a Database,
-    statement: *mut Sqlite3Statement,
+    statement: *mut sqlite3_stmt,
 }
 
 impl Statement<'_> {
@@ -225,7 +227,7 @@ impl Statement<'_> {
                 index,
                 bytes.as_ptr().cast(),
                 bytes.len().try_into()?,
-                sqlite_transient(),
+                SQLITE_TRANSIENT(),
             )
         };
         self.check(result, "binding history text")
@@ -283,12 +285,7 @@ impl Drop for Statement<'_> {
     }
 }
 
-fn sqlite_transient() -> Option<unsafe extern "C" fn(*mut c_void)> {
-    // SQLite reserves the all-ones destructor value to mean "copy now".
-    unsafe { std::mem::transmute::<isize, _>(-1) }
-}
-
-fn sqlite_error(database: *mut Sqlite3) -> String {
+fn sqlite_error(database: *mut sqlite3) -> String {
     if database.is_null() {
         return "unknown SQLite error".into();
     }
@@ -304,62 +301,6 @@ fn now_ms() -> i64 {
         .as_millis()
         .try_into()
         .unwrap_or(i64::MAX)
-}
-
-#[repr(C)]
-struct Sqlite3 {
-    _private: [u8; 0],
-}
-
-#[repr(C)]
-struct Sqlite3Statement {
-    _private: [u8; 0],
-}
-
-#[cfg(windows)]
-use libsqlite3_sys as _;
-
-#[cfg_attr(not(windows), link(name = "sqlite3"))]
-unsafe extern "C" {
-    fn sqlite3_open_v2(
-        filename: *const c_char,
-        database: *mut *mut Sqlite3,
-        flags: c_int,
-        vfs: *const c_char,
-    ) -> c_int;
-    fn sqlite3_close(database: *mut Sqlite3) -> c_int;
-    fn sqlite3_busy_timeout(database: *mut Sqlite3, milliseconds: c_int) -> c_int;
-    fn sqlite3_errmsg(database: *mut Sqlite3) -> *const c_char;
-    fn sqlite3_exec(
-        database: *mut Sqlite3,
-        sql: *const c_char,
-        callback: Option<
-            unsafe extern "C" fn(*mut c_void, c_int, *mut *mut c_char, *mut *mut c_char) -> c_int,
-        >,
-        context: *mut c_void,
-        error: *mut *mut c_char,
-    ) -> c_int;
-    fn sqlite3_free(value: *mut c_void);
-    fn sqlite3_prepare_v2(
-        database: *mut Sqlite3,
-        sql: *const c_char,
-        sql_bytes: c_int,
-        statement: *mut *mut Sqlite3Statement,
-        tail: *mut *const c_char,
-    ) -> c_int;
-    fn sqlite3_finalize(statement: *mut Sqlite3Statement) -> c_int;
-    fn sqlite3_bind_text(
-        statement: *mut Sqlite3Statement,
-        index: c_int,
-        value: *const c_char,
-        bytes: c_int,
-        destructor: Option<unsafe extern "C" fn(*mut c_void)>,
-    ) -> c_int;
-    fn sqlite3_bind_int64(statement: *mut Sqlite3Statement, index: c_int, value: i64) -> c_int;
-    fn sqlite3_step(statement: *mut Sqlite3Statement) -> c_int;
-    fn sqlite3_column_text(statement: *mut Sqlite3Statement, column: c_int) -> *const u8;
-    fn sqlite3_column_int64(statement: *mut Sqlite3Statement, column: c_int) -> i64;
-    fn sqlite3_changes(database: *mut Sqlite3) -> c_int;
 }
 
 #[cfg(test)]
