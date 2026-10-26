@@ -1587,17 +1587,18 @@ async fn revocation_during_real_upstream_work_prevents_verified_delivery_and_fut
         .unwrap()
         .unwrap()
         .unwrap();
-    let events = events.lock().unwrap();
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, ExecutionEvent::Failed { .. }))
-    );
-    assert!(!events.iter().any(|event| matches!(
-        event,
-        ExecutionEvent::Verification { .. } | ExecutionEvent::Finished { .. }
-    )));
-    drop(events);
+    {
+        let events = events.lock().unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ExecutionEvent::Failed { .. }))
+        );
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            ExecutionEvent::Verification { .. } | ExecutionEvent::Finished { .. }
+        )));
+    }
     assert_eq!(
         bob.history
             .list(10)
