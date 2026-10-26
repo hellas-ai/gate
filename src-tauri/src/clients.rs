@@ -47,6 +47,9 @@ impl RetirableBackend {
         })?;
         Ok(use_backend(backend.as_ref()))
     }
+    fn is_active(&self) -> bool {
+        self.0.lock().is_ok_and(|held| held.is_some())
+    }
     async fn retire(&self) -> Result<(), hellas_gateway::WorkShutdownError> {
         let backend = self
             .0
@@ -151,11 +154,9 @@ impl Clients {
         let mut cache = self.cache.lock().await;
         if let Some(held) = cache.get(&key)
             && held.version == version
+            && held.target.backend.is_active()
         {
             return Ok(held.target.clone());
-        }
-        if let Some(held) = cache.remove(&key) {
-            held.target.backend.retire().await?;
         }
         let target = match &input.target {
             WorkTarget::Authorized {
@@ -237,6 +238,10 @@ impl Clients {
                     credential,
                     local: None,
                 });
+                // Refused candidate inputs leave the existing journal owner usable.
+                if let Some(held) = cache.remove(&key) {
+                    held.target.backend.retire().await?;
+                }
                 // Outgoing work has its own SDK-owned transport lifetime.
                 let transport = GrantTransport::remote(self.transport(local, &key).await?).await?;
                 let backend = GrantGateway::open(
@@ -330,12 +335,18 @@ impl Clients {
                     *service == selected.policy.service && *method == selected.policy.method,
                     "paid route differs from selected policy"
                 );
+                let provider_id: hellas_sdk::iroh::EndpointId = provider.parse()?;
                 let first = providers.first().context("paid pool is empty")?;
                 let chain = self.chain.get(&first.config).await?;
+                // Selection, all provider options and chain compatibility are checked
+                // before retiring any backend shared by this pool's callers.
+                if let Some(held) = cache.remove(&key) {
+                    held.target.backend.retire().await?;
+                }
                 let mut paid_cache = self.paid.lock().await;
                 if paid_cache
                     .get(pool_id)
-                    .is_some_and(|(held, _)| held != &pool_version)
+                    .is_some_and(|(held, backend)| held != &pool_version || !backend.is_active())
                     && let Some((_, backend)) = paid_cache.remove(pool_id)
                 {
                     backend.retire().await?;
@@ -364,7 +375,7 @@ impl Clients {
                 };
                 Target {
                     backend,
-                    provider: provider.parse()?,
+                    provider: provider_id,
                     service: service.clone(),
                     method: method.clone(),
                     presentation: selected.policy.presentation,

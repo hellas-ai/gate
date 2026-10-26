@@ -1234,6 +1234,45 @@ async fn saving_paid_pool_rebuilds_real_sdk_backend_with_current_settings() {
         original.backend.timeout(),
         std::time::Duration::from_secs(1)
     );
+    let approved = trust::list(directory.path()).unwrap().pop().unwrap();
+    trust::approve(
+        directory.path(),
+        TrustInput {
+            id: "alternate".into(),
+            expected_revision: 0,
+            genesis: approved.genesis,
+            apple: false,
+            environments: approved.environments,
+            app_id: String::new(),
+            cd_hashes: vec![],
+            reason: "Independent alternate policy".into(),
+        },
+    )
+    .unwrap();
+    let mut invalid = input.clone();
+    invalid.trust_policy = "alternate".into();
+    let failure = local.clients.target(&local, &invalid).await.err().unwrap();
+    assert!(failure.to_string().contains("trust policy must match"));
+    let retry = local.clients.target(&local, &input).await.unwrap();
+    assert!(
+        Arc::ptr_eq(&original, &retry),
+        "invalid selection must leave the original target cached and usable"
+    );
+    assert_eq!(
+        original.backend.timeout(),
+        std::time::Duration::from_secs(1)
+    );
+    drop(
+        original
+            .backend
+            .fetch(hellas_gateway::WorkFetchRequest {
+                provider: original.provider,
+                service: original.service.clone(),
+                method: original.method.clone(),
+                body: br#"{"model":"fixture","input":"hello","max_output_tokens":8}"#.to_vec(),
+            })
+            .expect("the real paid backend still admits a valid request"),
+    );
     pool.providers[0].timeout_seconds = 2;
     pool.providers[0].coins = vec![hex::encode([2; 32])];
     pool.providers[0].policy.fixed_price = 11;
