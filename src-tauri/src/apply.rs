@@ -17,8 +17,14 @@ pub struct Plan {
 enum Step {
     Contact(ContactInput),
     Provider(ProviderStep),
-    Resource { expected: u64, input: ResourceInput },
-    Retire { expected: u64, name: String },
+    Resources {
+        expected: u64,
+        inputs: Vec<ResourceInput>,
+    },
+    Retire {
+        expected: u64,
+        name: String,
+    },
     Share(ShareInput),
     GatewayKey(GatewayKeyInput),
     RevokeShare(String),
@@ -56,8 +62,15 @@ impl Step {
                     key,
                 } => format!("Remove named key {key} on {service}/{method}"),
             },
-            Self::Resource { input, .. } => {
-                format!("Activate resource {} through Work authority", input.name)
+            Self::Resources { inputs, .. } => {
+                format!(
+                    "Activate resource group {} through Work authority",
+                    inputs
+                        .iter()
+                        .map(|input| input.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
             }
             Self::Retire { name, .. } => {
                 format!("Pause allowances for {name} and retire its runtime catalogue entry")
@@ -273,8 +286,12 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
             .checked_add(1)
             .context("provider revision overflow")?;
     }
-    for (input, changed) in resources {
-        steps.push(Step::Resource { expected, input });
+    if !resources.is_empty() {
+        let changed = resources.iter().any(|(_, changed)| *changed);
+        steps.push(Step::Resources {
+            expected,
+            inputs: resources.into_iter().map(|(input, _)| input).collect(),
+        });
         if changed {
             expected = expected
                 .checked_add(1)
@@ -360,8 +377,8 @@ pub async fn execute_session(
                         .apply(session, step.expected, step.change, step.reference)
                         .await?;
                 }
-                Step::Resource { expected, input } => {
-                    provider_setup::configure_resource(local, session, expected, input).await?;
+                Step::Resources { expected, inputs } => {
+                    provider_setup::configure_resources(local, session, expected, inputs).await?;
                 }
                 Step::Retire { expected, name } => {
                     check_revision(local, expected)?;

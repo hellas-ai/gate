@@ -2359,3 +2359,130 @@ async fn late_resource_refusal_reports_catalogue_and_restart_then_reapply_activa
     bob.shutdown().await.unwrap();
     alice.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn same_route_openai_resources_switch_credential_as_one_validated_group() {
+    use hellas_sdk::work::model::grant::admin::{WorkControlCommand, WorkControlReply};
+    let directory = tempfile::tempdir().unwrap();
+    let secrets = tempfile::tempdir().unwrap();
+    let vault = Vault::fixture(secrets.path());
+    let app = AppState::with_vault(directory.path(), vault.clone())
+        .await
+        .unwrap();
+    app.initialize_software("Owner".into()).await.unwrap();
+    app.bind_provider(true).await.unwrap();
+    app.configure_provider(
+        0,
+        ProviderChange::Endpoint {
+            service: "openai".into(),
+            method: "responses".into(),
+            hosts: vec!["api.openai.com".into()],
+            allow_private_addresses: false,
+        },
+    )
+    .await
+    .unwrap();
+    app.configure_provider(
+        1,
+        ProviderChange::AddKey {
+            key: UpstreamKeyInput {
+                service: "openai".into(),
+                method: "responses".into(),
+                key: "old".into(),
+                origins: vec!["https://api.openai.com".into()],
+                paths: vec!["/v1/responses".into()],
+                methods: vec!["POST".into()],
+                header: "authorization".into(),
+                prefix: "Bearer ".into(),
+                secret: "fixture-old-key".into(),
+            },
+        },
+    )
+    .await
+    .unwrap();
+    app.set_provider(true).await.unwrap();
+    for (revision, name) in [(2, "small"), (3, "large")] {
+        app.configure_resource(
+            revision,
+            ResourceInput {
+                name: name.into(),
+                service: "openai".into(),
+                method: "responses".into(),
+                resource: ResourceKind::OpenAi {
+                    model: format!("fixture-{name}"),
+                    max_output_tokens: 64,
+                    credential: "old".into(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    }
+    vault.set("new-source", b"fixture-new-key").await.unwrap();
+    let view = app.provider_view().await.unwrap();
+    let mut desired = desired_https(view);
+    desired.upstreams = vec![DesiredUpstream {
+        service: "openai".into(),
+        method: "responses".into(),
+        hosts: vec!["api.openai.com".into()],
+        allow_private_addresses: false,
+        keys: vec![DesiredKey {
+            name: "new".into(),
+            origins: vec!["https://api.openai.com".into()],
+            paths: vec!["/v1/responses".into()],
+            methods: vec!["POST".into()],
+            header: "authorization".into(),
+            prefix: "Bearer ".into(),
+            secret_reference: "new-source".into(),
+        }],
+    }];
+    for input in &mut desired.resources {
+        if let ResourceKind::OpenAi { credential, .. } = &mut input.resource {
+            *credential = "new".into();
+        }
+    }
+    let preview = app.preview_apply(desired.clone()).await.unwrap();
+    assert_eq!(
+        preview
+            .steps
+            .iter()
+            .filter(|step| step.contains("resource group"))
+            .count(),
+        1
+    );
+    let report = app.apply_document(&preview.id).await.unwrap();
+    assert!(report.error.is_none(), "{:?}", report.error);
+    assert_eq!(report.provider_revision, 7);
+    assert_eq!(app.status().await.unwrap().provider.state, "running");
+    let view = app.provider_view().await.unwrap();
+    assert!(view.resources.iter().all(
+        |input| matches!(&input.resource,ResourceKind::OpenAi {credential,..} if credential=="new")
+    ));
+    assert_eq!(view.upstreams[0].keys.len(), 1);
+    assert_eq!(view.upstreams[0].keys[0].name, "new");
+    let local = app.local().await.unwrap();
+    let WorkControlReply::Catalogue(policies) = local
+        .session(false)
+        .await
+        .unwrap()
+        .work(WorkControlCommand::Catalogue)
+        .await
+        .unwrap()
+    else {
+        panic!("authority catalogue");
+    };
+    assert_eq!(policies.len(), 2);
+    assert!(policies.iter().all(|policy| policy.revision.0 == 2));
+    let bytes = std::fs::read(directory.path().join("provider-configuration.json")).unwrap();
+    let preview = app.preview_apply(desired).await.unwrap();
+    let again = app.apply_document(&preview.id).await.unwrap();
+    assert!(again.error.is_none());
+    assert!(again.applied.is_empty());
+    assert_eq!(again.provider_revision, report.provider_revision);
+    assert_eq!(again.authority_revision, report.authority_revision);
+    assert_eq!(
+        bytes,
+        std::fs::read(directory.path().join("provider-configuration.json")).unwrap()
+    );
+    app.shutdown().await.unwrap();
+}

@@ -141,41 +141,59 @@ impl Composition {
         })
     }
     /// A composition catalogue is not authority; WorkControl must still activate it.
-    pub fn catalogue(&self, expected: u64, input: ResourceInput) -> anyhow::Result<()> {
+    pub fn catalogue_many(&self, expected: u64, inputs: Vec<ResourceInput>) -> anyhow::Result<()> {
         let mut config = self.snapshot()?;
         ensure!(config.revision == expected, "provider revision conflict");
-        ensure!(
+        let mut names = std::collections::BTreeSet::new();
+        let mut changed = false;
+        for input in inputs {
+            ensure!(
+                names.insert(input.name.clone()),
+                "duplicate resource in one change group"
+            );
+            ensure!(
+                config
+                    .endpoints
+                    .contains_key(&route_id(&input.service, &input.method)),
+                "configure this endpoint first"
+            );
+            if config.resources.contains(&input) {
+                continue;
+            }
+            if let Some(old) = config
+                .resources
+                .iter()
+                .find(|resource| resource.name == input.name)
+            {
+                ensure!(
+                    old.service == input.service && old.method == input.method,
+                    "a resource cannot move to another upstream account; choose a new resource name"
+                );
+            }
+            let revision = config
+                .policy_revisions
+                .entry(input.name.clone())
+                .or_insert(0);
+            *revision = revision
+                .checked_add(1)
+                .context("resource revision overflow")?;
             config
-                .endpoints
-                .contains_key(&route_id(&input.service, &input.method)),
-            "configure this endpoint first"
-        );
-        if config.resources.iter().any(|r| r == &input) {
+                .resources
+                .retain(|resource| resource.name != input.name);
+            config.resources.push(input);
+            changed = true;
+        }
+        if !changed {
             return Ok(());
         }
-        if let Some(old) = config.resources.iter().find(|r| r.name == input.name) {
-            ensure!(
-                old.service == input.service && old.method == input.method,
-                "a resource cannot move to another upstream account; choose a new resource name"
-            );
-        }
-        config.revision = config
-            .revision
-            .checked_add(1)
-            .context("provider revision overflow")?;
-        let revision = config
-            .policy_revisions
-            .entry(input.name.clone())
-            .or_insert(0);
-        *revision = revision
-            .checked_add(1)
-            .context("resource revision overflow")?;
-        config.resources.retain(|r| r.name != input.name);
-        config.resources.push(input);
         ensure!(
             config.resources.len() <= 16,
             "at most 16 resources are supported"
         );
+        config.revision = config
+            .revision
+            .checked_add(1)
+            .context("provider revision overflow")?;
         self.validate(&config)?;
         self.publish(expected, config)
     }
@@ -710,6 +728,14 @@ pub async fn configure_resource(
     expected: u64,
     input: ResourceInput,
 ) -> anyhow::Result<ProviderView> {
+    configure_resources(local, session, expected, vec![input]).await
+}
+pub async fn configure_resources(
+    local: &LocalNode,
+    session: &crate::control::Session,
+    expected: u64,
+    inputs: Vec<ResourceInput>,
+) -> anyhow::Result<ProviderView> {
     use hellas_rpc::pb::host::{GetHostStatusRequest, SetMachineCapacityRequest};
     anyhow::ensure!(
         local.composition.view()?.revision == expected,
@@ -725,10 +751,14 @@ pub async fn configure_resource(
         status.provider.as_ref().is_some_and(|s| s.state == 2),
         "start the provider before administering resources"
     );
-    let name = input.name.clone();
-    session.track_local(format!("Publish resource catalogue {name}"), || {
-        local.composition.catalogue(expected, input)
-    })?;
+    let names = inputs
+        .iter()
+        .map(|input| input.name.clone())
+        .collect::<Vec<_>>();
+    session.track_local(
+        format!("Publish resource catalogue {}", names.join(", ")),
+        || local.composition.catalogue_many(expected, inputs),
+    )?;
     session.provider_state(false).await?;
     session
         .provider_state(true)
@@ -751,35 +781,37 @@ pub async fn configure_resource(
             )
             .await?;
     }
-    let policy = local.composition.policy(&name)?;
-    use hellas_sdk::work::model::grant::{admin::*, budget::*};
-    let account = BudgetNode::Account(policy.account);
-    if session
-        .work(WorkControlCommand::InspectBudget { node: account })
-        .await
-        .is_err()
-    {
-        session
-            .work(WorkControlCommand::ConfigureBudget {
-                definition: BudgetDef {
-                    node: account,
-                    parent: BudgetNode::Machine,
-                    revision: hellas_auth::authority::Revision(1),
-                    limits: vec![],
-                    max_in_flight: std::num::NonZeroU16::new(128)
-                        .context("invalid account capacity")?,
-                },
-            })
+    for name in names {
+        let policy = local.composition.policy(&name)?;
+        use hellas_sdk::work::model::grant::{admin::*, budget::*};
+        let account = BudgetNode::Account(policy.account);
+        if session
+            .work(WorkControlCommand::InspectBudget { node: account })
             .await
-            .context("configuring the upstream account budget")?;
-    }
-    let configured = session.work(WorkControlCommand::Catalogue).await?;
-    if !matches!(configured, WorkControlReply::Catalogue(ref entries) if entries.contains(&policy))
-    {
-        session
-            .work(WorkControlCommand::ConfigureResource { policy: name })
-            .await
-            .context("activating the resource in Work authority")?;
+            .is_err()
+        {
+            session
+                .work(WorkControlCommand::ConfigureBudget {
+                    definition: BudgetDef {
+                        node: account,
+                        parent: BudgetNode::Machine,
+                        revision: hellas_auth::authority::Revision(1),
+                        limits: vec![],
+                        max_in_flight: std::num::NonZeroU16::new(128)
+                            .context("invalid account capacity")?,
+                    },
+                })
+                .await
+                .context("configuring the upstream account budget")?;
+        }
+        let configured = session.work(WorkControlCommand::Catalogue).await?;
+        if !matches!(configured, WorkControlReply::Catalogue(ref entries) if entries.contains(&policy))
+        {
+            session
+                .work(WorkControlCommand::ConfigureResource { policy: name })
+                .await
+                .context("activating the resource in Work authority")?;
+        }
     }
     local.composition.view()
 }
