@@ -41,25 +41,24 @@ lacks a matching profile.
 Gate checks `DCAppAttestService` at runtime and reports unavailable when Apple
 rejects the build or machine. It does not fall back to a software root.
 
-App Attest keys are created and retained by Apple's service. Gate persists only
-the opaque key identifier and the canonical Hellas enrollment bundle in its
-private application data directory. A persisted enrollment is fully verified
-against the current Gate transport/caller identity before it is reused.
+App Attest keys are created and retained by Apple's service. Gate keeps the
+opaque key reference in its OS secret store and the canonical public enrollment
+in its private application data directory. Reuse verifies the enrollment against
+the installation's distinct node signer and transport key.
 
-## Native grant-session smoke test
+## Native acceptance
 
-`state::tests::provisioned_provider_opens_pinned_grant_sessions_after_restart`
-is ignored by normal tests because it calls Apple's enrollment service. Build
-Gate's library test executable, place it at `Contents/MacOS/hellas-gate` in a
-copy of the app bundle, and sign that bundle with the same provisioning profile
-and hardened-runtime entitlements as Gate. Set `HELLAS_GATE_TEST_APP_ID` to the
-profile's application identifier and `HELLAS_GATE_TEST_CDHASH` to the signed
-test executable's full SHA-256 CodeDirectory hash. Run that test with `--ignored`.
-It opens an authenticated remote grant session, restarts the provider, and opens
-another session using the persisted enrollment. It uses temporary state and
-makes no requests to the configured OpenAI backend.
+Platform compilation does not prove a provisioned App Attest enrollment or a
+native passkey prompt. The current authenticator is explicitly selected software
+P-256 with user presence only; native passkey integration is not enabled. Never
+use software fixtures as evidence of user verification or private execution.
 
-The SDK test
-`provider::grant_tests::contact_offer_open_tls_responses_gateway_and_revocation_preserve_quota`
-separately exercises real local TLS requests, verified responses, quota exhaustion,
-restart and revocation on each native platform without external API credentials.
+For a provisioned runtime check, launch the signed application, inspect the
+reported capability and bind the Apple provider through the authenticated local
+control session. Compare the independently obtained app-ID/CDHash and provider
+genesis pins on a second installation, perform verified work, restart, and verify
+that the persisted enrollment and replay counters are reused. A wrong app-ID,
+CDHash, environment, provider genesis or replayed assertion must refuse without
+software fallback. Keep the signed application's logs and exact provisioning
+metadata with the acceptance evidence; no external API request is implied by
+binding alone.

@@ -29,6 +29,9 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
+            commands::save_listen_port,
+            commands::retry_open,
+            commands::restart_gate,
             commands::initialize_software,
             commands::preview_apply,
             commands::apply_document,
@@ -50,6 +53,9 @@ fn main() {
             commands::reconcile_gateway_key,
             commands::revoke_gateway_key,
             commands::save_paid_pool,
+            commands::paid_client_peer,
+            commands::configure_paid_serve,
+            commands::provision_paid,
             commands::run_request,
             commands::cancel_run,
             commands::list_contacts,

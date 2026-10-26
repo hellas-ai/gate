@@ -117,6 +117,8 @@ pub fn config(
         min_omit_response_blocks: input.min_omit_response_blocks,
     };
     config.node_config(config.journal_root.join("validation"), None)?;
+    config.work_policy.check()?;
+    config.payment_policy.check()?;
     Ok(config)
 }
 pub fn pool_path(directory: &Path, id: &str) -> anyhow::Result<std::path::PathBuf> {
@@ -193,4 +195,144 @@ pub fn pool_options(
 pub fn save_pool(directory: &Path, input: PaidPoolInput) -> anyhow::Result<()> {
     pool_options(directory, &input)?;
     vault::write(&pool_path(directory, &input.id)?, &input)
+}
+
+/// The checked SDK constructor is the only route representation Gate builds.
+pub fn serve_config(directory: &Path, input: &PaidServeInput) -> anyhow::Result<WorkConfig> {
+    ensure!(
+        input.routes.len() <= 16,
+        "at most 16 paid routes are supported"
+    );
+    let mut config = config(&input.policy, directory.join("paid-provider"))?;
+    config.routes = WorkRoutes::try_from_iter(
+        input
+            .routes
+            .iter()
+            .map(|r| {
+                Ok(hellas_sdk::work_config::WorkRoute {
+                    peer: hellas_wire::peers::PeerId::from_bytes(
+                        *r.peer.parse::<hellas_sdk::iroh::EndpointId>()?.as_bytes(),
+                    ),
+                    bond: hellas_sdk::kernel::EdgeId::from_bytes(trust::fixed(&r.bond)?),
+                    client: hellas_sdk::kernel::Key::from_bytes(trust::fixed(&r.client)?),
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?,
+    )?;
+    Ok(config)
+}
+pub fn canonical_serve(directory: &Path, input: PaidServeInput) -> anyhow::Result<PaidServeInput> {
+    let config = serve_config(directory, &input)?;
+    Ok(PaidServeInput {
+        policy: input.policy,
+        routes: config
+            .routes
+            .iter()
+            .map(|route| PaidRouteInput {
+                peer: hex::encode(route.peer.as_bytes()),
+                bond: hex::encode(route.bond.to_bytes()),
+                client: hex::encode(route.client.to_bytes()),
+            })
+            .collect(),
+    })
+}
+async fn provision_options(
+    local: &crate::control::LocalNode,
+    input: &ProvisionInput,
+) -> anyhow::Result<hellas_sdk::work_provision::ProvisionOptions> {
+    let view = local.composition.view()?;
+    ensure!(
+        view.revision == input.expected_provider_revision,
+        "provider revision conflict; preview again"
+    );
+    let paid = view
+        .paid
+        .context("configure typed paid Serve policy first")?;
+    let (client, client_node) =
+        crate::contacts::confirmed_device(&local.directory, &input.contact, &input.client_node)?;
+    ensure!(
+        input.addresses.len() <= 16
+            && input
+                .addresses
+                .iter()
+                .all(|a| a.len() <= 512 && a.parse::<std::net::SocketAddr>().is_ok()),
+        "invalid provider socket addresses"
+    );
+    let provider = local
+        .coordinator
+        .provider()
+        .await?
+        .context("bind a provider first")?;
+    Ok(hellas_sdk::work_provision::ProvisionOptions {
+        work_config: serve_config(&local.directory, &paid)?,
+        settlement_key: hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
+            local.identity.node.node_secret_bytes(),
+        )
+        .map_err(|_| anyhow::anyhow!("invalid provider settlement key"))?,
+        provider,
+        addresses: input.addresses.clone(),
+        client,
+        client_node,
+        redelegate_payout: input.redelegate_payout,
+        stake_coins: input
+            .stake_coins
+            .iter()
+            .map(|c| Ok(hellas_sdk::kernel::CoinId::from_bytes(trust::fixed(c)?)))
+            .collect::<anyhow::Result<_>>()?,
+        bond_timeout: input.bond_timeout,
+        timeout_payout: input.timeout_payout,
+        max_job_price: input.max_job_price,
+    })
+}
+pub async fn provision(
+    local: &crate::control::LocalNode,
+    input: ProvisionInput,
+    commit: bool,
+) -> anyhow::Result<ProvisionView> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let session = local.session(false).await?;
+    let status = session.status().await?;
+    let mut options = provision_options(local, &input).await?;
+    let bond = hellas_sdk::work_provision::preview_bond(&options, &local.coordinator).await?;
+    let peer: hellas_sdk::iroh::EndpointId = input.client_peer.parse()?;
+    let route = hellas_sdk::work_config::WorkRoute {
+        peer: hellas_wire::peers::PeerId::from_bytes(*peer.as_bytes()),
+        bond,
+        client: options.client_node,
+    };
+    // Preserve existing routes and refuse conflicting bond bindings through the SDK.
+    if let Some(held) = options.work_config.routes.iter().find(|r| r.bond == bond) {
+        ensure!(
+            held == &route,
+            "candidate bond has a different configured route"
+        );
+    } else {
+        options.work_config.routes =
+            WorkRoutes::try_from_iter(options.work_config.routes.iter().cloned().chain([route]))?;
+    }
+    let mut view = ProvisionView {
+        bond: hex::encode(bond.to_bytes()),
+        owner: local.coordinator.owner().await?.to_string(),
+        provider_node: hex::encode(options.settlement_key.party_key().to_bytes()),
+        client: options.client.principal().to_string(),
+        client_node: hex::encode(options.client_node.to_bytes()),
+        payout_delegate: input
+            .redelegate_payout
+            .then(|| hex::encode(options.settlement_key.party_key().to_bytes())),
+        timeout_payout: input.timeout_payout,
+        bond_timeout: input.bond_timeout,
+        stake_coins: input.stake_coins,
+        signed_offer: None,
+    };
+    if commit {
+        ensure!(
+            status.provider.is_none_or(|p| p.state != 2),
+            "stop and drain the provider before provisioning; existing setup journals have one exclusive owner"
+        );
+        let node = local.chain.get(&options.work_config).await?;
+        let provisioned =
+            hellas_sdk::work_provision::provision_offer(options, &node, &local.coordinator).await?;
+        view.signed_offer = Some(STANDARD.encode(provisioned.offer.encode()?));
+    }
+    Ok(view)
 }

@@ -1378,7 +1378,7 @@ async fn paid_policy_fixture(directory: &std::path::Path) -> PaidPolicyInput {
     .unwrap();
     PaidPolicyInput {
         chain:ChainInput {network:genesis.network_id,genesis_digest:hellas_auth::Digest::from(digest.0).to_string(),threshold_identity:"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb".into(),validators:(1..=6).map(|port|format!("http://127.0.0.1:{}",10000+port)).collect(),committee:genesis.validators.into_iter().map(|v|GenesisValidatorInput {public_key:v.public_key,label:v.label}).collect(),allocations:vec![]},
-        service:"openai".into(),method:"responses".into(),presentation:FetchPresentation::Responses,policy_salt:hex::encode([9;32]),compute_credit_limit:40,delivery_credit_limit:40,fixed_price:10,dispatch_blocks:1,delivery_blocks:1,oracle_blocks:1,value:1000,reserve:200,fee_base:0,fee_slot:0,fee_proof:0,fee_lifetime:0,min_omit_response_blocks:10,poll_ms:25,max_observation_age_ms:5000,
+        service:"openai".into(),method:"responses".into(),presentation:FetchPresentation::Responses,policy_salt:hex::encode([9;32]),compute_credit_limit:40,delivery_credit_limit:40,fixed_price:10,dispatch_blocks:1,delivery_blocks:1,oracle_blocks:1,value:1000,reserve:200,fee_base:0,fee_slot:0,fee_proof:0,fee_lifetime:0,min_omit_response_blocks:hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS,poll_ms:25,max_observation_age_ms:5000,
     }
 }
 #[tokio::test(flavor = "multi_thread")]
@@ -1751,6 +1751,8 @@ async fn dynamic_and_declarative_quota_edits_share_authority_revision_and_counte
         provider_enabled: None,
         gateway: None,
         gateway_enabled: None,
+        paid_serve: None,
+        paid_pools: vec![],
     };
     let preview = alice.preview_apply(desired.clone()).await.unwrap();
     assert!(!preview.requires_passkey);
@@ -2006,6 +2008,8 @@ fn desired_https(view: ProviderView) -> DesiredState {
         provider_enabled: None,
         gateway: None,
         gateway_enabled: None,
+        paid_serve: None,
+        paid_pools: vec![],
     }
 }
 #[tokio::test(flavor = "multi_thread")]
@@ -2753,3 +2757,505 @@ async fn stopped_policy_two_start_and_unused_key_cleanup_converge_in_one_apply()
     bob.shutdown().await.unwrap();
     alice.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn transport_port_persists_on_restart_and_failed_bind_retries_without_owner_recovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let secrets = tempfile::tempdir().unwrap();
+    let vault = Vault::fixture(secrets.path());
+    let app = AppState::with_vault(directory.path(), vault.clone())
+        .await
+        .unwrap();
+    let original = app.initialize_software("Owner".into()).await.unwrap();
+    let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let busy = probe.local_addr().unwrap().port();
+    assert!(app.save_listen_port(Some(busy)).await.is_err());
+    assert_eq!(app.status().await.unwrap().listen_port, None);
+    assert!(
+        app.local()
+            .await
+            .unwrap()
+            .session(false)
+            .await
+            .unwrap()
+            .status()
+            .await
+            .is_ok()
+    );
+    let available = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = available.local_addr().unwrap().port();
+    drop(available);
+    let saved = app.save_listen_port(Some(port)).await.unwrap();
+    assert_eq!(saved.listen_port, Some(port));
+    assert_eq!(saved.bound_addresses, original.bound_addresses);
+    app.shutdown().await.unwrap();
+    drop(app);
+    // Simulate a race after saving. The failure remains correctable without
+    // signing an offline generation recovery or replacing identity material.
+    let held = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, port)).unwrap();
+    let reopened = AppState::with_vault(directory.path(), vault.clone())
+        .await
+        .unwrap();
+    assert!(!reopened.status().await.unwrap().identity.initialized);
+    drop(held);
+    let retried = reopened.retry_open().await.unwrap();
+    assert!(retried.identity.initialized);
+    assert_eq!(retried.identity.principal, original.identity.principal);
+    assert_eq!(retried.identity.generation, original.identity.generation);
+    assert_eq!(
+        retried.identity.transport_id,
+        original.identity.transport_id
+    );
+    assert!(retried.bound_addresses.iter().any(|a| {
+        a.parse::<std::net::SocketAddr>()
+            .is_ok_and(|a| a.is_ipv4() && a.port() == port)
+    }));
+    reopened.shutdown().await.unwrap();
+    assert!(std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, port)).is_ok());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn openai_https_and_paid_share_one_host_and_invalid_paid_settings_preserve_work() {
+    let upstream = Upstream::start().await;
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let sa = tempfile::tempdir().unwrap();
+    let sb = tempfile::tempdir().unwrap();
+    let alice = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+        .await
+        .unwrap();
+    let bob = AppState::with_vault(b.path(), Vault::fixture(sb.path()))
+        .await
+        .unwrap();
+    alice.initialize_software("Alice".into()).await.unwrap();
+    bob.initialize_software("Bob".into()).await.unwrap();
+    let (request, _) = grant_https(&alice, &bob, &upstream, "composition", 233).await;
+    alice
+        .configure_provider(
+            2,
+            ProviderChange::Endpoint {
+                service: "openai".into(),
+                method: "responses".into(),
+                hosts: vec!["api.openai.com".into()],
+                allow_private_addresses: false,
+            },
+        )
+        .await
+        .unwrap();
+    alice
+        .configure_provider(
+            3,
+            ProviderChange::AddKey {
+                key: UpstreamKeyInput {
+                    service: "openai".into(),
+                    method: "responses".into(),
+                    key: "openai".into(),
+                    origins: vec!["https://api.openai.com".into()],
+                    paths: vec!["/v1/responses".into()],
+                    methods: vec!["POST".into()],
+                    header: "authorization".into(),
+                    prefix: "Bearer ".into(),
+                    secret: "fixture-no-external-requests".into(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    alice
+        .configure_resource(
+            4,
+            ResourceInput {
+                name: "model".into(),
+                service: "openai".into(),
+                method: "responses".into(),
+                resource: ResourceKind::OpenAi {
+                    model: "fixture".into(),
+                    max_output_tokens: 64,
+                    credential: "openai".into(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let mut policy = paid_policy_fixture(a.path()).await;
+    policy.service = "web".into();
+    policy.method = "get".into();
+    policy.presentation = FetchPresentation::Http;
+    let paid = PaidServeInput {
+        policy,
+        routes: vec![],
+    };
+    let mut desired = desired_https(alice.provider_view().await.unwrap());
+    let key = alice
+        .provider_view()
+        .await
+        .unwrap()
+        .upstreams
+        .into_iter()
+        .find(|u| u.service == "openai")
+        .unwrap()
+        .keys
+        .remove(0);
+    desired.upstreams.push(DesiredUpstream {
+        service: "openai".into(),
+        method: "responses".into(),
+        hosts: vec!["api.openai.com".into()],
+        allow_private_addresses: false,
+        keys: vec![DesiredKey {
+            name: "openai".into(),
+            origins: vec!["https://api.openai.com".into()],
+            paths: vec!["/v1/responses".into()],
+            methods: vec!["POST".into()],
+            header: "authorization".into(),
+            prefix: "Bearer ".into(),
+            secret_reference: key.secret_reference,
+        }],
+    });
+    desired.paid_serve = Some(DesiredPaidServe {
+        configuration: Some(paid.clone()),
+    });
+    let preview = alice.preview_apply(desired.clone()).await.unwrap();
+    let applied = alice.apply_document(&preview.id).await.unwrap();
+    assert!(applied.error.is_none(), "{applied:?}");
+    desired.expected_provider_revision = 6;
+    let bytes = std::fs::read(a.path().join("provider-configuration.json")).unwrap();
+    let preview = alice.preview_apply(desired).await.unwrap();
+    let applied = alice.apply_document(&preview.id).await.unwrap();
+    assert!(applied.error.is_none(), "{applied:?}");
+    assert!(applied.applied.is_empty());
+    assert_eq!(
+        std::fs::read(a.path().join("provider-configuration.json")).unwrap(),
+        bytes
+    );
+    let local = alice.local().await.unwrap();
+    assert!(local.chain.initialized());
+    let peer = alice.status().await.unwrap().identity.transport_id;
+    assert_eq!(alice.status().await.unwrap().provider.state, "running");
+    assert_eq!(alice.provider_view().await.unwrap().resources.len(), 2);
+    upstream.hold.store(true, Ordering::SeqCst);
+    let recipient = bob.local().await.unwrap();
+    let inflight =
+        tokio::spawn(async move { execute(&recipient.clients, &recipient, &request).await });
+    upstream.started.notified().await;
+    let metadata = std::fs::read(a.path().join("provider-configuration.json")).unwrap();
+    let mut invalid = paid.clone();
+    invalid.policy.max_observation_age_ms = invalid.policy.poll_ms;
+    let route = PaidRouteInput {
+        peer: bob.status().await.unwrap().identity.transport_id,
+        client: bob.status().await.unwrap().identity.node_key,
+        bond: hex::encode([87; 32]),
+    };
+    let mut duplicate = paid.clone();
+    duplicate.routes = vec![route.clone(), route.clone()];
+    let mut missing = paid.clone();
+    missing.routes = vec![route];
+    let mut wrong = paid.clone();
+    wrong.policy.presentation = FetchPresentation::Responses;
+    for input in [invalid, duplicate, missing, wrong] {
+        assert!(alice.configure_paid_serve(6, Some(input)).await.is_err());
+        assert_eq!(
+            std::fs::read(a.path().join("provider-configuration.json")).unwrap(),
+            metadata
+        );
+        assert_eq!(alice.status().await.unwrap().provider.state, "running");
+        assert_eq!(alice.status().await.unwrap().identity.transport_id, peer);
+        assert!(!inflight.is_finished());
+    }
+    upstream.release.notify_one();
+    assert!(finished(&inflight.await.unwrap().unwrap()));
+    bob.shutdown().await.unwrap();
+    alice.shutdown().await.unwrap();
+    drop(local);
+    drop(alice);
+    let reopened = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+        .await
+        .unwrap();
+    assert!(reopened.provider_view().await.unwrap().paid.is_some());
+    assert!(!reopened.local().await.unwrap().chain.initialized());
+    reopened.set_provider(true).await.unwrap();
+    assert_eq!(reopened.status().await.unwrap().identity.transport_id, peer);
+    assert_eq!(reopened.provider_view().await.unwrap().resources.len(), 2);
+    reopened.shutdown().await.unwrap();
+}
+
+async fn grant_responses(
+    provider: &AppState,
+    recipient: &AppState,
+    origin: &crate::responses_fixture::Origin,
+    request_byte: u8,
+) -> (RunRequest, ShareView) {
+    provider.bind_provider(true).await.unwrap();
+    let revision = provider.provider_view().await.unwrap().revision;
+    provider
+        .configure_provider(
+            revision,
+            ProviderChange::Endpoint {
+                service: "openai".into(),
+                method: "responses".into(),
+                hosts: vec!["api.openai.com".into()],
+                allow_private_addresses: false,
+            },
+        )
+        .await
+        .unwrap();
+    provider
+        .configure_provider(
+            revision + 1,
+            ProviderChange::AddKey {
+                key: UpstreamKeyInput {
+                    service: "openai".into(),
+                    method: "responses".into(),
+                    key: "fixture".into(),
+                    origins: vec!["https://api.openai.com".into()],
+                    paths: vec!["/v1/responses".into()],
+                    methods: vec!["POST".into()],
+                    header: "authorization".into(),
+                    prefix: "Bearer ".into(),
+                    secret: "fixture-only-secret".into(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    *provider
+        .local()
+        .await
+        .unwrap()
+        .composition
+        .responses_origin
+        .lock()
+        .unwrap() = Some(origin.url.clone());
+    provider.set_provider(true).await.unwrap();
+    provider
+        .configure_resource(
+            revision + 2,
+            ResourceInput {
+                name: "model".into(),
+                service: "openai".into(),
+                method: "responses".into(),
+                resource: ResourceKind::OpenAi {
+                    model: "fixture".into(),
+                    max_output_tokens: 64,
+                    credential: "fixture".into(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let recipient_status = recipient.status().await.unwrap();
+    let contact = provider
+        .add_contact(ContactInput {
+            card: recipient_status.identity.contact_card,
+            holder: recipient_status.identity.node_key.clone(),
+            confirmed_holder: true,
+            label: "Responses recipient".into(),
+        })
+        .await
+        .unwrap();
+    let shared = provider
+        .share(ShareInput {
+            request_id: hex::encode([request_byte; 16]),
+            contact: contact.id,
+            holder: recipient_status.identity.node_key,
+            allowances: vec![AllowanceInput {
+                resource: "model".into(),
+                requests_per_day: 20,
+                max_in_flight: 2,
+            }],
+            period: crate::period::Period::Week,
+            label: "Responses".into(),
+        })
+        .await
+        .unwrap();
+    let access = recipient
+        .import_access(&provider.export_access(&shared.id).await.unwrap())
+        .await
+        .unwrap();
+    let local = provider.local().await.unwrap();
+    trust::approve(
+        &recipient.directory,
+        TrustInput {
+            id: "responses".into(),
+            expected_revision: 0,
+            genesis: local
+                .coordinator
+                .provider()
+                .await
+                .unwrap()
+                .unwrap()
+                .content_id()
+                .to_string(),
+            apple: false,
+            environments: vec![
+                hellas_reseller::responses_contract()
+                    .unwrap()
+                    .manifest_id()
+                    .to_string(),
+            ],
+            app_id: String::new(),
+            cd_hashes: vec![],
+            reason: "Independent Responses fixture provider pin".into(),
+        },
+    )
+    .unwrap();
+    (
+        RunRequest {
+            kind: RunKind::Fetch,
+            input: r#"{"model":"fixture","input":"hello","max_output_tokens":8,"store":false}"#
+                .into(),
+            client: WorkClientConfig {
+                target: WorkTarget::Authorized {
+                    access_id: access.id,
+                    allowance: shared.allowances[0].clone(),
+                    resource: "model".into(),
+                },
+                trust_policy: "responses".into(),
+            },
+        },
+        shared,
+    )
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn authorized_responses_gateway_enforces_keys_zdr_archive_revocation_and_shutdown_drain() {
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let sa = tempfile::tempdir().unwrap();
+    let sb = tempfile::tempdir().unwrap();
+    let alice = Arc::new(
+        AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+            .await
+            .unwrap(),
+    );
+    let bob = Arc::new(
+        AppState::with_vault(b.path(), Vault::fixture(sb.path()))
+            .await
+            .unwrap(),
+    );
+    alice.initialize_software("Alice".into()).await.unwrap();
+    bob.initialize_software("Bob".into()).await.unwrap();
+    let origin = crate::responses_fixture::Origin::start().await;
+    let (request, _) = grant_responses(&alice, &bob, &origin, 235).await;
+    let events = std::sync::Mutex::new(vec![]);
+    let run_id = crate::run::execute(&bob, request.clone(), |event| {
+        events.lock().unwrap().push(event)
+    })
+    .await
+    .unwrap();
+    assert_eq!(bob.history.list(10).unwrap()[0].id, run_id);
+    assert_eq!(
+        bob.history.list(10).unwrap()[0].status,
+        "complete",
+        "{:?}",
+        bob.history.list(10).unwrap()
+    );
+    assert!(
+        events
+            .into_inner()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, ExecutionEvent::Verification { .. }))
+    );
+    let (key, bearer) = bob
+        .issue_gateway_key(GatewayKeyInput {
+            request_id: hex::encode([236; 16]),
+            label: "Responses HTTP".into(),
+            period: crate::period::Period::Week,
+        })
+        .await
+        .unwrap();
+    let config = GatewayConfig {
+        client: request.client,
+        http_routes: vec![],
+        port: Some(0),
+        zdr: true,
+    };
+    bob.set_gateway(true, Some(config.clone())).await.unwrap();
+    let http = reqwest::Client::builder().no_proxy().build().unwrap();
+    let address = bob.gateway_address().await.unwrap();
+    let url = format!("{address}/v1/responses");
+    let calls = origin.calls.load(Ordering::SeqCst);
+    for token in [None, Some("invalid")] {
+        let mut pending = http
+            .post(&url)
+            .header("content-type", "application/json")
+            .body(request.input.clone());
+        if let Some(token) = token {
+            pending = pending.bearer_auth(token);
+        }
+        assert_eq!(pending.send().await.unwrap().status(), 401);
+    }
+    assert_eq!(origin.calls.load(Ordering::SeqCst), calls);
+    let response = http
+        .post(&url)
+        .bearer_auth(&bearer)
+        .header("content-type", "application/json")
+        .body(request.input.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(response.text().await.unwrap().contains("hello"));
+    assert!(!b.path().join("gateway-archive").exists());
+    let mut archived = config;
+    archived.zdr = false;
+    bob.set_gateway(true, Some(archived)).await.unwrap();
+    let url = format!("{}/v1/responses", bob.gateway_address().await.unwrap());
+    let response = http
+        .post(&url)
+        .bearer_auth(&bearer)
+        .header("content-type", "application/json")
+        .body(request.input.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(response.text().await.unwrap().contains("hello"));
+    assert!(
+        std::fs::read_dir(b.path().join("gateway-archive"))
+            .unwrap()
+            .any(|e| e.unwrap().path().join("response.bin").exists())
+    );
+    bob.revoke_gateway_key(&key.id).await.unwrap();
+    assert_eq!(
+        http.post(&url)
+            .bearer_auth(&bearer)
+            .header("content-type", "application/json")
+            .body(request.input.clone())
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    let (_, next) = bob
+        .issue_gateway_key(GatewayKeyInput {
+            request_id: hex::encode([237; 16]),
+            label: "drain".into(),
+            period: crate::period::Period::Week,
+        })
+        .await
+        .unwrap();
+    origin.hold.store(true, Ordering::SeqCst);
+    origin.started.notified().await;
+    let pending = http
+        .post(&url)
+        .bearer_auth(&next)
+        .header("content-type", "application/json")
+        .body(request.input)
+        .send();
+    let response = tokio::spawn(pending);
+    origin.started.notified().await;
+    let closing = bob.clone();
+    let quit = tokio::spawn(async move { closing.shutdown().await });
+    tokio::task::yield_now().await;
+    assert!(!quit.is_finished());
+    origin.release.notify_one();
+    assert_eq!(response.await.unwrap().unwrap().status(), 200);
+    assert!(quit.await.unwrap().unwrap());
+    assert!(http.get(&url).send().await.is_err());
+    alice.shutdown().await.unwrap();
+}
+
+#[cfg(all(feature = "chain-tests", target_os = "linux"))]
+#[path = "chain_acceptance.rs"]
+mod chain_acceptance;

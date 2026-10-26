@@ -46,6 +46,12 @@ export const api = {
   rotateGatewayKey: (old:string,input:T.GatewayKeyInput):Promise<[T.GatewayKeyView,string]> => call("rotate_gateway_key",{old,input}),
   reconcileGatewayKey: (id:string):Promise<[T.GatewayKeyView,string]> => call("reconcile_gateway_key",{id}),
   revokeGatewayKey: (id: string): Promise<void> => call("revoke_gateway_key", { id }),
+  saveListenPort: (port:number|null):Promise<T.AppStatus> => call("save_listen_port",{port}),
+  retryOpen: ():Promise<T.AppStatus> => call("retry_open"),
+  restart: ():Promise<void> => call("restart_gate"),
+  configurePaidServe: (expected:number,input:T.PaidServeInput|null):Promise<T.ProviderView> => call("configure_paid_serve",{expected,input}),
+  provisionPaid: (input:T.ProvisionInput,commit:boolean):Promise<T.ProvisionView> => call("provision_paid",{input,commit}),
+  paidClientPeer: (poolId:string):Promise<string> => call("paid_client_peer",{poolId}),
   savePaidPool: (input: T.PaidPoolInput): Promise<void> => call("save_paid_pool", { input }),
   run: async (request: T.RunRequest, onEvent: (event: T.ExecutionEvent) => void): Promise<string> => {
     const channel = new Channel<T.ExecutionEvent>(); channel.onmessage = onEvent;

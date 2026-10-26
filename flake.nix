@@ -25,7 +25,7 @@
       in
       {
         formatter = pkgs.nixpkgs-fmt;
-        devShells.default = pkgs.mkShell {
+        devShells = { default = pkgs.mkShell {
           GATE_HELLAS_REV = hellas.rev;
           nativeBuildInputs = with pkgs; [
             cargo-tauri
@@ -62,6 +62,8 @@
             export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/usr/bin/clang
             export CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER=/usr/bin/clang
           '';
+        }; } // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          windows-cross = import ./nix/windows-cross.nix { inherit pkgs rust; };
         };
       });
 }

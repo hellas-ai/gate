@@ -152,6 +152,26 @@ pub fn contacts(directory: &Path) -> anyhow::Result<Vec<ContactView>> {
         .map(view)
         .collect())
 }
+pub fn confirmed_device(
+    directory: &Path,
+    person: &str,
+    holder: &str,
+) -> anyhow::Result<(ContactCard, hellas_sdk::kernel::Key)> {
+    let principal: PrincipalId = person.parse()?;
+    let contact: Contact = vault::read(&named(directory, "contacts", &principal.to_string())?)?
+        .context("select a verified contact")?;
+    let key = NodeKey::from_public_key(hellas_auth::PublicKey::Secp256k1(crate::trust::fixed(
+        holder,
+    )?))?;
+    ensure!(
+        contact.devices.contains(&key),
+        "explicitly confirm this device with the contact first"
+    );
+    Ok((
+        contact.card,
+        hellas_sdk::kernel::Key::from_bytes(*key.as_bytes()),
+    ))
+}
 pub fn shares(directory: &Path) -> anyhow::Result<Vec<ShareView>> {
     Ok(list::<Shared>(directory, "shares")?
         .into_iter()

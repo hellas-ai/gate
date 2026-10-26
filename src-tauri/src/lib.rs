@@ -21,7 +21,10 @@ pub mod paid;
 pub mod period;
 pub mod provider_identity;
 pub mod provider_setup;
+#[cfg(test)]
+mod responses_fixture;
 pub mod run;
+pub mod settings;
 pub mod state;
 pub mod trust;
 pub mod vault;

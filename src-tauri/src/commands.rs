@@ -274,3 +274,59 @@ pub async fn reconcile_gateway_key(
         .await
         .map_err(ApiError::internal)
 }
+
+#[tauri::command]
+pub async fn configure_paid_serve(
+    state: State<'_, Arc<AppState>>,
+    expected: u64,
+    input: Option<PaidServeInput>,
+) -> ApiResult<ProviderView> {
+    state
+        .configure_paid_serve(expected, input)
+        .await
+        .map_err(ApiError::internal)
+}
+#[tauri::command]
+pub async fn provision_paid(
+    state: State<'_, Arc<AppState>>,
+    input: ProvisionInput,
+    commit: bool,
+) -> ApiResult<ProvisionView> {
+    state
+        .provision_paid(input, commit)
+        .await
+        .map_err(ApiError::internal)
+}
+
+#[tauri::command]
+pub async fn save_listen_port(
+    state: State<'_, Arc<AppState>>,
+    port: Option<u16>,
+) -> ApiResult<AppStatus> {
+    state
+        .save_listen_port(port)
+        .await
+        .map_err(ApiError::internal)
+}
+#[tauri::command]
+pub async fn retry_open(state: State<'_, Arc<AppState>>) -> ApiResult<AppStatus> {
+    state.retry_open().await.map_err(ApiError::internal)
+}
+#[tauri::command]
+pub async fn restart_gate(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> ApiResult<()> {
+    if state.shutdown().await.map_err(ApiError::internal)? {
+        app.restart();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn paid_client_peer(
+    state: State<'_, Arc<AppState>>,
+    pool_id: String,
+) -> ApiResult<String> {
+    state
+        .paid_client_peer(&pool_id)
+        .await
+        .map_err(ApiError::internal)
+}

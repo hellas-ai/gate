@@ -9,6 +9,7 @@ repository.workspace = true
 
 [features]
 default = ["desktop"]
+chain-tests = ["hellas-chain/validator"]
 desktop = ["dep:tauri", "dep:tauri-build", "dep:ts-rs"]
 
 [lib]
@@ -39,14 +40,12 @@ hellas-private = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bc
 hellas-rpc = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9", features = ["host-control", "execute", "fetch", "work"] }
 hellas-sdk = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9", default-features = false }
 hellas-wire = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9", features = ["unix"] }
-libc = "0.2"
 # The same bundled SQLite that hellas's Work journals compile in; history.rs
 # drives it through the C API.
 libsqlite3-sys = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = ["tray-icon"], optional = true }
-tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "net", "fs", "time"] }
 tracing = "0.1"
@@ -60,6 +59,10 @@ tauri-build = { version = "2", features = [], optional = true }
 cc = "1"
 
 [dev-dependencies]
+libc = "0.2"
+hellas-executor = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9", default-features = false }
+tempfile = "3"
+toml = "0.9"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 hellas-chain = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9" }

@@ -31,6 +31,11 @@ enum Step {
     RevokeShare(String),
     RevokeKey(String),
     Quota(QuotaInput),
+    PaidServe {
+        expected: u64,
+        input: Option<PaidServeInput>,
+    },
+    PaidPool(PaidPoolInput),
     ProviderState(bool),
     GatewayConfig(GatewayConfig, bool),
     GatewayState(bool),
@@ -90,6 +95,15 @@ impl Step {
                 "Set allowance {} to {} requests/day and concurrency {}",
                 input.allowance, input.requests_per_day, input.max_in_flight
             ),
+            Self::PaidServe { input, .. } => format!(
+                "{} paid Serve through the shared host",
+                if input.is_some() {
+                    "Configure"
+                } else {
+                    "Disable and drain"
+                }
+            ),
+            Self::PaidPool(input) => format!("Save typed paid pool {}", input.id),
             Self::ProviderState(enabled) => format!(
                 "Set provider {}",
                 if *enabled {
@@ -194,9 +208,35 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
         let _: hellas_auth::authority::GrantId = id.parse()?;
     }
     let current = local.composition.view()?;
+    let paid_change = document
+        .paid_serve
+        .as_ref()
+        .map(|input| {
+            input
+                .configuration
+                .clone()
+                .map(|input| crate::paid::canonical_serve(&local.directory, input))
+                .transpose()
+        })
+        .transpose()?;
+    let paid_changed = if let Some(wanted) = &paid_change {
+        serde_json::to_vec(wanted)? != serde_json::to_vec(&current.paid)?
+    } else {
+        false
+    };
+    let mut pool_ids = std::collections::BTreeSet::new();
+    for pool in &document.paid_pools {
+        ensure!(pool_ids.insert(&pool.id), "duplicate paid pool name");
+        crate::paid::pool_path(&local.directory, &pool.id)?;
+        crate::paid::pool_options(&local.directory, pool)?;
+    }
     let changes = local
         .composition
-        .diff(&document.upstreams, &document.resources)
+        .diff(
+            &document.upstreams,
+            &document.resources,
+            paid_change.as_ref(),
+        )
         .await?;
     let retired: Vec<_> = current
         .resources
@@ -210,7 +250,8 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
         .map(|r| r.name.clone())
         .collect();
     let resources = document.resources;
-    let changed = !changes.is_empty()
+    let changed = paid_changed
+        || !changes.is_empty()
         || !retired.is_empty()
         || resources
             .iter()
@@ -273,10 +314,19 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
         || !document.revoke_gateway_keys.is_empty();
     let mut steps = Vec::new();
     steps.extend(document.contacts.into_iter().map(Step::Contact));
+    let mut expected = current.revision;
+    if paid_changed && current.paid.is_some() {
+        steps.push(Step::PaidServe {
+            expected,
+            input: None,
+        });
+        expected = expected
+            .checked_add(1)
+            .context("provider revision overflow")?;
+    }
     if !running && document.provider_enabled == Some(true) {
         steps.push(Step::ProviderState(true));
     }
-    let mut expected = current.revision;
     for name in retired {
         steps.push(Step::Retire { expected, name });
         expected = expected
@@ -311,6 +361,21 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
         expected = expected
             .checked_add(1)
             .context("provider revision overflow")?;
+    }
+    if paid_changed && let Some(Some(input)) = paid_change {
+        steps.push(Step::PaidServe {
+            expected,
+            input: Some(input),
+        });
+    }
+    for pool in document.paid_pools {
+        let path = crate::paid::pool_path(&local.directory, &pool.id)?;
+        let previous: Option<PaidPoolInput> = crate::vault::read(&path)?;
+        if previous.as_ref().map(serde_json::to_vec).transpose()?
+            != Some(serde_json::to_vec(&pool)?)
+        {
+            steps.push(Step::PaidPool(pool));
+        }
     }
     steps.extend(document.shares.into_iter().map(Step::Share));
     steps.extend(document.gateway_keys.into_iter().map(Step::GatewayKey));
@@ -414,7 +479,8 @@ pub async fn execute_session(
                                 let revision = match step {
                                     Step::Provider(step) => Some(&mut step.expected),
                                     Step::Resources { expected, .. }
-                                    | Step::Retire { expected, .. } => Some(expected),
+                                    | Step::Retire { expected, .. }
+                                    | Step::PaidServe { expected, .. } => Some(expected),
                                     _ => None,
                                 };
                                 if let Some(revision) = revision {
@@ -460,6 +526,17 @@ pub async fn execute_session(
                 }
                 Step::Quota(input) => {
                     contacts::set_quota(local, session, input).await?;
+                }
+                Step::PaidServe { expected, input } => {
+                    local
+                        .composition
+                        .configure_paid(local, session, expected, input)
+                        .await?;
+                }
+                Step::PaidPool(input) => {
+                    session.track_local(format!("Publish paid pool {}", input.id), || {
+                        crate::paid::save_pool(&local.directory, input)
+                    })?;
                 }
                 Step::ProviderState(enabled) => {
                     session.provider_state(enabled).await?;
@@ -600,6 +677,8 @@ mod tests {
             provider_enabled: None,
             gateway: None,
             gateway_enabled: None,
+            paid_serve: None,
+            paid_pools: vec![],
         }
     }
     #[tokio::test(flavor = "multi_thread")]

@@ -38,6 +38,9 @@ pub struct AppStatus {
     pub gateway: ServiceStatus,
     pub endpoint: String,
     pub socket_path: String,
+    pub listen_port: Option<u16>,
+    pub bound_addresses: Vec<String>,
+    pub min_omit_response_blocks: u64,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
@@ -243,6 +246,7 @@ pub struct ProviderView {
     pub revision: u64,
     pub upstreams: Vec<UpstreamView>,
     pub resources: Vec<ResourceInput>,
+    pub paid: Option<PaidServeInput>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -540,6 +544,10 @@ pub struct DesiredState {
     pub provider_enabled: Option<bool>,
     pub gateway: Option<GatewayConfig>,
     pub gateway_enabled: Option<bool>,
+    #[serde(default)]
+    pub paid_serve: Option<DesiredPaidServe>,
+    #[serde(default)]
+    pub paid_pools: Vec<PaidPoolInput>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
@@ -572,4 +580,62 @@ pub struct QuotaView {
     pub revision: u64,
     pub requests_per_day: Option<u64>,
     pub max_in_flight: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PaidRouteInput {
+    pub peer: String,
+    pub bond: String,
+    pub client: String,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PaidServeInput {
+    pub policy: PaidPolicyInput,
+    pub routes: Vec<PaidRouteInput>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProvisionInput {
+    pub expected_provider_revision: u64,
+    pub contact: String,
+    pub client_node: String,
+    pub client_peer: String,
+    pub addresses: Vec<String>,
+    pub redelegate_payout: bool,
+    pub stake_coins: Vec<String>,
+    pub bond_timeout: u64,
+    pub timeout_payout: u64,
+    pub max_job_price: u64,
+}
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct ProvisionView {
+    pub bond: String,
+    pub owner: String,
+    pub provider_node: String,
+    pub client: String,
+    pub client_node: String,
+    pub payout_delegate: Option<String>,
+    pub timeout_payout: u64,
+    pub bond_timeout: u64,
+    pub stake_coins: Vec<String>,
+    pub signed_offer: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesiredPaidServe {
+    pub configuration: Option<PaidServeInput>,
 }

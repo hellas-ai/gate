@@ -110,7 +110,7 @@ impl AppState {
             detail: String::new(),
         };
         let Some(local) = self.local.lock().await.clone() else {
-            return Ok(AppStatus { version: env!("CARGO_PKG_VERSION").into(), identity: IdentityStatus { initialized: false, recovery_available:self.directory.join("installation.json").try_exists()?, principal: String::new(), fingerprint: String::new(), node_key: String::new(), transport_id: String::new(), authority: String::new(), generation: 0, attestation: "unavailable".into(), detail: self.failure.lock().await.clone().unwrap_or_else(||"Native passkey bridge unavailable. Explicit software identity is for development; user presence only.".into()), contact_card: String::new() }, provider: stopped(), gateway: stopped(), endpoint: String::new(), socket_path: self.directory.join("gate.sock").display().to_string() });
+            return Ok(AppStatus { version: env!("CARGO_PKG_VERSION").into(), identity: IdentityStatus { initialized: false, recovery_available:self.directory.join("installation.json").try_exists()?, principal: String::new(), fingerprint: String::new(), node_key: String::new(), transport_id: String::new(), authority: String::new(), generation: 0, attestation: "unavailable".into(), detail: self.failure.lock().await.clone().unwrap_or_else(||"Native passkey bridge unavailable. Explicit software identity is for development; user presence only.".into()), contact_card: String::new() }, provider: stopped(), gateway: stopped(), endpoint: String::new(), socket_path: self.directory.join("gate.sock").display().to_string(), listen_port: crate::settings::load(&self.directory)?.listen_port, bound_addresses: vec![], min_omit_response_blocks: hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS });
         };
         let status = local
             .client(false)
@@ -147,7 +147,7 @@ impl AppState {
             Some(_) => "software (non-private)",
             None => "unbound",
         };
-        Ok(AppStatus { version: status.version, identity: IdentityStatus { initialized: true, recovery_available:false, principal: identity.public.owner.to_string(), fingerprint: identity.public.owner.fingerprint(), node_key: hex::encode(identity.node.node_key().public_key().bytes()), transport_id: identity.node.node_id().to_string(), authority: identity.public.authority.to_string(), generation: status.generation, attestation: attestation.into(), detail: "Software P-256 passkey (UP only); execution is non-private unless independently attested.".into(), contact_card: base64::engine::general_purpose::STANDARD.encode(hellas_rpc::protocol::value::canonical_dag_cbor(&identity.public.card)?) }, provider: service(status.provider), gateway: service(status.gateway), endpoint: status.endpoint, socket_path: local.socket.display().to_string() })
+        Ok(AppStatus { version: status.version, identity: IdentityStatus { initialized: true, recovery_available:false, principal: identity.public.owner.to_string(), fingerprint: identity.public.owner.fingerprint(), node_key: hex::encode(identity.node.node_key().public_key().bytes()), transport_id: identity.node.node_id().to_string(), authority: identity.public.authority.to_string(), generation: status.generation, attestation: attestation.into(), detail: "Software P-256 passkey (UP only); execution is non-private unless independently attested.".into(), contact_card: base64::engine::general_purpose::STANDARD.encode(hellas_rpc::protocol::value::canonical_dag_cbor(&identity.public.card)?) }, provider: service(status.provider), gateway: service(status.gateway), endpoint: status.endpoint, socket_path: local.socket.display().to_string(), listen_port: crate::settings::load(&self.directory)?.listen_port, bound_addresses: local.bound_addresses.get().cloned().unwrap_or_default(), min_omit_response_blocks: hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS })
     }
     pub async fn shutdown(&self) -> anyhow::Result<bool> {
         let _lock = self.operation.lock().await;
@@ -398,6 +398,68 @@ impl AppState {
         let local = self.local().await?;
         let session = local.session(false).await?;
         crate::contacts::set_quota(&local, &session, input).await
+    }
+}
+
+impl AppState {
+    pub async fn paid_client_peer(&self, pool_id: &str) -> anyhow::Result<String> {
+        let _lock = self.operation.lock().await;
+        let local = self.local().await?;
+        local.clients.paid_peer(&local, pool_id).await
+    }
+    pub async fn configure_paid_serve(
+        &self,
+        expected: u64,
+        input: Option<PaidServeInput>,
+    ) -> anyhow::Result<ProviderView> {
+        let _lock = self.operation.lock().await;
+        let local = self.local().await?;
+        let session = local.session(false).await?;
+        local
+            .composition
+            .configure_paid(&local, &session, expected, input)
+            .await
+    }
+    pub async fn provision_paid(
+        &self,
+        input: ProvisionInput,
+        commit: bool,
+    ) -> anyhow::Result<ProvisionView> {
+        let _lock = self.operation.lock().await;
+        crate::paid::provision(self.local().await?.as_ref(), input, commit).await
+    }
+}
+
+impl AppState {
+    pub async fn save_listen_port(&self, port: Option<u16>) -> anyhow::Result<AppStatus> {
+        let _lock = self.operation.lock().await;
+        anyhow::ensure!(
+            !self.stopping.load(Ordering::SeqCst),
+            "Gate is shutting down"
+        );
+        let local = self.local.lock().await.clone();
+        let current = if let Some(local) = local {
+            local.session(false).await?.status().await?;
+            local.bound_addresses.get().cloned().unwrap_or_default()
+        } else {
+            vec![]
+        };
+        crate::settings::save(&self.directory, port, &current)?;
+        self.status().await
+    }
+    pub async fn retry_open(&self) -> anyhow::Result<AppStatus> {
+        let _lock = self.operation.lock().await;
+        anyhow::ensure!(
+            !self.stopping.load(Ordering::SeqCst),
+            "Gate is shutting down"
+        );
+        anyhow::ensure!(self.local.lock().await.is_none(), "Gate is already open");
+        let identity = Identity::load(&self.directory, &self.vault)
+            .await?
+            .context("initialize an identity first")?;
+        self.mount(identity).await?;
+        *self.failure.lock().await = None;
+        self.status().await
     }
 }
 

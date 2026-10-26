@@ -24,8 +24,10 @@ pub struct LocalNode {
     pub composition: crate::provider_setup::Composition,
     pub directory: PathBuf,
     pub clients: crate::clients::Clients,
+    pub chain: Arc<crate::chain::ChainNode>,
     pub gateway: crate::gateway::Configuration,
     tls: Arc<rustls::ClientConfig>,
+    pub bound_addresses: std::sync::OnceLock<Vec<String>>,
 }
 impl LocalNode {
     pub async fn open(
@@ -45,16 +47,19 @@ impl LocalNode {
         )?;
         let (tls, _) = node_control::profile::local_trust(certificate, "localhost".into())?;
         let socket = directory.join("gate.sock");
+        let chain = Arc::new(crate::chain::ChainNode::new(directory.join("chain")));
         let local = Arc::new(Self {
             identity: Arc::new(identity),
             coordinator: coordinator.clone(),
             socket: socket.clone(),
             composition: crate::provider_setup::Composition::open(directory, vault.clone())?,
             directory: directory.to_owned(),
-            clients: crate::clients::Clients::new(directory),
+            clients: crate::clients::Clients::new(directory, chain.clone()),
+            chain,
             gateway: crate::gateway::Configuration::open(directory)?,
             vault,
             tls,
+            bound_addresses: Default::default(),
         });
         #[cfg(test)]
         let endpoint =
@@ -68,13 +73,28 @@ impl LocalNode {
             &local.vault,
         )
         .await?;
+        let settings = crate::settings::load(directory)?;
+        let endpoint = if let Some(port) = settings.listen_port {
+            endpoint.bind_addr(std::net::SocketAddrV4::new(
+                std::net::Ipv4Addr::UNSPECIFIED,
+                port,
+            ))?
+        } else {
+            endpoint
+        };
+        let transport = endpoint
+            .secret_key(local.identity.node.transport_key())
+            .bind()
+            .await?;
+        let _ = local.bound_addresses.set(
+            transport
+                .bound_sockets()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+        );
         let host = HostHandle::start(HostOptions {
-            transport: Some(
-                endpoint
-                    .secret_key(local.identity.node.transport_key())
-                    .bind()
-                    .await?,
-            ),
+            transport: Some(transport),
             start_provider: false,
             control: Some((
                 coordinator,

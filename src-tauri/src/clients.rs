@@ -104,24 +104,38 @@ impl WorkExecutionBackend for RetirableBackend {
 }
 pub struct Clients {
     directory: PathBuf,
-    chain: crate::chain::ChainNode,
+    chain: Arc<crate::chain::ChainNode>,
     closed: AtomicBool,
+    transport_keys: Mutex<()>,
     #[cfg(test)]
     pub(crate) drained: tokio::sync::Notify,
     cache: Mutex<BTreeMap<String, CachedTarget>>,
     paid: Mutex<BTreeMap<String, (String, Arc<RetirableBackend>)>>,
 }
 impl Clients {
-    pub fn new(directory: &Path) -> Self {
+    pub fn new(directory: &Path, chain: Arc<crate::chain::ChainNode>) -> Self {
         Self {
             directory: directory.to_owned(),
-            chain: crate::chain::ChainNode::new(directory.join("chain")),
+            chain,
             closed: AtomicBool::new(false),
+            transport_keys: Mutex::new(()),
             #[cfg(test)]
             drained: tokio::sync::Notify::new(),
             cache: Mutex::new(BTreeMap::new()),
             paid: Mutex::new(BTreeMap::new()),
         }
+    }
+    pub async fn paid_peer(&self, local: &LocalNode, pool_id: &str) -> anyhow::Result<String> {
+        paid::pool_path(&self.directory, pool_id)?;
+        ensure!(
+            !self.closed.load(Ordering::SeqCst),
+            "client admission is closed because Gate is shutting down"
+        );
+        Ok(self
+            .transport(local, &format!("paid:{pool_id}"))
+            .await?
+            .public()
+            .to_string())
     }
     pub async fn target(
         &self,
@@ -378,6 +392,11 @@ impl Clients {
         local: &LocalNode,
         id: &str,
     ) -> anyhow::Result<hellas_sdk::iroh::SecretKey> {
+        let _keys = self.transport_keys.lock().await;
+        ensure!(
+            !self.closed.load(Ordering::SeqCst),
+            "client admission is closed because Gate is shutting down"
+        );
         let key = format!(
             "outgoing-{}",
             hex::encode(&hellas_auth::Digest::hash(id.as_bytes()).as_bytes()[..16])

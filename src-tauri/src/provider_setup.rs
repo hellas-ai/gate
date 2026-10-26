@@ -37,7 +37,7 @@ use std::{
 #[serde(deny_unknown_fields)]
 struct Configuration {
     revision: u64,
-    port: Option<u16>,
+    paid: Option<PaidServeInput>,
     policy_revisions: BTreeMap<String, u64>,
     endpoints: BTreeMap<String, Endpoint>,
     resources: Vec<ResourceInput>,
@@ -68,6 +68,8 @@ pub struct Composition {
     vault: Vault,
     state: Arc<Mutex<Configuration>>,
     sources: Arc<Mutex<BTreeMap<String, String>>>,
+    #[cfg(test)]
+    pub(crate) responses_origin: Arc<Mutex<Option<String>>>,
 }
 fn route_id(service: &str, method: &str) -> String {
     format!("{service}/{method}")
@@ -84,6 +86,8 @@ impl Composition {
             vault,
             state: Arc::new(Mutex::new(config)),
             sources: Arc::new(Mutex::new(BTreeMap::new())),
+            #[cfg(test)]
+            responses_origin: Default::default(),
         })
     }
     fn snapshot(&self) -> anyhow::Result<Configuration> {
@@ -138,6 +142,7 @@ impl Composition {
                 })
                 .collect(),
             resources: config.resources,
+            paid: config.paid,
         })
     }
     /// A composition catalogue is not authority; WorkControl must still activate it.
@@ -230,6 +235,73 @@ impl Composition {
         self.validate(&config)?;
         self.publish(expected, config)
     }
+    pub async fn configure_paid(
+        &self,
+        local: &LocalNode,
+        session: &crate::control::Session,
+        expected: u64,
+        input: Option<PaidServeInput>,
+    ) -> anyhow::Result<ProviderView> {
+        let mut next = self.snapshot()?;
+        ensure!(next.revision == expected, "provider revision conflict");
+        let input = input
+            .map(|input| crate::paid::canonical_serve(&self.directory, input))
+            .transpose()?;
+        if serde_json::to_vec(&next.paid)? == serde_json::to_vec(&input)? {
+            return self.view();
+        }
+        next.paid = input;
+        self.validate(&next)?;
+        if let Some(input) = &next.paid {
+            let mut config = crate::paid::serve_config(&self.directory, input)?;
+            hellas_sdk::paid_provider::WorkRunnerConfig {
+                network: config.chain.network,
+                journal_root: config.journal_root.clone(),
+                routes: config.routes.clone(),
+                poll: config.poll,
+                max_observation_age: config.max_observation_age,
+                settlement_key: hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
+                    local.identity.node.node_secret_bytes(),
+                )
+                .map_err(|_| anyhow::anyhow!("invalid provider settlement key"))?,
+                policy: config.provider_policy(),
+            }
+            .validate()?;
+            local.chain.get(&config).await?;
+            // Live setup journals have one exclusive owner. Unchanged bond/client
+            // bindings were checked at startup; validate only newly selected ones.
+            let previous = self.snapshot()?.paid;
+            config.routes = hellas_sdk::work_config::WorkRoutes::try_from_iter(
+                config
+                    .routes
+                    .iter()
+                    .filter(|route| {
+                        !previous.as_ref().is_some_and(|old| {
+                            old.routes.iter().any(|r| {
+                                r.bond == hex::encode(route.bond.to_bytes())
+                                    && r.client == hex::encode(route.client.to_bytes())
+                            })
+                        })
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )?;
+            hellas_sdk::work_config::validate_work_routes(&config).await?;
+        }
+        let status = session.status().await?;
+        let running = status.provider.is_some_and(|p| p.state == 2);
+        next.revision = expected
+            .checked_add(1)
+            .context("provider revision overflow")?;
+        session.track_local("Publish typed paid Serve settings".into(), || {
+            self.publish(expected, next)
+        })?;
+        if running {
+            session.provider_state(false).await?;
+            session.provider_state(true).await?;
+        }
+        self.view()
+    }
     fn metadata(config: &Configuration) -> ProviderMetadata {
         ProviderMetadata {
             revision: config.revision,
@@ -300,6 +372,22 @@ impl Composition {
                     }
                 }
             }
+        }
+        if let Some(input) = &config.paid {
+            crate::paid::serve_config(&self.directory, input)?;
+            let resource = config
+                .resources
+                .iter()
+                .find(|r| r.service == input.policy.service && r.method == input.policy.method)
+                .context("paid work requires a configured Fetch resource on its selected route")?;
+            ensure!(
+                matches!(
+                    (&resource.resource, input.policy.presentation),
+                    (ResourceKind::OpenAi { .. }, FetchPresentation::Responses)
+                        | (ResourceKind::Https { .. }, FetchPresentation::Http)
+                ),
+                "paid presentation differs from the route implementation"
+            );
         }
         let mut names = std::collections::BTreeSet::new();
         let mut policies = Vec::new();
@@ -636,10 +724,22 @@ impl Composition {
                     FetchRoutePolicy::default(),
                 )?
             };
+            #[cfg(test)]
+            let entry = if matches!(
+                resource.map(|r| &r.resource),
+                Some(ResourceKind::OpenAi { .. })
+            ) {
+                match self.responses_origin.lock().unwrap().as_ref() {
+                    Some(origin) => crate::responses_fixture::entry(origin),
+                    None => entry,
+                }
+            } else {
+                entry
+            };
             routes.register(FetchRoute::new(&endpoint.service, &endpoint.method), entry)?;
         }
         let options = hellas_sdk::FetchProviderOptions {
-            port: config.port,
+            port: None,
             identity: local.identity.node.clone(),
             enrollment: identity.enrollment,
             root: identity.root,
@@ -651,7 +751,13 @@ impl Composition {
             routes,
             fetch_max_in_flight: hellas_rpc::DEFAULT_FETCH_MAX_IN_FLIGHT,
             fetch_queue_capacity: hellas_rpc::DEFAULT_FETCH_QUEUE_CAPACITY,
-            paid_work: None,
+            paid_work: if let Some(input) = &config.paid {
+                let paid = crate::paid::serve_config(&self.directory, input)?;
+                let node = local.chain.get(&paid).await?;
+                Some(hellas_sdk::PaidProviderOptions::new(paid, node)?)
+            } else {
+                None
+            },
         }
         .prepare()
         .await?
@@ -935,6 +1041,7 @@ impl Composition {
         &self,
         upstreams: &[DesiredUpstream],
         resources: &[ResourceInput],
+        paid: Option<&Option<PaidServeInput>>,
     ) -> anyhow::Result<Vec<ProviderStep>> {
         ensure!(
             upstreams.len() <= 16 && resources.len() <= 16,
@@ -944,6 +1051,9 @@ impl Composition {
         let mut desired = old.clone();
         desired.endpoints.clear();
         desired.resources = resources.to_vec();
+        if let Some(paid) = paid {
+            desired.paid = paid.clone();
+        }
         let mut changes = Vec::new();
         let mut revision = old.revision;
         for upstream in upstreams {
