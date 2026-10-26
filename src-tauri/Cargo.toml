@@ -9,7 +9,7 @@ repository.workspace = true
 
 [features]
 default = ["desktop"]
-chain-tests = ["hellas-chain/validator"]
+chain-tests = ["hellas-chain/test-support"]
 desktop = ["dep:tauri", "dep:tauri-build", "dep:ts-rs"]
 
 [lib]
@@ -60,9 +60,7 @@ tauri-build = { version = "2", features = [], optional = true }
 cc = "1"
 
 [dev-dependencies]
-libc = "0.2"
 tempfile = "3"
-toml = "0.9"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 hellas-chain = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9" }

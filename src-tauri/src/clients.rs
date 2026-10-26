@@ -190,6 +190,14 @@ impl Clients {
             .public()
             .to_string())
     }
+    #[cfg(all(test, feature = "chain-tests", target_os = "linux"))]
+    pub(crate) async fn paid_transport(
+        &self,
+        local: &LocalNode,
+        pool_id: &str,
+    ) -> anyhow::Result<hellas_sdk::iroh::SecretKey> {
+        self.transport(local, &format!("paid:{pool_id}")).await
+    }
     fn selection(&self, local: &LocalNode, input: &WorkClientConfig) -> anyhow::Result<Selection> {
         match &input.target {
             WorkTarget::Authorized {

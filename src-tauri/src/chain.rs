@@ -33,6 +33,12 @@ impl ChainNode {
     pub(crate) fn initialized(&self) -> bool {
         self.node.get().is_some()
     }
+    #[cfg(all(test, feature = "chain-tests", target_os = "linux"))]
+    pub(crate) fn fixture(&self, node: hellas_sdk::FullNode) -> anyhow::Result<()> {
+        self.node
+            .set(node)
+            .map_err(|_| anyhow::anyhow!("fixture chain already initialized"))
+    }
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         if let Some(node) = self.node.get() {
             node.clone().shutdown().await?;

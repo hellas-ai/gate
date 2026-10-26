@@ -24,8 +24,9 @@ nix develop -c make dev
 
 `make check` checks the Cargo/Nix Hellas pin, regenerates TypeScript bindings,
 builds and tests the shipped UI bundle, and runs formatting, strict Clippy and
-Rust tests. The optional real-chain acceptance starts six local validators and
-uses actual SDK execution, passkey-authorized delegation and funded channels:
+Rust tests. The optional chain acceptance uses the SDK's six independently
+executing validators. Its fixture orders blocks; signatures, execution,
+replication and funded SDK channels remain real:
 
 ```sh
 nix develop -c make check-chain

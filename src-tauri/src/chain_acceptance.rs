@@ -1,229 +1,78 @@
-//! A local six-validator network. Authentication, execution and settlement are SDK paths.
+//! Funded Gate acceptance using the SDK's six independently executing validators.
+//! The SDK fixture orders blocks; kernel execution, signatures and transports are real.
 use super::*;
-use commonware_codec::{DecodeExt as _, Encode as _};
-use commonware_cryptography::Digestible as _;
-use hellas_chain::LightClient as _;
-use hellas_sdk::kernel::{CoinId, Key};
-use std::{
-    path::Path,
-    process::{Child, Command, Stdio},
-    time::Duration,
+use hellas_chain::{
+    LightClient as _,
+    test_support::devnet::{Devnet, DevnetConfig, GenesisOwner, OwnerKind, run},
 };
+use hellas_sdk::kernel::{CoinId, Key};
+use std::time::Duration;
 
-#[test]
-#[ignore = "subprocess entry point used by the real-chain acceptance test"]
-fn validator_process() {
-    let config = std::env::var_os("GATE_TEST_VALIDATOR_CONFIG").expect("fixture subprocess only");
-    hellas_chain::validator::run_command(hellas_chain::validator::Command::Run {
-        config: config.into(),
-    })
-    .unwrap();
+fn policy(devnet: &Devnet) -> PaidPolicyInput {
+    let genesis = devnet.genesis();
+    PaidPolicyInput {
+        chain: ChainInput {
+            network: genesis.network_id.clone(),
+            genesis_digest: hellas_auth::Digest::from(devnet.genesis_payload().0).to_string(),
+            threshold_identity: hex::encode(&devnet.consensus_info().threshold_identity),
+            validators: devnet
+                .light_client_urls()
+                .into_iter()
+                .map(|url| format!(" \t{}\n", url.replacen("ws://", "WS://", 1)))
+                .collect(),
+            committee: genesis
+                .validators
+                .iter()
+                .map(|v| GenesisValidatorInput {
+                    public_key: v.public_key.clone(),
+                    label: v.label.clone(),
+                })
+                .collect(),
+            allocations: genesis
+                .allocations
+                .iter()
+                .map(|a| GenesisAllocationInput {
+                    address: a.address.clone(),
+                    balance: a.balance,
+                })
+                .collect(),
+        },
+        service: "web".into(),
+        method: "get".into(),
+        presentation: FetchPresentation::Http,
+        policy_salt: hex::encode([9; 32]),
+        compute_credit_limit: 40,
+        delivery_credit_limit: 40,
+        fixed_price: 10,
+        dispatch_blocks: 16,
+        delivery_blocks: 16,
+        oracle_blocks: 16,
+        value: 10000,
+        reserve: 0,
+        fee_base: 0,
+        fee_slot: 0,
+        fee_proof: 0,
+        fee_lifetime: 0,
+        min_omit_response_blocks: hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS,
+        poll_ms: 50,
+        max_observation_age_ms: 60000,
+    }
 }
-struct Validators {
-    children: Vec<Child>,
-    cadence: Option<std::thread::JoinHandle<()>>,
-    running: Arc<AtomicBool>,
-}
-impl Validators {
-    fn pace(&mut self) {
-        let pids: Vec<_> = self
-            .children
-            .iter()
-            .skip(2)
-            .map(|child| libc::pid_t::try_from(child.id()).unwrap())
-            .collect();
-        let running = self.running.clone();
-        // Control block cadence, as a network fixture. Validators still agree,
-        // execute and sign every block; full nodes execute certified history.
-        // Pause a quorum; two validators keep RPC and execution alive so full
-        // nodes can observe a stable finalized frontier between consensus bursts.
-        self.cadence = Some(std::thread::spawn(move || {
-            while running.load(Ordering::SeqCst) {
-                for pid in &pids {
-                    unsafe {
-                        libc::kill(*pid, libc::SIGCONT);
-                    }
-                }
-                std::thread::sleep(Duration::from_secs(1));
-                for pid in &pids {
-                    unsafe {
-                        libc::kill(*pid, libc::SIGSTOP);
-                    }
-                }
-                std::thread::sleep(Duration::from_secs(3));
+async fn sealing_while<T>(devnet: &mut Devnet, work: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(Duration::from_secs(120), async {
+        tokio::pin!(work);
+        loop {
+            tokio::select! {
+                result = &mut work => return result,
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {},
             }
-            for pid in &pids {
-                unsafe {
-                    libc::kill(*pid, libc::SIGCONT);
-                }
-            }
-        }));
-    }
-}
-impl Drop for Validators {
-    fn drop(&mut self) {
-        self.running.store(false, Ordering::SeqCst);
-        if let Some(cadence) = self.cadence.take() {
-            cadence.join().unwrap();
+            devnet.seal().await;
         }
-        for child in &mut self.children {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
-fn free_ports(count: u16) -> u16 {
-    loop {
-        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let start = probe.local_addr().unwrap().port();
-        if start > 65535 - count {
-            continue;
-        }
-        let sockets = (start + 1..start + count)
-            .map(|p| std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, p)))
-            .collect::<Result<Vec<_>, _>>();
-        if sockets.is_ok() {
-            return start;
-        }
-    }
-}
-async fn network(directory: &Path, owners: &[Key]) -> (Validators, PaidPolicyInput) {
-    let start = free_ports(6);
-    let rpc = free_ports(6);
-    let config_dir = directory.join("validators");
-    hellas_chain::validator::run_command(hellas_chain::validator::Command::GenerateNetwork {
-        network_id: "gate-paid-acceptance".into(),
-        validators: 6,
-        labels: (0..6).map(|i| format!("validator-{i}")).collect(),
-        addresses: vec!["127.0.0.1".into(); 6],
-        start_port: start,
-        metrics_base_port: free_ports(6),
-        relay_urls: vec![],
-        genesis_allocations: owners
-            .iter()
-            .map(|k| format!("{}:10000", hellas_chain::domain::SettlementKey::from(*k)))
-            .collect(),
-        treasury_balance: None,
-        output_dir: config_dir.clone(),
-    })
-    .unwrap();
-    let mut processes = Validators {
-        children: vec![],
-        cadence: None,
-        running: Arc::new(AtomicBool::new(true)),
-    };
-    let mut policy = paid_policy_fixture(directory).await;
-    let config_path = config_dir.join("validator-0.toml");
-    let config: hellas_chain::config::ValidatorConfig =
-        toml::from_str(&std::fs::read_to_string(config_path).unwrap()).unwrap();
-    let genesis = config.genesis.clone();
-    let scheme = hellas_chain::domain::Scheme::signer(
-        &hellas_chain::consensus_namespace(
-            config.network_id().unwrap(),
-            hellas_chain::genesis_digest(&genesis),
-        ),
-        config.participants().unwrap(),
-        config.decode_threshold_polynomial().unwrap(),
-        config.decode_threshold_share().unwrap(),
-    )
-    .unwrap();
-    let leader = genesis
-        .validators
-        .iter()
-        .map(|v| {
-            hellas_chain::domain::PublicKey::decode(hex::decode(&v.public_key).unwrap().as_slice())
-                .unwrap()
-        })
-        .min()
-        .unwrap();
-    let network = config.network_id().unwrap();
-    let document = hellas_chain::genesis_digest(&genesis);
-    let probe_dir = directory.join("live-genesis");
-    let digest = tokio::task::spawn_blocking(move || {
-        use commonware_runtime::Runner as _;
-        commonware_runtime::tokio::Runner::new(
-            commonware_runtime::tokio::Config::new().with_storage_directory(probe_dir),
-        )
-        .start(move |context| async move {
-            hellas_chain::Application::new(
-                context,
-                network,
-                document,
-                leader,
-                vec![],
-                "probe",
-                Default::default(),
-            )
-            .await
-            .genesis_block()
-            .digest()
-        })
     })
     .await
-    .unwrap();
-    policy.chain = ChainInput {
-        network: genesis.network_id,
-        genesis_digest: hellas_auth::Digest::from(digest.0).to_string(),
-        threshold_identity: hex::encode(scheme.identity().encode()),
-        validators: (rpc..rpc + 6)
-            .map(|port| format!(" \tWS://127.0.0.1:{port}\n"))
-            .collect(),
-        committee: genesis
-            .validators
-            .into_iter()
-            .map(|v| GenesisValidatorInput {
-                public_key: v.public_key,
-                label: v.label,
-            })
-            .collect(),
-        allocations: genesis
-            .allocations
-            .into_iter()
-            .map(|a| GenesisAllocationInput {
-                address: a.address,
-                balance: a.balance,
-            })
-            .collect(),
-    };
-    policy.service = "web".into();
-    policy.method = "get".into();
-    policy.presentation = FetchPresentation::Http;
-    policy.dispatch_blocks = 16;
-    policy.delivery_blocks = 16;
-    policy.oracle_blocks = 16;
-    policy.value = 10000;
-    policy.reserve = 0;
-    policy.poll_ms = 50;
-    policy.max_observation_age_ms = 10000;
-    for i in 0..6u16 {
-        let path = config_dir.join(format!("validator-{i}.toml"));
-        let mut config: hellas_chain::config::ValidatorConfig =
-            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        config.metrics_port = None;
-        config.light_client_bind = Some(([127, 0, 0, 1], rpc + i).into());
-        std::fs::write(&path, toml::to_string_pretty(&config).unwrap()).unwrap();
-        let output = std::fs::File::create(directory.join(format!("validator-{i}.log"))).unwrap();
-        processes.children.push(
-            Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "integration_tests::chain_acceptance::validator_process",
-                    "--ignored",
-                    "--nocapture",
-                ])
-                .env("GATE_TEST_VALIDATOR_CONFIG", path)
-                .env("XDG_DATA_HOME", directory.join("chain-data"))
-                .env_remove("CREDENTIALS_DIRECTORY")
-                .stdout(output.try_clone().unwrap())
-                .stderr(output)
-                .stdin(Stdio::null())
-                .spawn()
-                .unwrap(),
-        );
-    }
-    processes.pace();
-    (processes, policy)
+    .expect("one SDK setup or owner operation completes between fully applied blocks")
 }
+
 async fn delegate(
     local: &crate::control::LocalNode,
     policy: &PaidPolicyInput,
@@ -256,34 +105,22 @@ async fn delegate(
     .await
     .unwrap();
     let coin = CoinId::from_bytes(listing.coins[0].0.0);
-    let plan = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            match OwnerReshape::prepare(
-                &client,
-                config.chain.network,
-                owner,
-                &[coin],
-                Some(Key::from_bytes(
-                    local
-                        .identity
-                        .node
-                        .node_key()
-                        .public_key()
-                        .bytes()
-                        .try_into()
-                        .unwrap(),
-                )),
-            )
-            .await
-            {
-                Ok(plan) => break plan,
-                Err(hellas_sdk::coin_owner::CoinOwnerError::Query(
-                    hellas_chain::QueryError::StateUnavailable(_),
-                )) => tokio::time::sleep(Duration::from_millis(50)).await,
-                Err(error) => panic!("owner delegation: {error:?}"),
-            }
-        }
-    })
+    let plan = OwnerReshape::prepare(
+        &client,
+        config.chain.network,
+        owner,
+        &[coin],
+        Some(Key::from_bytes(
+            local
+                .identity
+                .node
+                .node_key()
+                .public_key()
+                .bytes()
+                .try_into()
+                .unwrap(),
+        )),
+    )
     .await
     .unwrap();
     let output = plan.output_ids().iter().next().copied().unwrap();
@@ -329,38 +166,61 @@ async fn delegate(
 
 static CHAIN_TEST: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-async fn funded_gateway(responses: bool) {
+async fn funded_gateway(runtime: commonware_runtime::tokio::Context, responses: bool) {
     let _network_slot = CHAIN_TEST.lock().await;
     let _ = tracing_subscriber::fmt()
         .with_env_filter("hellas_sdk=info,hellas_gateway=debug,hellas_work=info,hellas_chain=warn")
         .with_ansi(false)
         .try_init();
-    let directory_path = tempfile::tempdir().unwrap().keep();
-    let directory = directory_path.as_path();
+    const ALICE: GenesisOwner = GenesisOwner {
+        kind: OwnerKind::Passkey,
+        seed: 11,
+        balance: 10000,
+    };
+    const BOB: GenesisOwner = GenesisOwner {
+        kind: OwnerKind::Passkey,
+        seed: 13,
+        balance: 10000,
+    };
+    const NATIVE: GenesisOwner = GenesisOwner {
+        kind: OwnerKind::Native,
+        seed: 83,
+        balance: 10000,
+    };
+    let mut devnet = Devnet::start(
+        runtime,
+        DevnetConfig {
+            name: "gate_paid",
+            owners: vec![ALICE, BOB, NATIVE],
+            full_nodes: 2,
+        },
+    )
+    .await;
+    devnet.seal().await;
     let a = tempfile::tempdir().unwrap();
     let b = tempfile::tempdir().unwrap();
     let sa = tempfile::tempdir().unwrap();
     let sb = tempfile::tempdir().unwrap();
-    let alice = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+    let av = Vault::fixture(sa.path());
+    let bv = Vault::fixture(sb.path());
+    crate::identity::Identity::fixture(a.path(), &av, "Alice".into(), ALICE.scalar())
         .await
         .unwrap();
-    let bob = AppState::with_vault(b.path(), Vault::fixture(sb.path()))
+    crate::identity::Identity::fixture(b.path(), &bv, "Bob".into(), BOB.scalar())
         .await
         .unwrap();
-    let ast = alice.initialize_software("Alice".into()).await.unwrap();
-    let bst = bob.initialize_software("Bob".into()).await.unwrap();
+    let alice = AppState::with_vault(a.path(), av).await.unwrap();
+    let bob = AppState::with_vault(b.path(), bv).await.unwrap();
+    let ast = alice.status().await.unwrap();
+    let bst = bob.status().await.unwrap();
     let al = alice.local().await.unwrap();
     let bl = bob.local().await.unwrap();
-    let native = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar([83; 32]).unwrap();
-    let (_validators, mut policy) = network(
-        directory,
-        &[
-            Key::from_bytes(*al.coordinator.owner().await.unwrap().as_bytes()),
-            Key::from_bytes(*bl.coordinator.owner().await.unwrap().as_bytes()),
-            native.party_key(),
-        ],
-    )
-    .await;
+    al.chain.fixture(devnet.full_node(0).clone()).unwrap();
+    bl.chain.fixture(devnet.full_node(1).clone()).unwrap();
+    assert_eq!(ast.identity.principal, hex::encode(ALICE.key().to_bytes()));
+    assert_eq!(bst.identity.principal, hex::encode(BOB.key().to_bytes()));
+    let native = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(NATIVE.scalar()).unwrap();
+    let mut policy = policy(&devnet);
     let upstream = Upstream::start().await;
     let origin = if responses {
         Some(crate::responses_fixture::Origin::start().await)
@@ -376,9 +236,11 @@ async fn funded_gateway(responses: bool) {
         grant_https(&alice, &bob, &upstream, "paid", 232).await
     };
     let revision = alice.provider_view().await.unwrap().revision;
-    let stake = delegate(&al, &policy, None).await;
-    let payment = delegate(&bl, &policy, None).await;
-    let native_coin = delegate(&bl, &policy, Some(&native)).await;
+    let stake = sealing_while(&mut devnet, Box::pin(delegate(&al, &policy, None))).await;
+    let payment = sealing_while(&mut devnet, Box::pin(delegate(&bl, &policy, None))).await;
+    let native_coin =
+        sealing_while(&mut devnet, Box::pin(delegate(&bl, &policy, Some(&native)))).await;
+    let client_node = devnet.full_node(1).clone();
     eprintln!(
         "real-chain fixture: native and passkey owner delegations finalized through the same SDK"
     );
@@ -392,25 +254,7 @@ async fn funded_gateway(responses: bool) {
         )
         .await
         .unwrap();
-    let node = al
-        .chain
-        .get(&crate::paid::config(&policy, a.path().join("unused")).unwrap())
-        .await
-        .unwrap();
-    let height = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            if let Ok(view) = node.view() {
-                match view.client().get_latest_block().await {
-                    Ok(Some(snapshot)) => break snapshot.height,
-                    Ok(None) | Err(hellas_chain::QueryError::StateUnavailable(_)) => {}
-                    Err(error) => panic!("finalized tip: {error:?}"),
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .unwrap();
+    let height = devnet.height();
     let input = ProvisionInput {
         expected_provider_revision: revision + 1,
         contact: bst.identity.principal,
@@ -445,37 +289,13 @@ async fn funded_gateway(responses: bool) {
     alice.set_provider(false).await.unwrap();
     let mut wrong = input.clone();
     wrong.stake_coins = vec![hex::encode(native_coin.to_bytes())];
-    let refused = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            match alice.provision_paid(wrong.clone(), true).await {
-                Err(error) if error.to_string().contains("catching up") => {
-                    tokio::time::sleep(Duration::from_millis(50)).await
-                }
-                result => break result,
-            }
-        }
-    })
-    .await
-    .unwrap()
-    .unwrap_err();
+    let refused = alice.provision_paid(wrong, true).await.unwrap_err();
     assert!(
         matches!(refused.downcast_ref::<hellas_sdk::coin_owner::CoinOwnerError>(),Some(hellas_sdk::coin_owner::CoinOwnerError::Missing(id)) if *id==native_coin),
         "{refused:#}"
     );
     assert!(!a.path().join("paid-provider").exists());
-    let offered = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            match alice.provision_paid(input.clone(), true).await {
-                Ok(offer) => break offer,
-                Err(error) if error.to_string().contains("catching up") => {
-                    tokio::time::sleep(Duration::from_millis(50)).await
-                }
-                Err(error) => panic!("provision: {error:#}"),
-            }
-        }
-    })
-    .await
-    .unwrap();
+    let offered = alice.provision_paid(input.clone(), true).await.unwrap();
     eprintln!("real-chain fixture: offer durably provisioned");
     assert_eq!(offered.bond, preview.bond);
     assert!(offered.signed_offer.is_some());
@@ -519,7 +339,7 @@ async fn funded_gateway(responses: bool) {
         .await
         .unwrap();
     alice.set_provider(true).await.unwrap();
-    bob.save_paid_pool(PaidPoolInput {
+    let pool = PaidPoolInput {
         id: "real".into(),
         providers: vec![PaidProviderInput {
             provider: ast.identity.transport_id.clone(),
@@ -535,60 +355,70 @@ async fn funded_gateway(responses: bool) {
             policy: policy.clone(),
         }],
         max_pending_requests: 8,
-    })
-    .await
-    .unwrap();
+    };
+    bob.save_paid_pool(pool.clone()).await.unwrap();
     request.client.target = WorkTarget::Paid {
         pool_id: "real".into(),
         provider: ast.identity.transport_id,
         service: policy.service.clone(),
         method: policy.method.clone(),
     };
-    tokio::time::timeout(Duration::from_secs(240), async {
-        loop {
-            let events = std::sync::Mutex::new(vec![]);
-            let id = crate::run::execute(&bob, request.clone(), |event| {
-                events.lock().unwrap().push(event)
-            })
-            .await
-            .unwrap();
-            let record = bob
-                .history
-                .list(512)
-                .unwrap()
-                .into_iter()
-                .find(|entry| entry.id == id)
-                .unwrap();
-            let events = events.into_inner().unwrap();
-            if record.status == "complete" {
-                assert!(
-                    events
-                        .iter()
-                        .any(|event| matches!(event, ExecutionEvent::Verification { .. }))
-                );
-                assert!(
-                    events.iter().any(
-                        |event| matches!(event,ExecutionEvent::Finished{run_id} if run_id==&id)
-                    )
-                );
-                break;
-            }
-            assert_eq!(record.status, "failed");
-            assert!(!events.iter().any(|event| matches!(
-                event,
-                ExecutionEvent::Verification { .. } | ExecutionEvent::Finished { .. }
-            )));
-            let error = record.error;
-            assert!(
-                error.contains("no eligible paid provider")
-                    || error.contains("refused as not ready"),
-                "paid Run: {error}"
-            );
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
+    let args = crate::paid::pool_options(b.path(), &pool)
+        .unwrap()
+        .providers
+        .remove(0);
+    let endpoint = hellas_sdk::paid_client::bind_paid_endpoint(
+        bl.clients.paid_transport(&bl, "real").await.unwrap(),
+    )
+    .await
+    .unwrap();
+    let signer = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
+        bl.identity.node.node_secret_bytes(),
+    )
+    .unwrap();
+    let mut session = sealing_while(
+        &mut devnet,
+        Box::pin(hellas_sdk::paid_client::PaidWorkSession::open(
+            args,
+            endpoint.clone(),
+            signer,
+            client_node,
+            bl.coordinator.clone(),
+        )),
+    )
+    .await
+    .unwrap();
+    session.shutdown().await;
+    drop(session);
+    endpoint.close().await;
+    let events = std::sync::Mutex::new(vec![]);
+    let id = crate::run::execute(&bob, request.clone(), |event| {
+        events.lock().unwrap().push(event)
     })
     .await
     .unwrap();
+    let history = bob.history.list(512).unwrap();
+    assert_eq!(history.len(), 1, "the funded Run is issued once");
+    let record = history.into_iter().find(|entry| entry.id == id).unwrap();
+    assert_eq!(record.status, "complete", "{}", record.error);
+    assert_eq!(
+        origin.as_ref().map_or_else(
+            || upstream.calls.load(Ordering::SeqCst),
+            |origin| origin.calls.load(Ordering::SeqCst)
+        ),
+        1
+    );
+    let events = events.into_inner().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ExecutionEvent::Verification { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event,ExecutionEvent::Finished{run_id} if run_id==&id))
+    );
     let (key, bearer) = bob
         .issue_gateway_key(GatewayKeyInput {
             request_id: hex::encode([234; 16]),
@@ -638,6 +468,13 @@ async fn funded_gateway(responses: bool) {
         calls
     );
     completed_gateway_response(&http, &url, &request, responses, &bearer).await;
+    assert_eq!(
+        origin.as_ref().map_or_else(
+            || upstream.calls.load(Ordering::SeqCst),
+            |origin| origin.calls.load(Ordering::SeqCst)
+        ),
+        calls + 1
+    );
     assert!(!b.path().join("gateway-archive").exists());
     if !responses {
         let original = bl.clients.target(&bl, &request.client).await.unwrap();
@@ -701,6 +538,13 @@ async fn funded_gateway(responses: bool) {
     bob.set_gateway(true, Some(archived)).await.unwrap();
     let url = format!("{}{path}", bob.gateway_address().await.unwrap());
     completed_gateway_response(&http, &url, &request, responses, &bearer).await;
+    assert_eq!(
+        origin.as_ref().map_or_else(
+            || upstream.calls.load(Ordering::SeqCst),
+            |origin| origin.calls.load(Ordering::SeqCst)
+        ),
+        calls + 2 + usize::from(!responses)
+    );
     assert!(
         std::fs::read_dir(b.path().join("gateway-archive"))
             .unwrap()
@@ -725,6 +569,7 @@ async fn funded_gateway(responses: bool) {
             .is_err()
     );
     alice.shutdown().await.unwrap();
+    devnet.shutdown().await;
 }
 
 fn gateway_request(
@@ -741,13 +586,13 @@ fn gateway_request(
         http.get(url)
     }
 }
-#[tokio::test(flavor = "multi_thread")]
-async fn paid_preview_provision_and_http_work_use_real_validators_and_delegated_coins() {
-    funded_gateway(false).await;
+#[test]
+fn paid_preview_provision_and_http_work_use_real_validators_and_delegated_coins() {
+    run(|runtime| funded_gateway(runtime, false));
 }
-#[tokio::test(flavor = "multi_thread")]
-async fn paid_responses_gateway_uses_real_validators_and_delegated_coins() {
-    funded_gateway(true).await;
+#[test]
+fn paid_responses_gateway_uses_real_validators_and_delegated_coins() {
+    run(|runtime| funded_gateway(runtime, true));
 }
 
 async fn completed_gateway_response(
@@ -758,23 +603,13 @@ async fn completed_gateway_response(
     bearer: &str,
 ) {
     tokio::time::timeout(Duration::from_secs(120), async {
-        loop {
-            let response = gateway_request(http, url, request, responses)
-                .bearer_auth(bearer)
-                .send()
-                .await
-                .unwrap();
-            let status = response.status();
-            match response.text().await {
-                Ok(body) if status == 200 && body.contains("hello") => break,
-                Err(error) if status == 200 && error.is_decode() => {} // An admission refusal after streaming headers must not count as completion.
-                Ok(body) if status == 503 || status == 502 => {
-                    eprintln!("paid gateway awaiting admission: {status}: {body}")
-                }
-                other => panic!("paid gateway response {status}: {other:?}"),
-            }
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
+        let response = gateway_request(http, url, request, responses)
+            .bearer_auth(bearer)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert!(response.text().await.unwrap().contains("hello"));
     })
     .await
     .expect("a full verified response, not only HTTP headers");

@@ -65,6 +65,23 @@ pub async fn save_credential(
 impl Identity {
     /// This explicit software-only creation is never a fallback for a native prompt.
     pub async fn create(directory: &Path, vault: &Vault, name: String) -> anyhow::Result<Self> {
+        Self::prepare_software(directory, vault, name, random()?).await
+    }
+    #[cfg(all(test, feature = "chain-tests", target_os = "linux"))]
+    pub(crate) async fn fixture(
+        directory: &Path,
+        vault: &Vault,
+        name: String,
+        scalar: [u8; 32],
+    ) -> anyhow::Result<Self> {
+        Self::prepare_software(directory, vault, name, scalar).await
+    }
+    async fn prepare_software(
+        directory: &Path,
+        vault: &Vault,
+        name: String,
+        scalar: [u8; 32],
+    ) -> anyhow::Result<Self> {
         ensure!(
             !directory.join("node/authority").try_exists()?,
             "node already initialized"
@@ -73,7 +90,6 @@ impl Identity {
             !directory.join("installation.json").try_exists()?,
             "resume the prepared initialization instead"
         );
-        let scalar = random()?;
         let passkey = SoftPasskey::from_secret_scalar(scalar)
             .map_err(|_| anyhow::anyhow!("invalid passkey scalar"))?;
         let owner = PrincipalId::from_public_key(hellas_auth::PublicKey::P256(
