@@ -544,7 +544,8 @@ async fn gateway_admits_only_current_named_credentials_and_zdr_does_not_archive(
     let alice = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
         .await
         .unwrap();
-    let bob = AppState::with_vault(b.path(), Vault::fixture(sb.path()))
+    let bob_vault = Vault::fixture(sb.path());
+    let mut bob = AppState::with_vault(b.path(), bob_vault.clone())
         .await
         .unwrap();
     alice.initialize_software("Alice".into()).await.unwrap();
@@ -634,6 +635,7 @@ async fn gateway_admits_only_current_named_credentials_and_zdr_does_not_archive(
     let access = contacts::import(b.path(), &recipient, &bundle)
         .await
         .unwrap();
+    drop(recipient);
     let policy = local.composition.policy("responses").unwrap();
     trust::approve(
         b.path(),
@@ -669,8 +671,7 @@ async fn gateway_admits_only_current_named_credentials_and_zdr_does_not_archive(
         port: Some(0),
         zdr: true,
     };
-    bob.set_gateway(true, Some(config)).await.unwrap();
-    let address = bob.gateway_address().await.unwrap();
+    bob.set_gateway(true, Some(config.clone())).await.unwrap();
     let input = GatewayKeyInput {
         request_id: hex::encode([0xab; 16]).to_uppercase(),
         label: "tool one".into(),
@@ -691,8 +692,156 @@ async fn gateway_admits_only_current_named_credentials_and_zdr_does_not_archive(
         })
         .await
         .unwrap();
+    let pending_input = GatewayKeyInput {
+        request_id: hex::encode([0xef; 16]),
+        label: "pending tool".into(),
+        period: crate::period::Period::Week,
+    };
+    let prepared = {
+        let local = bob.local().await.unwrap();
+        let limited = restricted_session(&local, &[hellas_sdk::work::node::HOST_STATUS]).await;
+        assert!(
+            crate::gateway::issue_session(&local, pending_input.clone(), &limited)
+                .await
+                .is_err()
+        );
+        let prepared: crate::credentials::PreparedIssue = crate::vault::read(
+            &b.path()
+                .join("prepared-gateway-keys")
+                .join(format!("{}.json", pending_input.request_id)),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            local
+                .coordinator
+                .authenticate(&prepared.secret(&bob_vault).await.unwrap())
+                .await
+                .is_err()
+        );
+        prepared
+    };
+    let original_secret = prepared.secret(&bob_vault).await.unwrap();
+    let pending_bearer = format!(
+        "{}{}",
+        original_secret.id(),
+        hex::encode(original_secret.expose_secret())
+    );
+    bob.shutdown().await.unwrap();
+    bob = AppState::with_vault(b.path(), bob_vault.clone())
+        .await
+        .unwrap();
+    let listed = bob.gateway_keys().await.unwrap();
+    assert!(
+        listed
+            .iter()
+            .any(|key| key.id == first.id && key.state == GatewayKeyState::Active)
+    );
+    assert!(
+        listed
+            .iter()
+            .any(|key| key.id == pending_input.request_id && key.state == GatewayKeyState::Pending)
+    );
+    bob.set_gateway(true, Some(config)).await.unwrap();
+    let address = bob.gateway_address().await.unwrap();
     let http = reqwest::Client::new();
     let url = format!("{address}/v1/responses");
+    assert_eq!(
+        http.post(&url)
+            .bearer_auth(&pending_bearer)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    let (reconciled, restored) = bob
+        .reconcile_gateway_key(&pending_input.request_id)
+        .await
+        .unwrap();
+    assert_eq!(reconciled.state, GatewayKeyState::Active);
+    assert_eq!(restored, pending_bearer);
+    assert_eq!(
+        prepared.secret(&bob_vault).await.unwrap().id(),
+        original_secret.id()
+    );
+    assert_eq!(
+        prepared.secret(&bob_vault).await.unwrap().expose_secret(),
+        original_secret.expose_secret()
+    );
+    assert_ne!(
+        http.post(&url)
+            .bearer_auth(&restored)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    bob.revoke_gateway_key(&reconciled.id).await.unwrap();
+    assert_eq!(
+        http.post(&url)
+            .bearer_auth(&restored)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    let cancelled_id = hex::encode([0xed; 16]);
+    let cancelled = {
+        let local = bob.local().await.unwrap();
+        let limited = restricted_session(&local, &[hellas_sdk::work::node::HOST_STATUS]).await;
+        assert!(
+            crate::gateway::issue_session(
+                &local,
+                GatewayKeyInput {
+                    request_id: cancelled_id.clone(),
+                    label: "cancel pending tool".into(),
+                    period: crate::period::Period::Week
+                },
+                &limited
+            )
+            .await
+            .is_err()
+        );
+        let prepared: crate::credentials::PreparedIssue = crate::vault::read(
+            &b.path()
+                .join("prepared-gateway-keys")
+                .join(format!("{cancelled_id}.json")),
+        )
+        .unwrap()
+        .unwrap();
+        prepared
+    };
+    assert!(
+        bob.gateway_keys()
+            .await
+            .unwrap()
+            .iter()
+            .any(|key| key.id == cancelled_id && key.state == GatewayKeyState::Pending)
+    );
+    bob.revoke_gateway_key(&cancelled_id).await.unwrap();
+    assert!(
+        bob.gateway_keys()
+            .await
+            .unwrap()
+            .iter()
+            .any(|key| key.id == cancelled_id && key.state == GatewayKeyState::Revoked)
+    );
+    assert!(
+        bob_vault
+            .get(&crate::credentials::PreparedIssue::key(
+                cancelled.credential.id()
+            ))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(bob.reconcile_gateway_key(&cancelled_id).await.is_err());
     assert_eq!(
         http.post(&url)
             .json(&serde_json::json!({}))
@@ -749,7 +898,7 @@ async fn gateway_admits_only_current_named_credentials_and_zdr_does_not_archive(
             .await
             .unwrap()
             .iter()
-            .any(|key| key.id == first.id && key.revoked)
+            .any(|key| key.id == first.id && key.state == GatewayKeyState::Revoked)
     );
     let listed = bob
         .gateway_keys()
@@ -2342,7 +2491,14 @@ async fn late_resource_refusal_reports_catalogue_and_restart_then_reapply_activa
     };
     assert!(active.contains(&original));
     assert_ne!(local.composition.policy("page").unwrap(), original);
-    let repeated = alice.preview_apply(desired).await.unwrap();
+    desired.expected_provider_revision = alice.provider_view().await.unwrap().revision;
+    if let ResourceKind::Https {
+        max_response_bytes, ..
+    } = &mut desired.resources[0].resource
+    {
+        *max_response_bytes = 16384;
+    }
+    let repeated = alice.preview_apply(desired.clone()).await.unwrap();
     let completed = alice.apply_document(&repeated.id).await.unwrap();
     assert!(completed.error.is_none(), "{:?}", completed.error);
     let WorkControlReply::Catalogue(active) = local
@@ -2356,6 +2512,18 @@ async fn late_resource_refusal_reports_catalogue_and_restart_then_reapply_activa
         panic!("authority catalogue");
     };
     assert!(active.contains(&local.composition.policy("page").unwrap()));
+    let policy = local.composition.policy("page").unwrap();
+    assert_eq!(
+        policy.revision.0, 2,
+        "failed activation must not consume an authority revision"
+    );
+    assert_eq!(policy.https.as_ref().unwrap().max_response_bytes, 16384);
+    let preview = alice.preview_apply(desired).await.unwrap();
+    let again = alice.apply_document(&preview.id).await.unwrap();
+    assert!(again.error.is_none());
+    assert!(again.applied.is_empty());
+    assert_eq!(again.authority_revision, completed.authority_revision);
+
     bob.shutdown().await.unwrap();
     alice.shutdown().await.unwrap();
 }

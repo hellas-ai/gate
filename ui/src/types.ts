@@ -16,6 +16,7 @@ export type { ExecutionEvent } from "./generated/ExecutionEvent.ts";
 export type { FetchPresentation } from "./generated/FetchPresentation.ts";
 export type { GatewayConfig } from "./generated/GatewayConfig.ts";
 export type { GatewayKeyInput } from "./generated/GatewayKeyInput.ts";
+export type { GatewayKeyState } from "./generated/GatewayKeyState.ts";
 export type { GatewayKeyView } from "./generated/GatewayKeyView.ts";
 export type { GenesisAllocationInput } from "./generated/GenesisAllocationInput.ts";
 export type { GenesisValidatorInput } from "./generated/GenesisValidatorInput.ts";

@@ -44,6 +44,7 @@ export const api = {
   issueGatewayKey: (input: T.GatewayKeyInput): Promise<[T.GatewayKeyView, string]> => call("issue_gateway_key", { input }),
   issueAdminAccess: (input:T.AdminAccessInput):Promise<T.AdminAccess> => call("issue_admin_access",{input}),
   rotateGatewayKey: (old:string,input:T.GatewayKeyInput):Promise<[T.GatewayKeyView,string]> => call("rotate_gateway_key",{old,input}),
+  reconcileGatewayKey: (id:string):Promise<[T.GatewayKeyView,string]> => call("reconcile_gateway_key",{id}),
   revokeGatewayKey: (id: string): Promise<void> => call("revoke_gateway_key", { id }),
   savePaidPool: (input: T.PaidPoolInput): Promise<void> => call("save_paid_pool", { input }),
   run: async (request: T.RunRequest, onEvent: (event: T.ExecutionEvent) => void): Promise<string> => {

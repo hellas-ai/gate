@@ -263,3 +263,14 @@ pub async fn discard_apply(state: State<'_, Arc<AppState>>, id: String) -> ApiRe
     state.discard_apply(&id).await;
     Ok(())
 }
+
+#[tauri::command]
+pub async fn reconcile_gateway_key(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> ApiResult<(GatewayKeyView, String)> {
+    state
+        .reconcile_gateway_key(&id)
+        .await
+        .map_err(ApiError::internal)
+}

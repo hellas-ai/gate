@@ -141,7 +141,45 @@ impl Composition {
         })
     }
     /// A composition catalogue is not authority; WorkControl must still activate it.
-    pub fn catalogue_many(&self, expected: u64, inputs: Vec<ResourceInput>) -> anyhow::Result<()> {
+    pub fn resource_revision(
+        &self,
+        input: &ResourceInput,
+        active: &[GrantPolicy],
+    ) -> anyhow::Result<(u64, bool)> {
+        let config = self.snapshot()?;
+        let changed = !config.resources.contains(input);
+        if !changed {
+            let policy = self.policy(&input.name)?;
+            if active.contains(&policy) {
+                return Ok((policy.revision.0, false));
+            }
+        }
+        let resource = id("hellas.gate.resource.v1", &input.name);
+        let previous = active.iter().find(|policy| policy.resource == resource);
+        if let Some(previous) = previous {
+            ensure!(
+                previous.account
+                    == id(
+                        "hellas.gate.account.v1",
+                        &route_id(&input.service, &input.method)
+                    ),
+                "a resource cannot move to another upstream account; choose a new resource name"
+            );
+        }
+        let revision = previous
+            .map_or(Some(1), |policy| policy.revision.0.checked_add(1))
+            .context("resource revision overflow")?;
+        Ok((
+            revision,
+            changed || config.policy_revisions.get(&input.name) != Some(&revision),
+        ))
+    }
+    pub fn catalogue_many(
+        &self,
+        expected: u64,
+        inputs: Vec<ResourceInput>,
+        active: &[GrantPolicy],
+    ) -> anyhow::Result<()> {
         let mut config = self.snapshot()?;
         ensure!(config.revision == expected, "provider revision conflict");
         let mut names = std::collections::BTreeSet::new();
@@ -157,7 +195,8 @@ impl Composition {
                     .contains_key(&route_id(&input.service, &input.method)),
                 "configure this endpoint first"
             );
-            if config.resources.contains(&input) {
+            let (revision, needs_publication) = self.resource_revision(&input, active)?;
+            if !needs_publication {
                 continue;
             }
             if let Some(old) = config
@@ -170,13 +209,7 @@ impl Composition {
                     "a resource cannot move to another upstream account; choose a new resource name"
                 );
             }
-            let revision = config
-                .policy_revisions
-                .entry(input.name.clone())
-                .or_insert(0);
-            *revision = revision
-                .checked_add(1)
-                .context("resource revision overflow")?;
+            config.policy_revisions.insert(input.name.clone(), revision);
             config
                 .resources
                 .retain(|resource| resource.name != input.name);
@@ -751,13 +784,20 @@ pub async fn configure_resources(
         status.provider.as_ref().is_some_and(|s| s.state == 2),
         "start the provider before administering resources"
     );
+    let active = match session
+        .work(hellas_sdk::work::model::grant::admin::WorkControlCommand::Catalogue)
+        .await?
+    {
+        hellas_sdk::work::model::grant::admin::WorkControlReply::Catalogue(policies) => policies,
+        _ => anyhow::bail!("invalid authority resource catalogue"),
+    };
     let names = inputs
         .iter()
         .map(|input| input.name.clone())
         .collect::<Vec<_>>();
     session.track_local(
         format!("Publish resource catalogue {}", names.join(", ")),
-        || local.composition.catalogue_many(expected, inputs),
+        || local.composition.catalogue_many(expected, inputs, &active),
     )?;
     session.provider_state(false).await?;
     session

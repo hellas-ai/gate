@@ -236,7 +236,7 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
     let resources = resources
         .into_iter()
         .map(|resource| {
-            let changed = !current.resources.contains(&resource);
+            let (_, changed) = local.composition.resource_revision(&resource, &active)?;
             let activated = if changed {
                 false
             } else {

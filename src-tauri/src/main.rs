@@ -47,6 +47,7 @@ fn main() {
             commands::gateway_address,
             commands::list_gateway_keys,
             commands::issue_gateway_key,
+            commands::reconcile_gateway_key,
             commands::revoke_gateway_key,
             commands::save_paid_pool,
             commands::run_request,

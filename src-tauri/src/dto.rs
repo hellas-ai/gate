@@ -438,7 +438,18 @@ pub struct GatewayKeyView {
     pub id: String,
     pub label: String,
     pub expires: u64,
-    pub revoked: bool,
+    pub state: GatewayKeyState,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub enum GatewayKeyState {
+    Pending,
+    Active,
+    Revoking,
+    Revoked,
+    Expired,
 }
 
 #[derive(Clone, Debug, Serialize)]

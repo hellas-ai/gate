@@ -302,6 +302,13 @@ impl AppState {
             .await?;
         Ok(access.address)
     }
+    pub async fn reconcile_gateway_key(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<(GatewayKeyView, String)> {
+        let _lock = self.operation.lock().await;
+        crate::gateway::reconcile(self.local().await?.as_ref(), id).await
+    }
     pub async fn gateway_keys(&self) -> anyhow::Result<Vec<GatewayKeyView>> {
         crate::gateway::list(self.local().await?.as_ref()).await
     }
@@ -437,7 +444,7 @@ mod recovery_tests {
                 .await
                 .unwrap()
                 .iter()
-                .all(|key| key.revoked)
+                .all(|key| key.state == GatewayKeyState::Revoked)
         );
         let local = app.local().await.unwrap();
         let bytes = hex::decode(bearer).unwrap();

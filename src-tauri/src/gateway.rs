@@ -124,6 +124,7 @@ pub fn factory(local: Arc<LocalNode>) -> GatewayFactory {
 struct NamedKey {
     intent: Digest,
     issue: PreparedIssue,
+    retirement_requested: bool,
 }
 fn path(directory: &Path, id: GrantId) -> PathBuf {
     directory.join("gateway-keys").join(format!("{id}.json"))
@@ -154,6 +155,10 @@ pub async fn issue_session(
             ensure!(
                 key.intent == intent,
                 "prepared key ID conflicts with this intent"
+            );
+            ensure!(
+                !key.retirement_requested,
+                "this gateway key was retired; choose a new request ID"
             );
             key
         }
@@ -193,7 +198,11 @@ pub async fn issue_session(
                     ),
                 )
                 .await?;
-            let key = NamedKey { intent, issue };
+            let key = NamedKey {
+                intent,
+                issue,
+                retirement_requested: false,
+            };
             session.track_local(format!("Publish gateway key intent {id}"), || {
                 vault::write(&path, &key)
             })?;
@@ -208,10 +217,125 @@ pub async fn issue_session(
             id: id.to_string(),
             label: named.issue.label,
             expires: named.issue.credential.scope().expires.0,
-            revoked: false,
+            state: GatewayKeyState::Active,
         },
         bearer,
     ))
+}
+struct KeySnapshot {
+    generation: u64,
+    credentials: std::collections::BTreeMap<CredentialId, CredentialMetadata>,
+    grants: std::collections::BTreeMap<GrantId, Grant>,
+}
+async fn snapshot(session: &crate::control::Session) -> anyhow::Result<KeySnapshot> {
+    session
+        .inspect(InspectionQuery::Grant {
+            id: GrantId(session.authorization.as_slice().try_into()?),
+        })
+        .await?;
+    let mut credentials = std::collections::BTreeMap::new();
+    let mut grants = std::collections::BTreeMap::new();
+    let mut stamp = None;
+    let mut check = |view: &AuthorityInspection| -> anyhow::Result<()> {
+        let current = (view.generation, view.revision);
+        if let Some(previous) = stamp {
+            ensure!(
+                current == previous,
+                "authority changed while listing keys; retry"
+            );
+        } else {
+            stamp = Some(current);
+        }
+        Ok(())
+    };
+    let mut after = None;
+    loop {
+        let view = session
+            .inspect(InspectionQuery::Credentials { after })
+            .await?;
+        check(&view)?;
+        let InspectionRecords::Credentials { records, next } = view.records else {
+            anyhow::bail!("invalid credential listing");
+        };
+        credentials.extend(records.into_iter().map(|record| (record.id, record)));
+        ensure!(
+            credentials.len() <= 512,
+            "credential listing exceeds bounds"
+        );
+        if let Some(next) = next {
+            ensure!(
+                after.is_none_or(|previous| next > previous),
+                "credential cursor did not advance"
+            );
+            after = Some(next);
+        } else {
+            break;
+        }
+    }
+    let mut after = None;
+    loop {
+        let view = session.inspect(InspectionQuery::Grants { after }).await?;
+        check(&view)?;
+        let InspectionRecords::Grants { records, next } = view.records else {
+            anyhow::bail!("invalid grant listing");
+        };
+        grants.extend(records.into_iter().map(|record| (record.id(), record)));
+        ensure!(grants.len() <= 512, "grant listing exceeds bounds");
+        if let Some(next) = next {
+            ensure!(
+                after.is_none_or(|previous| next > previous),
+                "grant cursor did not advance"
+            );
+            after = Some(next);
+        } else {
+            break;
+        }
+    }
+    let generation = stamp.context("authority listing is absent")?.0;
+    Ok(KeySnapshot {
+        generation,
+        credentials,
+        grants,
+    })
+}
+fn key_view(key: &NamedKey, snapshot: &KeySnapshot) -> anyhow::Result<GatewayKeyView> {
+    let credential = snapshot.credentials.get(&key.issue.credential.id());
+    if let Some(record) = credential {
+        ensure!(
+            record.scope == *key.issue.credential.scope()
+                && record.holder == key.issue.credential.holder(),
+            "gateway credential differs from its prepared intent"
+        );
+    }
+    let credential_live = credential
+        .is_some_and(|record| !record.revoked && record.generation == snapshot.generation);
+    let grant_live = snapshot
+        .grants
+        .get(&key.issue.id)
+        .is_some_and(|grant| !grant.revoked());
+    let state = if key.issue.generation != snapshot.generation {
+        GatewayKeyState::Revoked
+    } else if key.retirement_requested {
+        if credential_live || grant_live {
+            GatewayKeyState::Revoking
+        } else {
+            GatewayKeyState::Revoked
+        }
+    } else if credential.is_some_and(|record| record.revoked) {
+        GatewayKeyState::Revoked
+    } else if key.issue.credential.scope().expires <= UnixMillis::now()? {
+        GatewayKeyState::Expired
+    } else if credential.is_none() {
+        GatewayKeyState::Pending
+    } else {
+        GatewayKeyState::Active
+    };
+    Ok(GatewayKeyView {
+        id: key.issue.id.to_string(),
+        label: key.issue.label.clone(),
+        expires: key.issue.credential.scope().expires.0,
+        state,
+    })
 }
 pub async fn list(local: &LocalNode) -> anyhow::Result<Vec<GatewayKeyView>> {
     let directory = local.directory.join("gateway-keys");
@@ -219,38 +343,36 @@ pub async fn list(local: &LocalNode) -> anyhow::Result<Vec<GatewayKeyView>> {
         return Ok(vec![]);
     }
     let session = local.session(false).await?;
-    let generation = session.status().await?.generation;
+    let snapshot = snapshot(&session).await?;
     let mut keys = Vec::new();
     for entry in std::fs::read_dir(directory)? {
+        ensure!(keys.len() < 512, "gateway key listing exceeds bounds");
         let key =
             vault::read::<NamedKey>(&entry?.path())?.context("gateway key metadata absent")?;
-        if key.issue.generation != generation {
-            keys.push(GatewayKeyView {
-                id: key.issue.id.to_string(),
-                label: key.issue.label,
-                expires: key.issue.credential.scope().expires.0,
-                revoked: true,
-            });
-            continue;
-        }
-        let view = session
-            .inspect(InspectionQuery::Credential {
-                id: key.issue.credential.id(),
-            })
-            .await?;
-        let InspectionRecords::Credentials { records, .. } = view.records else {
-            anyhow::bail!("invalid credential metadata");
-        };
-        let record = records.first().context("gateway credential absent")?;
-        keys.push(GatewayKeyView {
-            id: key.issue.id.to_string(),
-            label: key.issue.label,
-            expires: record.scope.expires.0,
-            revoked: record.revoked || record.generation != view.generation,
-        });
+        keys.push(key_view(&key, &snapshot)?);
     }
     keys.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(keys)
+}
+pub async fn reconcile(local: &LocalNode, id: &str) -> anyhow::Result<(GatewayKeyView, String)> {
+    let session = local.session(true).await?;
+    let key = vault::read::<NamedKey>(&path(&local.directory, id.parse()?))?
+        .context("gateway key not found")?;
+    ensure!(
+        !key.retirement_requested,
+        "this key was retired; issue a new key instead"
+    );
+    ensure!(
+        key.issue.generation == session.status().await?.generation,
+        "owner recovery invalidated this preparation; issue a new key"
+    );
+    let secret = key.issue.secret(&local.vault).await?;
+    key.issue.reconcile_session(&session, &local.vault).await?;
+    let view = key_view(&key, &snapshot(&session).await?)?;
+    Ok((
+        view,
+        format!("{}{}", secret.id(), hex::encode(secret.expose_secret())),
+    ))
 }
 pub async fn revoke(local: &LocalNode, id: &str) -> anyhow::Result<()> {
     let session = local.session(true).await?;
@@ -261,20 +383,45 @@ pub async fn revoke_session(
     id: &str,
     session: &crate::control::Session,
 ) -> anyhow::Result<()> {
-    let key = vault::read::<NamedKey>(&path(&local.directory, id.parse()?))?
-        .context("gateway key not found")?;
-    let view = session
-        .inspect(InspectionQuery::Credential {
-            id: key.issue.credential.id(),
-        })
-        .await?;
-    let InspectionRecords::Credentials { records, .. } = view.records else {
-        anyhow::bail!("invalid credential metadata");
-    };
-    let record = records.first().context("gateway credential absent")?;
-    if !record.revoked && record.generation == view.generation {
+    let path = path(&local.directory, id.parse()?);
+    let mut key = vault::read::<NamedKey>(&path)?.context("gateway key not found")?;
+    let snapshot = snapshot(session).await?;
+    // The durable retirement intent prevents a pruned credential from ever being
+    // mistaken for an unissued preparation and reactivated with its old secret.
+    key.retirement_requested = true;
+    session.track_local(
+        format!("Retire gateway key intent {}", key.issue.id),
+        || vault::write(&path, &key),
+    )?;
+    if let Some(record) = snapshot.credentials.get(&key.issue.credential.id())
+        && !record.revoked
+        && record.generation == snapshot.generation
+    {
         session.revoke(record.id, record.revision).await?;
     }
+    if let Some(grant) = snapshot.grants.get(&key.issue.id)
+        && !grant.revoked()
+    {
+        session
+            .grant(GrantCommand::Revoke {
+                authorization: GrantId(session.authorization.as_slice().try_into()?),
+                id: key.issue.id,
+                expected: grant.revision(),
+            })
+            .await?;
+    }
+    session
+        .track(
+            format!(
+                "Remove retired credential custody {}",
+                key.issue.credential.id()
+            ),
+            false,
+            local
+                .vault
+                .delete(&PreparedIssue::key(key.issue.credential.id())),
+        )
+        .await?;
     Ok(())
 }
 
