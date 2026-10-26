@@ -3259,3 +3259,93 @@ async fn authorized_responses_gateway_enforces_keys_zdr_archive_revocation_and_s
 #[cfg(all(feature = "chain-tests", target_os = "linux"))]
 #[path = "chain_acceptance.rs"]
 mod chain_acceptance;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn refused_first_paid_route_cannot_select_the_shared_chain() {
+    let upstream = Upstream::start().await;
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let sa = tempfile::tempdir().unwrap();
+    let sb = tempfile::tempdir().unwrap();
+    let alice = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+        .await
+        .unwrap();
+    let bob = AppState::with_vault(b.path(), Vault::fixture(sb.path()))
+        .await
+        .unwrap();
+    alice.initialize_software("Alice".into()).await.unwrap();
+    bob.initialize_software("Bob".into()).await.unwrap();
+    let (request, _) = grant_https(&alice, &bob, &upstream, "unselected-chain", 238).await;
+    let local = alice.local().await.unwrap();
+    assert!(!local.chain.initialized());
+    assert!(!a.path().join("chain").exists());
+    let mut chain_a = paid_policy_fixture(a.path()).await;
+    chain_a.service = "web".into();
+    chain_a.method = "get".into();
+    chain_a.presentation = FetchPresentation::Http;
+    let mut chain_b = chain_a.clone();
+    // The opposite valid BLS generator is an independently pinned finality
+    // identity for a distinct chain definition on this same network.
+    chain_b.chain.threshold_identity.replace_range(..2, "b7");
+    let input = PaidServeInput {
+        policy: chain_a.clone(),
+        routes: vec![PaidRouteInput {
+            peer: bob.status().await.unwrap().identity.transport_id,
+            client: bob.status().await.unwrap().identity.node_key,
+            bond: hex::encode([238; 32]),
+        }],
+    };
+    upstream.hold.store(true, Ordering::SeqCst);
+    let recipient = bob.local().await.unwrap();
+    let pending =
+        tokio::spawn(async move { execute(&recipient.clients, &recipient, &request).await });
+    upstream.started.notified().await;
+    let metadata = std::fs::read(a.path().join("provider-configuration.json")).unwrap();
+    let refusal = alice
+        .configure_paid_serve(2, Some(input))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            refusal.downcast_ref::<hellas_sdk::work_config::WorkConfigError>(),
+            Some(hellas_sdk::work_config::WorkConfigError::MissingRoute { .. })
+        ),
+        "{refusal:#}"
+    );
+    assert!(!local.chain.initialized());
+    assert!(!a.path().join("chain").exists());
+    assert_eq!(
+        std::fs::read(a.path().join("provider-configuration.json")).unwrap(),
+        metadata
+    );
+    assert_eq!(alice.status().await.unwrap().provider.state, "running");
+    assert!(!pending.is_finished());
+    upstream.release.notify_one();
+    assert!(finished(&pending.await.unwrap().unwrap()));
+    alice
+        .configure_paid_serve(
+            2,
+            Some(PaidServeInput {
+                policy: chain_b.clone(),
+                routes: vec![],
+            }),
+        )
+        .await
+        .unwrap();
+    let config_b = crate::paid::config(&chain_b, a.path().join("unused-b")).unwrap();
+    let node = local.chain.get(&config_b).await.unwrap();
+    config_b.check_node(&node).unwrap();
+    assert!(
+        crate::paid::config(&chain_a, a.path().join("unused-a"))
+            .unwrap()
+            .check_node(&node)
+            .is_err()
+    );
+    assert_eq!(
+        node.config().threshold_identity,
+        hex::decode(chain_b.chain.threshold_identity).unwrap()
+    );
+    assert_eq!(alice.status().await.unwrap().provider.state, "running");
+    bob.shutdown().await.unwrap();
+    alice.shutdown().await.unwrap();
+}

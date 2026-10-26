@@ -267,7 +267,6 @@ impl Composition {
                 policy: config.provider_policy(),
             }
             .validate()?;
-            local.chain.get(&config).await?;
             // Live setup journals have one exclusive owner. Unchanged bond/client
             // bindings were checked at startup; validate only newly selected ones.
             let previous = self.snapshot()?.paid;
@@ -287,6 +286,7 @@ impl Composition {
                     .collect::<Vec<_>>(),
             )?;
             hellas_sdk::work_config::validate_work_routes(&config).await?;
+            local.chain.get(&config).await?;
         }
         let status = session.status().await?;
         let running = status.provider.is_some_and(|p| p.state == 2);
