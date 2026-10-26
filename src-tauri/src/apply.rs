@@ -20,6 +20,7 @@ enum Step {
     Resources {
         expected: u64,
         inputs: Vec<ResourceInput>,
+        publication: Option<bool>,
     },
     Retire {
         expected: u64,
@@ -227,20 +228,25 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
     let running = status.provider.is_some_and(|p| p.state == 2);
     let active = if running {
         match session.work(WorkControlCommand::Catalogue).await? {
-            WorkControlReply::Catalogue(policies) => policies,
+            WorkControlReply::Catalogue(policies) => Some(policies),
             _ => anyhow::bail!("invalid resource catalogue"),
         }
     } else {
-        Vec::new()
+        None
     };
     let resources = resources
         .into_iter()
         .map(|resource| {
-            let (_, changed) = local.composition.resource_revision(&resource, &active)?;
-            let activated = if changed {
-                false
+            let (changed, activated) = if let Some(active) = &active {
+                let (_, changed) = local.composition.resource_revision(&resource, active)?;
+                (
+                    changed,
+                    !changed && active.contains(&local.composition.policy(&resource.name)?),
+                )
             } else {
-                active.contains(&local.composition.policy(&resource.name)?)
+                // Stopped means unread, not empty. Reconcile against authority after
+                // the explicit start, before assigning subsequent CAS expectations.
+                (false, false)
             };
             Ok((resource, changed, activated))
         })
@@ -291,6 +297,7 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
         steps.push(Step::Resources {
             expected,
             inputs: resources.into_iter().map(|(input, _)| input).collect(),
+            publication: active.as_ref().map(|_| changed),
         });
         if changed {
             expected = expected
@@ -363,7 +370,9 @@ pub async fn execute_session(
     let mut unapplied = Vec::new();
     let mut uncertain = Vec::new();
     let mut error = None;
-    for (index, step) in plan.steps.into_iter().enumerate() {
+    let mut steps = std::collections::VecDeque::from(plan.steps);
+    let mut index = 0;
+    while let Some(step) = steps.pop_front() {
         let result: anyhow::Result<()> = async {
             match step {
                 Step::Contact(input) => {
@@ -377,7 +386,45 @@ pub async fn execute_session(
                         .apply(session, step.expected, step.change, step.reference)
                         .await?;
                 }
-                Step::Resources { expected, inputs } => {
+                Step::Resources {
+                    expected,
+                    inputs,
+                    publication,
+                } => {
+                    check_revision(local, expected)?;
+                    if publication.is_none() {
+                        let WorkControlReply::Catalogue(active) =
+                            session.work(WorkControlCommand::Catalogue).await?
+                        else {
+                            anyhow::bail!("invalid authority resource catalogue after startup");
+                        };
+                        let needs_publication = inputs
+                            .iter()
+                            .map(|input| {
+                                local
+                                    .composition
+                                    .resource_revision(input, &active)
+                                    .map(|(_, changed)| changed)
+                            })
+                            .collect::<anyhow::Result<Vec<_>>>()?
+                            .into_iter()
+                            .any(|changed| changed);
+                        if needs_publication {
+                            for step in &mut steps {
+                                let revision = match step {
+                                    Step::Provider(step) => Some(&mut step.expected),
+                                    Step::Resources { expected, .. }
+                                    | Step::Retire { expected, .. } => Some(expected),
+                                    _ => None,
+                                };
+                                if let Some(revision) = revision {
+                                    *revision = revision
+                                        .checked_add(1)
+                                        .context("provider revision overflow")?;
+                                }
+                            }
+                        }
+                    }
                     provider_setup::configure_resources(local, session, expected, inputs).await?;
                 }
                 Step::Retire { expected, name } => {
@@ -480,6 +527,7 @@ pub async fn execute_session(
             break;
         }
         applied.push(labels[index].clone());
+        index += 1;
     }
     let authority_revision = session.status().await.ok().map(|s| s.authority_revision);
     Ok(ApplyReport {

@@ -2654,3 +2654,102 @@ async fn same_route_openai_resources_switch_credential_as_one_validated_group() 
     );
     app.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stopped_policy_two_start_and_unused_key_cleanup_converge_in_one_apply() {
+    let upstream = Upstream::start().await;
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let sa = tempfile::tempdir().unwrap();
+    let sb = tempfile::tempdir().unwrap();
+    let alice = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+        .await
+        .unwrap();
+    let bob = AppState::with_vault(b.path(), Vault::fixture(sb.path()))
+        .await
+        .unwrap();
+    alice.initialize_software("Alice".into()).await.unwrap();
+    bob.initialize_software("Bob".into()).await.unwrap();
+    let (request, share) = grant_https(&alice, &bob, &upstream, "stopped", 231).await;
+    let recipient = bob.local().await.unwrap();
+    assert!(finished(
+        &execute(&recipient.clients, &recipient, &request)
+            .await
+            .unwrap()
+    ));
+    let mut resource = alice.provider_view().await.unwrap().resources[0].clone();
+    if let ResourceKind::Https {
+        max_response_bytes, ..
+    } = &mut resource.resource
+    {
+        *max_response_bytes = 8192;
+    }
+    alice.configure_resource(2, resource).await.unwrap();
+    alice
+        .configure_provider(
+            3,
+            ProviderChange::AddKey {
+                key: UpstreamKeyInput {
+                    service: "web".into(),
+                    method: "get".into(),
+                    key: "unused".into(),
+                    origins: vec![upstream.url.clone()],
+                    paths: vec!["/".into()],
+                    methods: vec!["GET".into()],
+                    header: "authorization".into(),
+                    prefix: "Bearer ".into(),
+                    secret: "unused-fixture-key".into(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let local = alice.local().await.unwrap();
+    let policy = local.composition.policy("page").unwrap();
+    assert_eq!(policy.revision.0, 2);
+    let quota = serde_json::to_value(alice.quota(&share.allowances[0]).await.unwrap()).unwrap();
+    alice.set_provider(false).await.unwrap();
+    let mut desired = desired_https(alice.provider_view().await.unwrap());
+    desired.provider_enabled = Some(true);
+    let preview = alice.preview_apply(desired.clone()).await.unwrap();
+    let applied = alice.apply_document(&preview.id).await.unwrap();
+    assert!(applied.error.is_none(), "{applied:?}");
+    assert!(applied.unapplied.is_empty() && applied.uncertain.is_empty());
+    assert_eq!(alice.provider_view().await.unwrap().revision, 5);
+    assert!(
+        alice.provider_view().await.unwrap().upstreams[0]
+            .keys
+            .is_empty()
+    );
+    assert_eq!(local.composition.policy("page").unwrap(), policy);
+    let after = serde_json::to_value(alice.quota(&share.allowances[0]).await.unwrap()).unwrap();
+    assert_eq!(after["revision"], quota["revision"]);
+    assert_eq!(after, quota);
+    assert_eq!(alice.status().await.unwrap().provider.state, "running");
+    desired.expected_provider_revision = 5;
+    let before = local
+        .session(false)
+        .await
+        .unwrap()
+        .status()
+        .await
+        .unwrap()
+        .authority_revision;
+    let preview = alice.preview_apply(desired).await.unwrap();
+    let reapplied = alice.apply_document(&preview.id).await.unwrap();
+    assert!(reapplied.error.is_none(), "{reapplied:?}");
+    assert_eq!(alice.provider_view().await.unwrap().revision, 5);
+    assert_eq!(
+        local
+            .session(false)
+            .await
+            .unwrap()
+            .status()
+            .await
+            .unwrap()
+            .authority_revision,
+        before
+    );
+    bob.shutdown().await.unwrap();
+    alice.shutdown().await.unwrap();
+}
