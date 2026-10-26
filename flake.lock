@@ -18,6 +18,23 @@
         "type": "github"
       }
     },
+    "hellas": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793030698,
+        "narHash": "sha256-5PIGqOns/UmdaiwKX+P7mBwXHG7cFZOXaD+gypoNTQE=",
+        "owner": "hellas-ai",
+        "repo": "hellas",
+        "rev": "f45a403bce5fc42abea9c265207d74f4d9916cc9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hellas-ai",
+        "repo": "hellas",
+        "rev": "f45a403bce5fc42abea9c265207d74f4d9916cc9",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1789370336,
@@ -37,6 +54,7 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
+        "hellas": "hellas",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay"
       }

@@ -289,52 +289,7 @@ impl Clients {
                 method,
             } => {
                 let pool = pool.context("paid pool is absent")?;
-                let mut providers = Vec::new();
-                for input in &pool.providers {
-                    let config = paid::config(
-                        &input.policy,
-                        self.directory
-                            .join("paid-channels")
-                            .join(pool_id)
-                            .join(&input.bond),
-                    )?;
-                    let approved = trust::resolve(
-                        &self.directory,
-                        &input.trust_policy,
-                        config.work_policy.allowed_environment(),
-                    )?;
-                    let coins = input
-                        .coins
-                        .iter()
-                        .map(|s| Ok(hellas_sdk::kernel::CoinId::from_bytes(trust::fixed(s)?)))
-                        .collect::<anyhow::Result<Vec<_>>>()?;
-                    let args = hellas_sdk::paid_client::PaidWorkOptions {
-                        config: config.clone(),
-                        journal_root: config.journal_root.clone(),
-                        provider: input.provider.parse()?,
-                        provider_addrs: input
-                            .addresses
-                            .iter()
-                            .map(|a| a.parse())
-                            .collect::<Result<_, _>>()?,
-                        provider_trust: approved,
-                        bond: hellas_sdk::kernel::EdgeId::from_bytes(trust::fixed(&input.bond)?),
-                        payment_funding: hellas_sdk::kernel::Funding::new(
-                            hellas_sdk::work_config::coin_list(&coins)
-                                .context("select 1 to 4 payment coins")?,
-                            hellas_sdk::kernel::List::empty(
-                                hellas_sdk::kernel::CoinId::from_bytes([0; 32]),
-                            ),
-                        ),
-                        omission_bond: input.omission_bond,
-                        acceptance_blocks: input.acceptance_blocks,
-                        terminal_blocks: input.terminal_blocks,
-                        payment_blocks: input.payment_blocks,
-                        timeout: Duration::from_secs(input.timeout_seconds),
-                    };
-                    args.validate()?;
-                    providers.push(args);
-                }
+                let options = paid::pool_options(&self.directory, &pool)?;
                 let selected = pool
                     .providers
                     .iter()
@@ -349,8 +304,11 @@ impl Clients {
                     "paid route differs from selected policy"
                 );
                 let provider_id: hellas_sdk::iroh::EndpointId = provider.parse()?;
-                let first = providers.first().context("paid pool is empty")?;
+                let first = options.providers.first().context("paid pool is empty")?;
                 let chain = self.chain.get(&first.config).await?;
+                for provider in &options.providers {
+                    provider.config.check_node(&chain)?;
+                }
                 // Selection, all provider options and chain compatibility are checked
                 // before retiring any backend shared by this pool's callers.
                 if let Some(held) = cache.remove(&key) {
@@ -373,10 +331,7 @@ impl Clients {
                         local.identity.node.node_secret_bytes(),
                     )?;
                     let backend = hellas_sdk::paid_gateway::PaidGateway::open(
-                        hellas_sdk::paid_gateway::PaidGatewayOptions {
-                            providers,
-                            max_pending_requests: pool.max_pending_requests,
-                        },
+                        options,
                         identity,
                         chain,
                         local.coordinator.clone(),

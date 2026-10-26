@@ -130,18 +130,67 @@ pub fn pool_path(directory: &Path, id: &str) -> anyhow::Result<std::path::PathBu
     );
     Ok(directory.join("paid-pools").join(format!("{id}.json")))
 }
-pub fn save_pool(directory: &Path, input: PaidPoolInput) -> anyhow::Result<()> {
+pub fn pool_options(
+    directory: &Path,
+    pool: &PaidPoolInput,
+) -> anyhow::Result<hellas_sdk::paid_gateway::PaidGatewayOptions> {
     ensure!(
-        !input.providers.is_empty() && input.providers.len() <= 16,
+        !pool.providers.is_empty() && pool.providers.len() <= 16,
         "select 1 to 16 paid providers"
     );
-    for provider in &input.providers {
-        let configuration = config(&provider.policy, directory.join("paid-validation"))?;
-        trust::resolve(
-            directory,
-            &provider.trust_policy,
-            configuration.work_policy.allowed_environment(),
+    let pool_id = &pool.id;
+    let mut providers = Vec::new();
+    for input in &pool.providers {
+        let config = config(
+            &input.policy,
+            directory
+                .join("paid-channels")
+                .join(pool_id)
+                .join(&input.bond),
         )?;
+        let approved = trust::resolve(
+            directory,
+            &input.trust_policy,
+            config.work_policy.allowed_environment(),
+        )?;
+        let coins = input
+            .coins
+            .iter()
+            .map(|s| Ok(hellas_sdk::kernel::CoinId::from_bytes(trust::fixed(s)?)))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let args = hellas_sdk::paid_client::PaidWorkOptions {
+            config: config.clone(),
+            journal_root: config.journal_root.clone(),
+            provider: input.provider.parse()?,
+            provider_addrs: input
+                .addresses
+                .iter()
+                .map(|a| a.parse())
+                .collect::<Result<_, _>>()?,
+            provider_trust: approved,
+            bond: hellas_sdk::kernel::EdgeId::from_bytes(trust::fixed(&input.bond)?),
+            payment_funding: hellas_sdk::kernel::Funding::new(
+                hellas_sdk::work_config::coin_list(&coins)
+                    .context("select 1 to 4 payment coins")?,
+                hellas_sdk::kernel::List::empty(hellas_sdk::kernel::CoinId::from_bytes([0; 32])),
+            ),
+            omission_bond: input.omission_bond,
+            acceptance_blocks: input.acceptance_blocks,
+            terminal_blocks: input.terminal_blocks,
+            payment_blocks: input.payment_blocks,
+            timeout: Duration::from_secs(input.timeout_seconds),
+        };
+        args.validate()?;
+        providers.push(args);
     }
+    let options = hellas_sdk::paid_gateway::PaidGatewayOptions {
+        providers,
+        max_pending_requests: pool.max_pending_requests,
+    };
+    options.validate()?;
+    Ok(options)
+}
+pub fn save_pool(directory: &Path, input: PaidPoolInput) -> anyhow::Result<()> {
+    pool_options(directory, &input)?;
     vault::write(&pool_path(directory, &input.id)?, &input)
 }

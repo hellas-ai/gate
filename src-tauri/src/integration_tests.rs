@@ -1297,6 +1297,45 @@ async fn saving_paid_pool_rebuilds_real_sdk_backend_with_current_settings() {
         original.backend.timeout(),
         std::time::Duration::from_secs(1)
     );
+    let bytes = std::fs::read(crate::paid::pool_path(directory.path(), &pool.id).unwrap()).unwrap();
+    let mut zero = pool.clone();
+    zero.max_pending_requests = 0;
+    let mut duplicate = pool.clone();
+    let mut other = pool.providers[0].clone();
+    other.bond = hex::encode([13; 32]);
+    other.coins = vec![hex::encode([2; 32])];
+    duplicate.providers.push(other.clone());
+    let mut shared = pool.clone();
+    other.provider = hellas_sdk::iroh::SecretKey::from_bytes(&[4; 32])
+        .public()
+        .to_string();
+    other.coins = pool.providers[0].coins.clone();
+    shared.providers.push(other);
+    for invalid in [zero, duplicate, shared] {
+        assert!(app.save_paid_pool(invalid).await.is_err());
+        assert_eq!(
+            std::fs::read(crate::paid::pool_path(directory.path(), &pool.id).unwrap()).unwrap(),
+            bytes
+        );
+        let retained = local.clients.target(&local, &input).await.unwrap();
+        assert!(Arc::ptr_eq(&original, &retained));
+        assert_eq!(
+            retained.backend.timeout(),
+            std::time::Duration::from_secs(1)
+        );
+        drop(
+            retained
+                .backend
+                .fetch(hellas_gateway::WorkFetchRequest {
+                    provider: retained.provider,
+                    service: retained.service.clone(),
+                    method: retained.method.clone(),
+                    body: br#"{"model":"fixture","input":"hello","max_output_tokens":8}"#.to_vec(),
+                })
+                .expect("a rejected pool edit must leave the original SDK backend usable"),
+        );
+        assert!(!directory.path().join("paid-channels/same-pool").exists());
+    }
     let approved = trust::list(directory.path()).unwrap().pop().unwrap();
     trust::approve(
         directory.path(),

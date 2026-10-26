@@ -29,16 +29,16 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 zeroize = "1"
 base64 = "0.22"
 futures = "0.3"
-hellas-genesis = { git = "https://github.com/hellas-ai/hellas", rev = "3932c4cca96b07f0517b18ecb66153b75964b381" }
-hellas-auth = { git = "https://github.com/hellas-ai/hellas", rev = "3932c4cca96b07f0517b18ecb66153b75964b381" }
-hellas-reseller = { git = "https://github.com/hellas-ai/hellas", rev = "3932c4cca96b07f0517b18ecb66153b75964b381" }
-hellas-providers = { git = "https://github.com/hellas-ai/hellas", rev = "3932c4cca96b07f0517b18ecb66153b75964b381" }
-hellas-attestation = { git = "https://github.com/hellas-ai/hellas", rev = "3932c4cca96b07f0517b18ecb66153b75964b381", features = ["apple-app-attest"] }
-hellas-gateway = { git = "https://github.com/hellas-ai/hellas", rev = "3932c4cca96b07f0517b18ecb66153b75964b381" }
-hellas-private = { git = "https://github.com/hellas-ai/hellas", rev = "3932c4cca96b07f0517b18ecb66153b75964b381" }
-hellas-rpc = { git = "https://github.com/hellas-ai/hellas", rev = "3932c4cca96b07f0517b18ecb66153b75964b381", features = ["host-control", "execute", "fetch", "work"] }
-hellas-sdk = { git = "https://github.com/hellas-ai/hellas", rev = "3932c4cca96b07f0517b18ecb66153b75964b381", default-features = false }
-hellas-wire = { git = "https://github.com/hellas-ai/hellas", rev = "3932c4cca96b07f0517b18ecb66153b75964b381", features = ["unix"] }
+hellas-genesis = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9" }
+hellas-auth = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9" }
+hellas-reseller = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9" }
+hellas-providers = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9" }
+hellas-attestation = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9", features = ["apple-app-attest"] }
+hellas-gateway = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9" }
+hellas-private = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9" }
+hellas-rpc = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9", features = ["host-control", "execute", "fetch", "work"] }
+hellas-sdk = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9", default-features = false }
+hellas-wire = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9", features = ["unix"] }
 libc = "0.2"
 # The same bundled SQLite that hellas's Work journals compile in; history.rs
 # drives it through the C API.
@@ -62,7 +62,7 @@ cc = "1"
 [dev-dependencies]
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
-hellas-chain = { git = "https://github.com/hellas-ai/hellas", rev = "3932c4cca96b07f0517b18ecb66153b75964b381" }
+hellas-chain = { git = "https://github.com/hellas-ai/hellas", rev = "f45a403bce5fc42abea9c265207d74f4d9916cc9" }
 commonware-codec = { git = "https://github.com/georgewhewell/commonware-monorepo", rev = "0dd4d0e166b6b10f870dc68d0664b98a42324ddc", default-features = false }
 commonware-cryptography = { git = "https://github.com/georgewhewell/commonware-monorepo", rev = "0dd4d0e166b6b10f870dc68d0664b98a42324ddc", default-features = false }
 commonware-runtime = { git = "https://github.com/georgewhewell/commonware-monorepo", rev = "0dd4d0e166b6b10f870dc68d0664b98a42324ddc" }
