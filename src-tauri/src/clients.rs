@@ -31,11 +31,13 @@ enum Selection {
         access: contacts::Imported,
         offer: Box<hellas_sdk::work::model::grant::records::SignedOffer>,
         policy: Box<hellas_sdk::work::model::grant::records::GrantPolicy>,
+        trust: Box<trust::Snapshot>,
     },
     Paid {
         pool: PaidPoolInput,
         selected: Box<PaidProviderInput>,
         options: hellas_sdk::paid_gateway::PaidGatewayOptions,
+        approvals: Vec<hellas_sdk::trust_policy::ApprovalRecord>,
     },
 }
 fn route(
@@ -150,6 +152,12 @@ pub struct Clients {
     transport_keys: Mutex<()>,
     #[cfg(test)]
     pub(crate) drained: tokio::sync::Notify,
+    #[cfg(test)]
+    pub(crate) after_paid_resolution:
+        std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    #[cfg(test)]
+    pub(crate) opened_paid_trust:
+        std::sync::Mutex<Vec<Vec<hellas_sdk::client::ProviderTrustAnchor>>>,
     cache: Mutex<BTreeMap<String, CachedTarget>>,
     paid: Mutex<BTreeMap<String, (String, Arc<RetirableBackend>)>>,
 }
@@ -162,6 +170,10 @@ impl Clients {
             transport_keys: Mutex::new(()),
             #[cfg(test)]
             drained: tokio::sync::Notify::new(),
+            #[cfg(test)]
+            after_paid_resolution: Default::default(),
+            #[cfg(test)]
+            opened_paid_trust: Default::default(),
             cache: Mutex::new(BTreeMap::new()),
             paid: Mutex::new(BTreeMap::new()),
         }
@@ -222,10 +234,16 @@ impl Clients {
                     .context("selected resource is absent from this allowance")?
                     .clone();
                 route(&selected.work)?;
+                let trust = trust::snapshot(
+                    &self.directory,
+                    &input.trust_policy,
+                    selected.work.allowed_environment(),
+                )?;
                 Ok(Selection::Authorized {
                     access,
                     offer: Box::new(offer),
                     policy: Box::new(selected),
+                    trust: Box::new(trust),
                 })
             }
             WorkTarget::Paid {
@@ -236,7 +254,8 @@ impl Clients {
             } => {
                 let pool: PaidPoolInput = vault::read(&paid::pool_path(&self.directory, pool_id)?)?
                     .context("configure a typed paid pool first")?;
-                let options = paid::pool_options(&self.directory, &pool)?;
+                let paid::PoolSnapshot { options, approvals } =
+                    paid::pool_snapshot(&self.directory, &pool)?;
                 let selected = pool
                     .providers
                     .iter()
@@ -256,6 +275,7 @@ impl Clients {
                     pool,
                     selected: Box::new(selected),
                     options,
+                    approvals,
                 })
             }
         }
@@ -281,27 +301,31 @@ impl Clients {
         required: Option<FetchPresentation>,
     ) -> anyhow::Result<Arc<Target>> {
         let selection = self.selection(local, input)?;
+        #[cfg(test)]
+        if matches!(&selection, Selection::Paid { .. }) {
+            let pause = { self.after_paid_resolution.lock().unwrap().take() };
+            if let Some((resolved, resume)) = pause {
+                resolved.notify_one();
+                resume.notified().await;
+            }
+        }
         if let Some(required) = required {
             ensure!(
                 selection.presentation()? == required,
                 "selected execution contract differs from required presentation"
             );
         }
-        let policy = trust::store(&self.directory).load(&input.trust_policy)?;
-        // Resolve every saved pool/trust revision before considering an outer hit.
-        let pool = match &selection {
-            Selection::Paid { pool, .. } => Some(pool),
-            _ => None,
-        };
-        let pool_version = if let Some(pool) = &pool {
-            let approvals = pool
-                .providers
-                .iter()
-                .map(|provider| trust::store(&self.directory).load(&provider.trust_policy))
-                .collect::<Result<Vec<_>, _>>()?;
-            serde_json::to_string(&(pool, approvals))?
-        } else {
-            String::new()
+        let (policy, pool_version) = match &selection {
+            Selection::Authorized { trust, .. } => (&trust.record, String::new()),
+            Selection::Paid {
+                pool, approvals, ..
+            } => {
+                let policy = approvals
+                    .iter()
+                    .find(|record| record.id == input.trust_policy)
+                    .context("selected approval is absent from paid snapshot")?;
+                (policy, serde_json::to_string(&(pool, approvals))?)
+            }
         };
         let version = serde_json::to_string(&(input, policy, pool_version.clone()))?;
         let key = match &input.target {
@@ -336,16 +360,13 @@ impl Clients {
                     access,
                     offer,
                     policy: selected,
+                    trust,
                 } = selection
                 else {
                     anyhow::bail!("authorized selection required");
                 };
                 let (service, method, presentation) = route(&selected.work)?;
-                let approved = trust::resolve(
-                    &self.directory,
-                    &input.trust_policy,
-                    selected.work.allowed_environment(),
-                )?;
+                let approved = trust.anchor;
                 let provider = hellas_sdk::iroh::EndpointId::from_bytes(
                     &hellas_sdk::work::model::grant::records::grant_transport(
                         &offer.offer().provider,
@@ -402,6 +423,7 @@ impl Clients {
                     pool: _,
                     selected,
                     options,
+                    approvals: _,
                 } = selection
                 else {
                     anyhow::bail!("paid selection required");
@@ -433,6 +455,14 @@ impl Clients {
                         transport.to_bytes(),
                         local.identity.node.node_secret_bytes(),
                     )?;
+                    #[cfg(test)]
+                    self.opened_paid_trust.lock().unwrap().push(
+                        options
+                            .providers
+                            .iter()
+                            .map(|provider| provider.provider_trust.clone())
+                            .collect(),
+                    );
                     let backend = hellas_sdk::paid_gateway::PaidGateway::open(
                         options,
                         identity,

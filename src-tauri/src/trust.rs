@@ -67,16 +67,34 @@ pub fn resolve(
     id: &str,
     environment: ContentId,
 ) -> anyhow::Result<hellas_sdk::client::ProviderTrustAnchor> {
-    let policy = store(directory).load(id)?;
+    Ok(snapshot(directory, id, environment)?.anchor)
+}
+#[derive(Clone)]
+pub(crate) struct Snapshot {
+    pub record: ApprovalRecord,
+    pub anchor: hellas_sdk::client::ProviderTrustAnchor,
+}
+pub(crate) fn snapshot(
+    directory: &Path,
+    id: &str,
+    environment: ContentId,
+) -> anyhow::Result<Snapshot> {
+    let store = store(directory);
+    let record = store.load(id)?;
     // Counter custody does not vary with policy revisions or replacement.
-    Ok(store(directory).resolve_environment(
+    let anchor = store.resolve_environment(
         id,
-        policy.policy.assurance,
+        record.policy.assurance,
         environment,
         Arc::new(hellas_sdk::FilesystemAssertionCounterStore::new(
             directory.join("apple-assertion-counters"),
         )),
-    )?)
+    )?;
+    anyhow::ensure!(
+        serde_json::to_vec(&record)? == serde_json::to_vec(&store.load(id)?)?,
+        "trust approval changed while resolving; retry the operation"
+    );
+    Ok(Snapshot { record, anchor })
 }
 pub fn fixed<const N: usize>(text: &str) -> anyhow::Result<[u8; N]> {
     let mut bytes = [0; N];

@@ -3639,3 +3639,129 @@ async fn refused_gateway_presentation_keeps_the_live_listener_and_first_chain_un
     bob.shutdown().await.unwrap();
     alice.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn paid_backend_cache_versions_keep_the_exact_resolved_approval_snapshot() {
+    let upstream = Upstream::start().await;
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let sa = tempfile::tempdir().unwrap();
+    let sb = tempfile::tempdir().unwrap();
+    let alice = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+        .await
+        .unwrap();
+    let bob = AppState::with_vault(b.path(), Vault::fixture(sb.path()))
+        .await
+        .unwrap();
+    alice.initialize_software("Alice".into()).await.unwrap();
+    bob.initialize_software("Bob".into()).await.unwrap();
+    let (request, _) = grant_https(&alice, &bob, &upstream, "paid-race", 243).await;
+    let WorkTarget::Authorized { access_id, .. } = &request.client.target else {
+        panic!("authorized fixture");
+    };
+    let access = contacts::imported(b.path(), access_id).unwrap();
+    let signed_offer = STANDARD.decode(&access.offers[0]).unwrap();
+    let mut policy = paid_policy_fixture(b.path()).await;
+    policy.presentation = FetchPresentation::Http;
+    policy.service = "web".into();
+    policy.method = "get".into();
+    let provider = alice.status().await.unwrap().identity.transport_id;
+    bob.save_paid_pool(PaidPoolInput {
+        id: "snapshot".into(),
+        providers: vec![PaidProviderInput {
+            provider: provider.clone(),
+            addresses: vec![],
+            trust_policy: "paid-race".into(),
+            bond: hex::encode([244; 32]),
+            coins: vec![hex::encode([245; 32])],
+            omission_bond: 601,
+            acceptance_blocks: 16,
+            terminal_blocks: 64,
+            payment_blocks: 32,
+            timeout_seconds: 1,
+            policy,
+        }],
+        max_pending_requests: 4,
+    })
+    .await
+    .unwrap();
+    let input = WorkClientConfig {
+        target: WorkTarget::Paid {
+            pool_id: "snapshot".into(),
+            provider,
+            service: "web".into(),
+            method: "get".into(),
+        },
+        trust_policy: "paid-race".into(),
+    };
+    let local = bob.local().await.unwrap();
+    let resolved = Arc::new(Notify::new());
+    let resume = Arc::new(Notify::new());
+    *local.clients.after_paid_resolution.lock().unwrap() = Some((resolved.clone(), resume.clone()));
+    let opening = local.clone();
+    let selected = input.clone();
+    let pending = tokio::spawn(async move { opening.clients.target(&opening, &selected).await });
+    tokio::time::timeout(std::time::Duration::from_secs(10), resolved.notified())
+        .await
+        .unwrap();
+    let old = trust::list(b.path())
+        .unwrap()
+        .into_iter()
+        .find(|record| record.id == "paid-race")
+        .unwrap();
+    let g2 = hellas_rpc::ContentId::from_bytes([246; 32]);
+    assert_ne!(old.genesis, g2.to_string());
+    trust::approve(
+        b.path(),
+        TrustInput {
+            id: old.id,
+            expected_revision: old.revision,
+            genesis: g2.to_string(),
+            apple: false,
+            environments: old.environments,
+            app_id: String::new(),
+            cd_hashes: vec![],
+            reason: "Replace independent enrollment pin during opening".into(),
+        },
+    )
+    .unwrap();
+    resume.notify_one();
+    let first = pending.await.unwrap().unwrap();
+    let first_anchor = local.clients.opened_paid_trust.lock().unwrap()[0][0].clone();
+    assert_eq!(first_anchor.expected_genesis.to_string(), old.genesis);
+    hellas_sdk::grant_client::UnpinnedOffer::decode(
+        &signed_offer,
+        hellas_auth::authority::UnixMillis::now().unwrap(),
+    )
+    .unwrap()
+    .pin(&first_anchor)
+    .unwrap();
+    let second = local.clients.target(&local, &input).await.unwrap();
+    assert!(
+        !Arc::ptr_eq(&first, &second),
+        "a newly admitted request must not reuse G1 as revision 2"
+    );
+    let second_anchor = {
+        let opened = local.clients.opened_paid_trust.lock().unwrap();
+        assert_eq!(opened.len(), 2);
+        opened[1][0].clone()
+    };
+    assert_eq!(second_anchor.expected_genesis, g2);
+    let refusal = hellas_sdk::grant_client::UnpinnedOffer::decode(
+        &signed_offer,
+        hellas_auth::authority::UnixMillis::now().unwrap(),
+    )
+    .unwrap()
+    .pin(&second_anchor)
+    .err()
+    .unwrap();
+    assert!(refusal.to_string().contains("genesis"), "{refusal}");
+    assert_eq!(upstream.calls.load(Ordering::SeqCst), 0);
+    assert!(Arc::ptr_eq(
+        &second,
+        &local.clients.target(&local, &input).await.unwrap()
+    ));
+    assert_eq!(local.clients.opened_paid_trust.lock().unwrap().len(), 2);
+    bob.shutdown().await.unwrap();
+    alice.shutdown().await.unwrap();
+}

@@ -125,12 +125,24 @@ pub fn pool_options(
     directory: &Path,
     pool: &PaidPoolInput,
 ) -> anyhow::Result<hellas_sdk::paid_gateway::PaidGatewayOptions> {
+    Ok(pool_snapshot(directory, pool)?.options)
+}
+pub(crate) struct PoolSnapshot {
+    pub options: hellas_sdk::paid_gateway::PaidGatewayOptions,
+    pub approvals: Vec<hellas_sdk::trust_policy::ApprovalRecord>,
+}
+pub(crate) fn pool_snapshot(
+    directory: &Path,
+    pool: &PaidPoolInput,
+) -> anyhow::Result<PoolSnapshot> {
     ensure!(
         !pool.providers.is_empty() && pool.providers.len() <= 16,
         "select 1 to 16 paid providers"
     );
     let pool_id = &pool.id;
     let mut providers = Vec::new();
+    let mut snapshots = std::collections::BTreeMap::<String, trust::Snapshot>::new();
+    let mut approvals = Vec::new();
     for input in &pool.providers {
         let config = config(
             &input.policy,
@@ -139,11 +151,20 @@ pub fn pool_options(
                 .join(pool_id)
                 .join(&input.bond),
         )?;
-        let approved = trust::resolve(
-            directory,
-            &input.trust_policy,
-            config.work_policy.allowed_environment(),
-        )?;
+        let approved = match snapshots.entry(input.trust_policy.clone()) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.get().clone(),
+            std::collections::btree_map::Entry::Vacant(entry) => entry
+                .insert(trust::snapshot(
+                    directory,
+                    &input.trust_policy,
+                    config.work_policy.allowed_environment(),
+                )?)
+                .clone(),
+        };
+        approved
+            .anchor
+            .verify_environment(config.work_policy.allowed_environment())?;
+        approvals.push(approved.record);
         let coins = input
             .coins
             .iter()
@@ -158,7 +179,7 @@ pub fn pool_options(
                 .iter()
                 .map(|a| a.parse())
                 .collect::<Result<_, _>>()?,
-            provider_trust: approved,
+            provider_trust: approved.anchor,
             bond: hellas_sdk::kernel::EdgeId::from_bytes(trust::fixed(&input.bond)?),
             payment_funding: hellas_sdk::kernel::Funding::new(
                 hellas_sdk::work_config::coin_list(&coins)
@@ -179,7 +200,7 @@ pub fn pool_options(
         max_pending_requests: pool.max_pending_requests,
     };
     options.validate()?;
-    Ok(options)
+    Ok(PoolSnapshot { options, approvals })
 }
 pub fn save_pool(directory: &Path, input: PaidPoolInput) -> anyhow::Result<()> {
     pool_options(directory, &input)?;
