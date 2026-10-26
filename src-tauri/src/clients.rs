@@ -1,7 +1,5 @@
 //! Run and gateway clients consume the same approved SDK backends and funding.
-use crate::{
-    contacts, control::LocalNode, credentials::PreparedIssue, dto::*, identity, paid, trust, vault,
-};
+use crate::{contacts, control::LocalNode, dto::*, identity, paid, trust, vault};
 use anyhow::{Context, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use hellas_auth::authority::*;
@@ -19,17 +17,90 @@ use std::{
 use tokio::sync::Mutex;
 
 pub struct Target {
-    pub backend: Arc<dyn WorkExecutionBackend>,
+    pub backend: Arc<RetirableBackend>,
     pub provider: hellas_sdk::iroh::EndpointId,
     pub service: String,
     pub method: String,
     pub presentation: FetchPresentation,
 }
+struct CachedTarget {
+    version: String,
+    target: Arc<Target>,
+}
+
+// Callers retain this proxy, never a journal owner. Retirement removes the owner,
+// drains its accepted work, and drops its exclusive journal before any reopen.
+pub struct RetirableBackend(std::sync::Mutex<Option<Arc<dyn WorkExecutionBackend>>>);
+impl RetirableBackend {
+    fn new(backend: Arc<dyn WorkExecutionBackend>) -> Arc<Self> {
+        Arc::new(Self(std::sync::Mutex::new(Some(backend))))
+    }
+    fn with_backend<R>(
+        &self,
+        use_backend: impl FnOnce(&dyn WorkExecutionBackend) -> R,
+    ) -> Result<R, hellas_gateway::WorkGatewayError> {
+        let held = self.0.lock().map_err(|_| hellas_gateway::WorkGatewayBusy)?;
+        let backend = held.as_ref().ok_or_else(|| {
+            hellas_gateway::WorkGatewayError::Rejected(Box::new(std::io::Error::other(
+                "Client settings changed; retry the request or restart the gateway listener",
+            )))
+        })?;
+        Ok(use_backend(backend.as_ref()))
+    }
+    async fn retire(&self) -> Result<(), hellas_gateway::WorkShutdownError> {
+        let backend = self
+            .0
+            .lock()
+            .map_err(|_| {
+                hellas_gateway::WorkShutdownError::Recovery(Arc::new(std::io::Error::other(
+                    "client lifecycle lock failed",
+                )))
+            })?
+            .take();
+        if let Some(backend) = backend {
+            backend.drain().await?;
+        }
+        Ok(())
+    }
+}
+impl WorkExecutionBackend for RetirableBackend {
+    fn fetch_providers(&self) -> Vec<hellas_sdk::iroh::EndpointId> {
+        self.with_backend(|backend| backend.fetch_providers())
+            .unwrap_or_default()
+    }
+    fn fetch(
+        &self,
+        request: hellas_gateway::WorkFetchRequest,
+    ) -> Result<
+        hellas_gateway::WorkOutputStream<hellas_rpc::output::OutputEvent>,
+        hellas_gateway::WorkGatewayError,
+    > {
+        self.with_backend(|backend| backend.fetch(request))?
+    }
+    fn execute(
+        &self,
+        request: hellas_gateway::WorkExecutionRequest,
+    ) -> Result<
+        hellas_gateway::WorkOutputStream<hellas_gateway::ExecutionEvent>,
+        hellas_gateway::WorkGatewayError,
+    > {
+        self.with_backend(|backend| backend.execute(request))?
+    }
+    fn timeout(&self) -> Duration {
+        self.with_backend(|backend| backend.timeout())
+            .unwrap_or_default()
+    }
+    fn drain(
+        &self,
+    ) -> futures::future::BoxFuture<'_, Result<(), hellas_gateway::WorkShutdownError>> {
+        Box::pin(self.retire())
+    }
+}
 pub struct Clients {
     directory: PathBuf,
     chain: crate::chain::ChainNode,
-    cache: Mutex<BTreeMap<String, Arc<Target>>>,
-    paid: Mutex<BTreeMap<String, Arc<dyn WorkExecutionBackend>>>,
+    cache: Mutex<BTreeMap<String, CachedTarget>>,
+    paid: Mutex<BTreeMap<String, (String, Arc<RetirableBackend>)>>,
 }
 impl Clients {
     pub fn new(directory: &Path) -> Self {
@@ -46,10 +117,45 @@ impl Clients {
         input: &WorkClientConfig,
     ) -> anyhow::Result<Arc<Target>> {
         let policy = trust::store(&self.directory).load(&input.trust_policy)?;
-        let key = format!("{}:{}", serde_json::to_string(input)?, policy.revision);
+        // Resolve every saved pool/trust revision before considering an outer hit.
+        let pool = if let WorkTarget::Paid { pool_id, .. } = &input.target {
+            Some(
+                vault::read::<PaidPoolInput>(&paid::pool_path(&self.directory, pool_id)?)?
+                    .context("configure a typed paid pool first")?,
+            )
+        } else {
+            None
+        };
+        let pool_version = if let Some(pool) = &pool {
+            let approvals = pool
+                .providers
+                .iter()
+                .map(|provider| trust::store(&self.directory).load(&provider.trust_policy))
+                .collect::<Result<Vec<_>, _>>()?;
+            serde_json::to_string(&(pool, approvals))?
+        } else {
+            String::new()
+        };
+        let version = serde_json::to_string(&(input, policy, pool_version.clone()))?;
+        let key = match &input.target {
+            WorkTarget::Authorized {
+                access_id,
+                allowance,
+                ..
+            } => {
+                let access = contacts::imported(&self.directory, access_id)?;
+                format!("authorized:{}:{allowance}", access.authority)
+            }
+            WorkTarget::Paid { .. } => format!("paid:{}", serde_json::to_string(&input.target)?),
+        };
         let mut cache = self.cache.lock().await;
-        if let Some(target) = cache.get(&key) {
-            return Ok(target.clone());
+        if let Some(held) = cache.get(&key)
+            && held.version == version
+        {
+            return Ok(held.target.clone());
+        }
+        if let Some(held) = cache.remove(&key) {
+            held.target.backend.retire().await?;
         }
         let target = match &input.target {
             WorkTarget::Authorized {
@@ -123,12 +229,8 @@ impl Clients {
                 )?;
                 let pinned =
                     UnpinnedOffer::decode(&offer.encode()?, UnixMillis::now()?)?.pin(&approved)?;
-                let credential = identity::decode_credential(
-                    &local
-                        .vault
-                        .required(&PreparedIssue::key(access.credential_id))
-                        .await?,
-                )?;
+                let credential =
+                    identity::decode_credential(&local.vault.required(&access.vault_key()).await?)?;
                 let application = Arc::new(hellas_sdk::node_control::profile::ClientProfile {
                     authority: access.authority,
                     authorization: access.authorization,
@@ -146,7 +248,7 @@ impl Clients {
                         journal_root: self
                             .directory
                             .join("work-channels")
-                            .join(access_id)
+                            .join(access.authority.to_string())
                             .join(allowance),
                         timeout: Duration::from_secs(300),
                     },
@@ -155,7 +257,7 @@ impl Clients {
                 )
                 .await?;
                 Target {
-                    backend,
+                    backend: RetirableBackend::new(backend),
                     provider,
                     service,
                     method,
@@ -168,9 +270,7 @@ impl Clients {
                 service,
                 method,
             } => {
-                let pool =
-                    vault::read::<PaidPoolInput>(&paid::pool_path(&self.directory, pool_id)?)?
-                        .context("configure a typed paid pool first")?;
+                let pool = pool.context("paid pool is absent")?;
                 let mut providers = Vec::new();
                 for input in &pool.providers {
                     let config = paid::config(
@@ -232,12 +332,18 @@ impl Clients {
                 );
                 let first = providers.first().context("paid pool is empty")?;
                 let chain = self.chain.get(&first.config).await?;
-                let pool_key = serde_json::to_string(&pool)?;
                 let mut paid_cache = self.paid.lock().await;
-                let backend = if let Some(backend) = paid_cache.get(&pool_key) {
+                if paid_cache
+                    .get(pool_id)
+                    .is_some_and(|(held, _)| held != &pool_version)
+                    && let Some((_, backend)) = paid_cache.remove(pool_id)
+                {
+                    backend.retire().await?;
+                }
+                let backend = if let Some((_, backend)) = paid_cache.get(pool_id) {
                     backend.clone()
                 } else {
-                    let transport = self.transport(local, &format!("paid:{pool_key}")).await?;
+                    let transport = self.transport(local, &format!("paid:{pool_id}")).await?;
                     let identity = hellas_sdk::NodeIdentity::from_secret_bytes(
                         transport.to_bytes(),
                         local.identity.node.node_secret_bytes(),
@@ -252,8 +358,8 @@ impl Clients {
                         local.coordinator.clone(),
                     )
                     .await?;
-                    let backend: Arc<dyn WorkExecutionBackend> = backend;
-                    paid_cache.insert(pool_key, backend.clone());
+                    let backend = RetirableBackend::new(backend);
+                    paid_cache.insert(pool_id.clone(), (pool_version, backend.clone()));
                     backend
                 };
                 Target {
@@ -266,7 +372,13 @@ impl Clients {
             }
         };
         let target = Arc::new(target);
-        cache.insert(key, target.clone());
+        cache.insert(
+            key,
+            CachedTarget {
+                version,
+                target: target.clone(),
+            },
+        );
         Ok(target)
     }
     pub async fn fetch(
@@ -304,14 +416,21 @@ impl Clients {
         ))
     }
     pub async fn reset(&self) -> anyhow::Result<()> {
-        let held = std::mem::take(&mut *self.cache.lock().await);
+        let mut cache = self.cache.lock().await;
+        let held = std::mem::take(&mut *cache);
         let mut failure = None;
         for target in held.values() {
-            if let Err(e) = target.backend.drain().await {
+            if let Err(e) = target.target.backend.retire().await {
                 failure.get_or_insert(anyhow::Error::from(e));
             }
         }
-        self.paid.lock().await.clear();
+        let mut paid = self.paid.lock().await;
+        for (_, backend) in paid.values() {
+            if let Err(error) = backend.retire().await {
+                failure.get_or_insert(anyhow::Error::from(error));
+            }
+        }
+        paid.clear();
         if let Some(e) = failure {
             return Err(e);
         }

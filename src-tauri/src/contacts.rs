@@ -47,6 +47,23 @@ pub struct Imported {
     pub expires: UnixMillis,
     pub label: String,
 }
+impl Imported {
+    pub fn id(&self) -> String {
+        hex::encode(
+            hellas_auth::hash_tuple(
+                "hellas.gate.imported-access.v1",
+                &[self.authority.0.as_bytes(), &self.credential_id.0],
+            )
+            .as_bytes(),
+        )
+    }
+    pub fn vault_key(&self) -> String {
+        format!(
+            "imported-credential-{}-{}",
+            self.authority, self.credential_id
+        )
+    }
+}
 fn named(directory: &Path, category: &str, id: &str) -> anyhow::Result<PathBuf> {
     ensure!(
         !id.is_empty() && id.len() <= 128 && id.bytes().all(|b| b.is_ascii_hexdigit()),
@@ -138,7 +155,7 @@ pub fn accesses(directory: &Path) -> anyhow::Result<Vec<AccessView>> {
     Ok(list::<Imported>(directory, "access")?
         .into_iter()
         .map(|i| AccessView {
-            id: i.credential_id.to_string(),
+            id: i.id(),
             label: i.label,
             expires: i.expires.0,
             allowances: i
@@ -457,19 +474,30 @@ pub async fn import(
         expires: bundle.expires,
         label: bundle.label.unwrap_or_default(),
     };
-    identity::save_credential(
-        &local.vault,
-        &PreparedIssue::key(imported.credential_id),
-        &bundle.credential,
-    )
-    .await?;
-    vault::write(
-        &named(directory, "access", &imported.credential_id.to_string())?,
-        &imported,
-    )?;
+    let path = named(directory, "access", &imported.id())?;
+    if let Some(previous) = vault::read::<Imported>(&path)? {
+        ensure!(
+            previous.authority == imported.authority
+                && previous.authorization == imported.authorization
+                && previous.subject == imported.subject
+                && previous.holder == imported.holder,
+            "imported credential ID conflicts with its existing authority binding"
+        );
+    }
+    if let Some(previous) = local.vault.get(&imported.vault_key()).await? {
+        let previous = identity::decode_credential(&previous)?;
+        ensure!(
+            previous.id() == bundle.credential.id()
+                && previous.expose_secret() == bundle.credential.expose_secret(),
+            "imported credential ID conflicts with its persisted secret"
+        );
+    } else {
+        identity::save_credential(&local.vault, &imported.vault_key(), &bundle.credential).await?;
+    }
+    vault::write(&path, &imported)?;
     accesses(directory)?
         .into_iter()
-        .find(|a| a.id == imported.credential_id.to_string())
+        .find(|a| a.id == imported.id())
         .context("imported access metadata missing")
 }
 pub async fn revoke(directory: &Path, local: &LocalNode, id: &str) -> anyhow::Result<()> {

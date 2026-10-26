@@ -62,3 +62,7 @@ cc = "1"
 [dev-dependencies]
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+hellas-chain = { git = "https://github.com/hellas-ai/hellas", rev = "3932c4cca96b07f0517b18ecb66153b75964b381" }
+commonware-codec = { git = "https://github.com/georgewhewell/commonware-monorepo", rev = "0dd4d0e166b6b10f870dc68d0664b98a42324ddc", default-features = false }
+commonware-cryptography = { git = "https://github.com/georgewhewell/commonware-monorepo", rev = "0dd4d0e166b6b10f870dc68d0664b98a42324ddc", default-features = false }
+commonware-runtime = { git = "https://github.com/georgewhewell/commonware-monorepo", rev = "0dd4d0e166b6b10f870dc68d0664b98a42324ddc" }
