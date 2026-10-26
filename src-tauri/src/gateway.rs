@@ -170,8 +170,7 @@ pub async fn issue_session(
                 not_before: now,
                 expires: input
                     .period
-                    .expires(now)?
-                    .min(local.identity.public.owner_scope.expires),
+                    .expires_within(now, local.identity.public.owner_scope.expires)?,
                 delegation_depth: 0,
                 issuance: None,
             };
@@ -268,6 +267,57 @@ pub async fn revoke_session(
     let record = records.first().context("gateway credential absent")?;
     if !record.revoked && record.generation == view.generation {
         session.revoke(record.id, record.revision).await?;
+    }
+    Ok(())
+}
+
+pub async fn rotate(
+    local: &LocalNode,
+    old: &str,
+    input: GatewayKeyInput,
+) -> anyhow::Result<(GatewayKeyView, String)> {
+    let session = local.session(true).await?;
+    let made = issue_session(local, input, &session).await?;
+    revoke_session(local, old, &session)
+        .await
+        .context("new gateway key issued; old key revocation failed; inspect key status")?;
+    Ok(made)
+}
+
+pub async fn configure(
+    local: &LocalNode,
+    session: &crate::control::Session,
+    enabled: bool,
+    config: Option<GatewayConfig>,
+) -> anyhow::Result<()> {
+    use hellas_rpc::pb::host::*;
+    let client = &session.client;
+    if let Some(config) = config {
+        local.clients.target(local, &config.client).await?;
+        let status = client
+            .get_host_status(GetHostStatusRequest {
+                authorization: local.authorization(),
+            })
+            .await?;
+        if status.gateway.is_some_and(|g| g.state == 2) {
+            client
+                .set_gateway_state(SetGatewayStateRequest {
+                    enabled: false,
+                    authorization: local.authorization(),
+                })
+                .await?;
+            local.clients.reset().await?;
+        }
+        local.gateway.set(config).await?;
+    }
+    client
+        .set_gateway_state(SetGatewayStateRequest {
+            enabled,
+            authorization: local.authorization(),
+        })
+        .await?;
+    if !enabled {
+        local.clients.reset().await?;
     }
     Ok(())
 }

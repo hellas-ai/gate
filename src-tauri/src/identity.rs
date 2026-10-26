@@ -15,7 +15,7 @@ use hellas_sdk::{
     },
 };
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,7 +33,7 @@ pub struct Installation {
 pub struct Identity {
     pub public: Installation,
     pub node: NodeIdentity,
-    pub passkey: SoftPasskey,
+    pub passkey: Arc<dyn Authenticator>,
     pub credential: CredentialSecret,
 }
 
@@ -128,7 +128,7 @@ impl Identity {
         Ok(Self {
             public,
             node,
-            passkey,
+            passkey: Arc::new(passkey),
             credential,
         })
     }
@@ -160,7 +160,7 @@ impl Identity {
         Ok(Some(Self {
             public,
             node,
-            passkey,
+            passkey: Arc::new(passkey),
             credential,
         }))
     }
@@ -311,7 +311,7 @@ impl Identity {
         Ok(Self {
             public,
             node,
-            passkey,
+            passkey: Arc::new(passkey),
             credential,
         })
     }

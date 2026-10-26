@@ -21,8 +21,8 @@ export function client(data: FormData): T.WorkClientConfig {
   const target:T.WorkTarget = text(data,"funding")==="paid" ? {funding:"paid",poolId:text(data,"poolId"),provider:text(data,"provider"),service:text(data,"service"),method:text(data,"method")} : {funding:"authorized",accessId:text(data,"accessId"),allowance:text(data,"allowance"),resource:text(data,"resource")};
   return {target,trustPolicy:text(data,"trustPolicy")};
 }
-export async function approve(summary: string): Promise<boolean> {
-  const dialog=document.createElement("dialog"); dialog.innerHTML=`<form method="dialog"><h2>Owner approval</h2><p></p><button value="cancel">Cancel</button><button value="approve">Continue to passkey</button></form>`;
+export async function approve(summary: string, passkey = true): Promise<boolean> {
+  const dialog=document.createElement("dialog"); dialog.innerHTML=`<form method="dialog"><h2>Owner approval</h2><p></p><button value="cancel">Cancel</button><button value="approve">${passkey?"Continue to passkey":"Apply changes"}</button></form>`;
   const p=dialog.querySelector("p");if(p)p.textContent=summary;
   document.body.append(dialog);dialog.showModal();
   return new Promise(resolve=>dialog.addEventListener("close",()=>{const accepted=dialog.returnValue==="approve";dialog.remove();resolve(accepted);},{once:true}));

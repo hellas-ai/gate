@@ -29,6 +29,9 @@ impl Vault {
             prefix: prefix.to_owned(),
         }
     }
+    pub fn blocking_get(&self, key: &str) -> anyhow::Result<Option<Zeroizing<Vec<u8>>>> {
+        Ok(tokio::task::block_in_place(|| self.0.get(key))?)
+    }
     pub fn blocking_delete(&self, key: &str) -> anyhow::Result<()> {
         tokio::task::block_in_place(|| self.0.delete(key))?;
         Ok(())

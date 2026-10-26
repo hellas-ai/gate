@@ -119,4 +119,58 @@ mod tests {
         );
         assert_eq!(list(dir.path()).unwrap().len(), 1);
     }
+    #[test]
+    fn resolved_policies_keep_counter_high_water_across_replacement_and_fail_closed_on_corruption()
+    {
+        use hellas_attestation::AttestationError;
+        let directory = tempfile::tempdir().unwrap();
+        let environment = ContentId::from_bytes([2; 32]);
+        let approval = |revision, hash| TrustInput {
+            id: "apple".into(),
+            expected_revision: revision,
+            genesis: ContentId::from_bytes([1; 32]).to_string(),
+            apple: true,
+            environments: vec![environment.to_string()],
+            app_id: "TEAM.test.gate".into(),
+            cd_hashes: vec![hex::encode([hash; 32])],
+            reason: "Independently checked signed application".into(),
+        };
+        approve(directory.path(), approval(0, 3)).unwrap();
+        let original = resolve(directory.path(), "apple", environment)
+            .unwrap()
+            .apple_app_attest
+            .unwrap();
+        let key = [7; 33];
+        original.counter_store.advance(&key, 7).unwrap();
+        approve(directory.path(), approval(1, 4)).unwrap();
+        let replacement = resolve(directory.path(), "apple", environment)
+            .unwrap()
+            .apple_app_attest
+            .unwrap();
+        assert_eq!(replacement.allowed_cd_hashes, vec![[4; 32]]);
+        assert_eq!(
+            replacement.counter_store.advance(&key, 7),
+            Err(AttestationError::Counter)
+        );
+        assert_eq!(
+            replacement.counter_store.advance(&key, 6),
+            Err(AttestationError::Counter)
+        );
+        replacement.counter_store.advance(&key, 8).unwrap();
+        let path = directory
+            .path()
+            .join("apple-assertion-counters")
+            .join(format!("{}.counter", hex::encode(key)));
+        std::fs::write(path, [0, 1]).unwrap();
+        assert_eq!(
+            resolve(directory.path(), "apple", environment)
+                .unwrap()
+                .apple_app_attest
+                .unwrap()
+                .counter_store
+                .advance(&key, 9),
+            Err(AttestationError::State)
+        );
+        assert!(resolve(directory.path(), "apple", ContentId::from_bytes([9; 32])).is_err());
+    }
 }

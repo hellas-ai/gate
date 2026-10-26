@@ -88,6 +88,21 @@ fn list<T: serde::de::DeserializeOwned>(
         .map(|e| vault::read(&e.path())?.context("record disappeared"))
         .collect()
 }
+pub fn validate(input: &ContactInput) -> anyhow::Result<()> {
+    ensure!(
+        input.confirmed_holder,
+        "explicitly confirm the recipient device key"
+    );
+    ensure!(input.label.len() <= 64, "contact label is too long");
+    ensure!(input.card.len() <= 8192, "contact card is too large");
+    let _card = hellas_sdk::work::model::grant::records::decode_contact_card(
+        &STANDARD.decode(&input.card)?,
+    )?;
+    let _holder = NodeKey::from_public_key(hellas_auth::PublicKey::Secp256k1(
+        crate::trust::fixed(&input.holder)?,
+    ))?;
+    Ok(())
+}
 pub fn add(directory: &Path, input: ContactInput) -> anyhow::Result<ContactView> {
     ensure!(
         input.confirmed_holder,
@@ -573,6 +588,104 @@ pub async fn pause(local: &LocalNode, id: &str, paused: bool) -> anyhow::Result<
                 allow_account_backed: true,
             },
         },
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn quota(local: &LocalNode, id: &str) -> anyhow::Result<QuotaView> {
+    let session = local.session(false).await?;
+    let WorkControlReply::Status { allowance, .. } = control::work(
+        &session.client,
+        local.authorization(),
+        WorkControlCommand::Inspect { id: id.parse()? },
+    )
+    .await?
+    else {
+        anyhow::bail!("invalid allowance status");
+    };
+    let WorkControlReply::Budget { definition, .. } = control::work(
+        &session.client,
+        local.authorization(),
+        WorkControlCommand::InspectBudget {
+            node: allowance.budget,
+        },
+    )
+    .await?
+    else {
+        anyhow::bail!("invalid budget status");
+    };
+    Ok(QuotaView {
+        revision: definition.revision.0,
+        requests_per_day: definition
+            .limits
+            .iter()
+            .find(|limit| limit.meter == Meter::Requests && limit.window == Window::Day)
+            .map(|limit| limit.amount),
+        max_in_flight: definition.max_in_flight.get(),
+    })
+}
+
+pub async fn set_quota(
+    local: &LocalNode,
+    session: &control::Session,
+    input: QuotaInput,
+) -> anyhow::Result<()> {
+    let id: GrantId = input.allowance.parse()?;
+    ensure!(input.requests_per_day > 0, "quota must be positive");
+    let concurrency =
+        NonZeroU16::new(input.max_in_flight).context("concurrency must be positive")?;
+    let WorkControlReply::Status { allowance, .. } = control::work(
+        &session.client,
+        local.authorization(),
+        WorkControlCommand::Inspect { id },
+    )
+    .await?
+    else {
+        anyhow::bail!("invalid allowance status");
+    };
+    let WorkControlReply::Budget { mut definition, .. } = control::work(
+        &session.client,
+        local.authorization(),
+        WorkControlCommand::InspectBudget {
+            node: allowance.budget,
+        },
+    )
+    .await?
+    else {
+        anyhow::bail!("invalid budget status");
+    };
+    let current = definition
+        .limits
+        .iter()
+        .find(|l| l.meter == Meter::Requests && l.window == Window::Day)
+        .map(|l| l.amount);
+    if current == Some(input.requests_per_day) && definition.max_in_flight == concurrency {
+        return Ok(());
+    }
+    ensure!(
+        definition.revision.0 == input.expected_revision,
+        "quota revision conflict: expected {}, current {}",
+        input.expected_revision,
+        definition.revision.0
+    );
+    definition
+        .limits
+        .retain(|l| l.meter != Meter::Requests || l.window != Window::Day);
+    definition.limits.push(Limit {
+        meter: Meter::Requests,
+        window: Window::Day,
+        amount: input.requests_per_day,
+    });
+    definition.max_in_flight = concurrency;
+    definition.revision = definition
+        .revision
+        .next()
+        .context("budget revision overflow")?;
+    control::work(
+        &session.client,
+        local.authorization(),
+        WorkControlCommand::ConfigureBudget { definition },
     )
     .await?;
     Ok(())

@@ -30,6 +30,13 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
             commands::initialize_software,
+            commands::preview_apply,
+            commands::apply_document,
+            commands::set_quota,
+            commands::get_quota,
+            commands::discard_apply,
+            commands::issue_admin_access,
+            commands::rotate_gateway_key,
             commands::recover_software,
             commands::bind_provider,
             commands::provider_view,

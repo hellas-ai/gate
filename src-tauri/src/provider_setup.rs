@@ -67,6 +67,7 @@ pub struct Composition {
     directory: PathBuf,
     vault: Vault,
     state: Arc<Mutex<Configuration>>,
+    sources: Arc<Mutex<BTreeMap<String, String>>>,
 }
 fn route_id(service: &str, method: &str) -> String {
     format!("{service}/{method}")
@@ -82,6 +83,7 @@ impl Composition {
             directory: directory.to_owned(),
             vault,
             state: Arc::new(Mutex::new(config)),
+            sources: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
     fn snapshot(&self) -> anyhow::Result<Configuration> {
@@ -122,6 +124,7 @@ impl Composition {
                         .iter()
                         .map(|(name, key)| UpstreamKeyView {
                             name: name.clone(),
+                            secret_reference: key.reference.clone(),
                             fingerprint: key.fingerprint.clone(),
                             last_use: None,
                         })
@@ -390,6 +393,7 @@ impl Composition {
             .checked_add(1)
             .context("provider revision overflow")?;
         let mut secret = None;
+        let source_key = Self::reference_key(&update);
         let replacing = matches!(&update.change, Some(UpstreamChange::ReplaceKey(_)));
         match update.change.context("provider change is required")? {
             UpstreamChange::SetEndpoint(e) => {
@@ -458,8 +462,28 @@ impl Composition {
                     &[(k.header_name.clone(), format!("{}{}", k.prefix, k.secret))],
                     true,
                 )?;
-                let reference =
-                    format!("upstream-{}", hex::encode(crate::identity::random::<16>()?));
+                let declared = if let Some(key) = &source_key {
+                    self.sources
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("configuration source lock failed"))?
+                        .remove(key)
+                } else {
+                    None
+                };
+                if let Some(reference) = &declared {
+                    let value = self
+                        .vault
+                        .blocking_get(reference)?
+                        .context("declared secret source disappeared")?;
+                    ensure!(
+                        value.as_slice() == k.secret.as_bytes(),
+                        "declared secret source changed; preview again"
+                    );
+                }
+                let reference = match &declared {
+                    Some(reference) => reference.clone(),
+                    None => format!("upstream-{}", hex::encode(crate::identity::random::<16>()?)),
+                };
                 endpoint.keys.insert(
                     k.key,
                     Key {
@@ -474,7 +498,9 @@ impl Composition {
                         ),
                     },
                 );
-                secret = Some((reference, zeroize::Zeroizing::new(k.secret.into_bytes())));
+                if declared.is_none() {
+                    secret = Some((reference, zeroize::Zeroizing::new(k.secret.into_bytes())));
+                }
             }
             UpstreamChange::RemoveKey(k) => {
                 ensure!(
@@ -664,6 +690,353 @@ impl Drop for Staged {
                 tracing::warn!("retired upstream vault entry could not be removed");
             }
         }
+    }
+}
+
+pub async fn configure_resource(
+    local: &LocalNode,
+    session: &crate::control::Session,
+    expected: u64,
+    input: ResourceInput,
+) -> anyhow::Result<ProviderView> {
+    use hellas_rpc::pb::host::{
+        GetHostStatusRequest, SetMachineCapacityRequest, SetProviderStateRequest,
+    };
+    anyhow::ensure!(
+        local.composition.view()?.revision == expected,
+        "provider revision conflict"
+    );
+    let client = &session.client;
+    let status = client
+        .get_host_status(GetHostStatusRequest {
+            authorization: local.authorization(),
+        })
+        .await?;
+    anyhow::ensure!(
+        status.provider.as_ref().is_some_and(|s| s.state == 2),
+        "start the provider before administering resources"
+    );
+    let name = input.name.clone();
+    local.composition.catalogue(input)?;
+    client
+        .set_provider_state(SetProviderStateRequest {
+            enabled: false,
+            authorization: local.authorization(),
+        })
+        .await?;
+    client
+        .set_provider_state(SetProviderStateRequest {
+            enabled: true,
+            authorization: local.authorization(),
+        })
+        .await
+        .context("restarting provider with the prepared resource catalogue")?;
+    if status.machine.as_ref().is_none_or(|m| m.max_in_flight == 0) {
+        client
+            .set_machine_capacity(SetMachineCapacityRequest {
+                authorization: local.authorization(),
+                expected_revision: status.machine.map_or(0, |m| m.revision),
+                max_in_flight: 128,
+                limits: hellas_rpc::protocol::value::canonical_dag_cbor(&Vec::<
+                    hellas_sdk::work::model::grant::budget::Limit,
+                >::new())?,
+            })
+            .await?;
+    }
+    let policy = local.composition.policy(&name)?;
+    use hellas_sdk::work::model::grant::{admin::*, budget::*};
+    let account = BudgetNode::Account(policy.account);
+    if crate::control::work(
+        client,
+        local.authorization(),
+        WorkControlCommand::InspectBudget { node: account },
+    )
+    .await
+    .is_err()
+    {
+        crate::control::work(
+            client,
+            local.authorization(),
+            WorkControlCommand::ConfigureBudget {
+                definition: BudgetDef {
+                    node: account,
+                    parent: BudgetNode::Machine,
+                    revision: hellas_auth::authority::Revision(1),
+                    limits: vec![],
+                    max_in_flight: std::num::NonZeroU16::new(128)
+                        .context("invalid account capacity")?,
+                },
+            },
+        )
+        .await
+        .context("configuring the upstream account budget")?;
+    }
+    let configured =
+        crate::control::work(client, local.authorization(), WorkControlCommand::Catalogue).await?;
+    if !matches!(configured, WorkControlReply::Catalogue(ref entries) if entries.contains(&policy))
+    {
+        crate::control::work(
+            client,
+            local.authorization(),
+            WorkControlCommand::ConfigureResource { policy: name },
+        )
+        .await
+        .context("activating the resource in Work authority")?;
+    }
+    local.composition.view()
+}
+
+pub struct ProviderStep {
+    pub expected: u64,
+    pub change: ProviderChange,
+    pub reference: Option<String>,
+}
+impl Composition {
+    fn reference_key(update: &ProviderUpdate) -> Option<String> {
+        let key = match update.change.as_ref()? {
+            UpstreamChange::AddKey(k) | UpstreamChange::ReplaceKey(k) => k,
+            _ => return None,
+        };
+        Some(hex::encode(
+            hellas_auth::hash_tuple(
+                "hellas.gate.configuration-source.v1",
+                &[
+                    &update.expected_revision.to_be_bytes(),
+                    key.service.as_bytes(),
+                    key.method.as_bytes(),
+                    key.key.as_bytes(),
+                    Digest::hash(key.secret.as_bytes()).as_bytes(),
+                ],
+            )
+            .as_bytes(),
+        ))
+    }
+    pub async fn apply(
+        &self,
+        session: &crate::control::Session,
+        expected: u64,
+        mut change: ProviderChange,
+        reference: Option<String>,
+    ) -> anyhow::Result<()> {
+        if let Some(reference) = &reference {
+            let bytes = self.vault.required(reference).await?;
+            let value = std::str::from_utf8(&bytes)?.to_owned();
+            match &mut change {
+                ProviderChange::AddKey { key } | ProviderChange::ReplaceKey { key } => {
+                    key.secret = value
+                }
+                _ => anyhow::bail!("secret reference requires a key change"),
+            }
+        }
+        let update = update(expected, change);
+        let key = Self::reference_key(&update);
+        if let Some(reference) = reference {
+            let key = key
+                .clone()
+                .context("a secret reference requires a key operation")?;
+            self.sources
+                .lock()
+                .map_err(|_| anyhow::anyhow!("configuration source lock failed"))?
+                .insert(key, reference);
+        }
+        let result = session
+            .client
+            .configure_provider(hellas_rpc::pb::host::ConfigureProviderRequest {
+                authorization: session.authorization.clone(),
+                update: Some(update),
+            })
+            .await;
+        if let Some(key) = key {
+            self.sources
+                .lock()
+                .map_err(|_| anyhow::anyhow!("configuration source lock failed"))?
+                .remove(&key);
+        }
+        result?;
+        Ok(())
+    }
+    pub async fn diff(
+        &self,
+        upstreams: &[DesiredUpstream],
+        resources: &[ResourceInput],
+    ) -> anyhow::Result<Vec<ProviderStep>> {
+        ensure!(
+            upstreams.len() <= 16 && resources.len() <= 16,
+            "at most 16 upstreams/resources are supported"
+        );
+        let old = self.snapshot()?;
+        let mut desired = old.clone();
+        desired.endpoints.clear();
+        desired.resources = resources.to_vec();
+        let mut changes = Vec::new();
+        let mut revision = old.revision;
+        for upstream in upstreams {
+            let route = route_id(&upstream.service, &upstream.method);
+            ensure!(
+                !desired.endpoints.contains_key(&route),
+                "duplicate upstream"
+            );
+            ensure!(upstream.keys.len() <= 32, "at most 32 keys per upstream");
+            let current = old.endpoints.get(&route);
+            if current.is_none_or(|e| {
+                e.hosts != upstream.hosts || e.private != upstream.allow_private_addresses
+            }) {
+                changes.push(ProviderStep {
+                    expected: revision,
+                    change: ProviderChange::Endpoint {
+                        service: upstream.service.clone(),
+                        method: upstream.method.clone(),
+                        hosts: upstream.hosts.clone(),
+                        allow_private_addresses: upstream.allow_private_addresses,
+                    },
+                    reference: None,
+                });
+                revision = revision
+                    .checked_add(1)
+                    .context("provider revision overflow")?;
+            }
+            let mut keys = BTreeMap::new();
+            for key in &upstream.keys {
+                ensure!(!keys.contains_key(&key.name), "duplicate key label");
+                let value = self
+                    .vault
+                    .required(&key.secret_reference)
+                    .await
+                    .context("declared key source is unavailable")?;
+                let value = std::str::from_utf8(&value)?;
+                ensure!(
+                    !value.is_empty() && value.len() <= 2048,
+                    "invalid upstream secret source"
+                );
+                hellas_rpc::http_fetch::check_headers(
+                    &[(key.header.clone(), format!("{}{value}", key.prefix))],
+                    true,
+                )?;
+                let new = Key {
+                    origins: key.origins.clone(),
+                    paths: key.paths.clone(),
+                    methods: key.methods.clone(),
+                    header: key.header.clone(),
+                    prefix: key.prefix.clone(),
+                    reference: key.secret_reference.clone(),
+                    fingerprint: hex::encode(&Digest::hash(value.as_bytes()).as_bytes()[..6]),
+                };
+                let previous = current.and_then(|e| e.keys.get(&key.name));
+                let same = previous.is_some_and(|k| {
+                    k.origins == new.origins
+                        && k.paths == new.paths
+                        && k.methods == new.methods
+                        && k.header == new.header
+                        && k.prefix == new.prefix
+                        && k.reference == new.reference
+                        && k.fingerprint == new.fingerprint
+                });
+                if !same {
+                    let input = UpstreamKeyInput {
+                        service: upstream.service.clone(),
+                        method: upstream.method.clone(),
+                        key: key.name.clone(),
+                        origins: key.origins.clone(),
+                        paths: key.paths.clone(),
+                        methods: key.methods.clone(),
+                        header: key.header.clone(),
+                        prefix: key.prefix.clone(),
+                        secret: String::new(),
+                    };
+                    let change = if previous.is_some() {
+                        ProviderChange::ReplaceKey { key: input }
+                    } else {
+                        ProviderChange::AddKey { key: input }
+                    };
+                    changes.push(ProviderStep {
+                        expected: revision,
+                        change,
+                        reference: Some(key.secret_reference.clone()),
+                    });
+                    revision = revision
+                        .checked_add(1)
+                        .context("provider revision overflow")?;
+                }
+                keys.insert(key.name.clone(), new);
+            }
+            if let Some(current) = current {
+                for name in current.keys.keys().filter(|name| !keys.contains_key(*name)) {
+                    changes.push(ProviderStep {
+                        expected: revision,
+                        change: ProviderChange::RemoveKey {
+                            service: upstream.service.clone(),
+                            method: upstream.method.clone(),
+                            key: name.clone(),
+                        },
+                        reference: None,
+                    });
+                    revision = revision
+                        .checked_add(1)
+                        .context("provider revision overflow")?;
+                }
+            }
+            desired.endpoints.insert(
+                route,
+                Endpoint {
+                    service: upstream.service.clone(),
+                    method: upstream.method.clone(),
+                    hosts: upstream.hosts.clone(),
+                    private: upstream.allow_private_addresses,
+                    keys,
+                },
+            );
+        }
+        for endpoint in old.endpoints.values().filter(|e| {
+            !desired
+                .endpoints
+                .contains_key(&route_id(&e.service, &e.method))
+        }) {
+            changes.push(ProviderStep {
+                expected: revision,
+                change: ProviderChange::RemoveEndpoint {
+                    service: endpoint.service.clone(),
+                    method: endpoint.method.clone(),
+                },
+                reference: None,
+            });
+            revision = revision
+                .checked_add(1)
+                .context("provider revision overflow")?;
+        }
+        for input in resources {
+            if let Some(previous) = old.resources.iter().find(|r| r.name == input.name) {
+                ensure!(
+                    previous.service == input.service && previous.method == input.method,
+                    "a resource cannot move to another upstream account"
+                );
+            }
+            let previous = *old.policy_revisions.get(&input.name).unwrap_or(&0);
+            let changed = !old.resources.contains(input);
+            desired.policy_revisions.insert(
+                input.name.clone(),
+                if changed {
+                    previous
+                        .checked_add(1)
+                        .context("resource revision overflow")?
+                } else {
+                    previous
+                },
+            );
+        }
+        self.validate(&desired)?;
+        Ok(changes)
+    }
+    pub fn retire_catalogue(&self, name: &str) -> anyhow::Result<()> {
+        let mut config = self.snapshot()?;
+        if !config.resources.iter().any(|r| r.name == name) {
+            return Ok(());
+        }
+        config.resources.retain(|r| r.name != name);
+        config.revision = config
+            .revision
+            .checked_add(1)
+            .context("provider revision overflow")?;
+        self.publish(config)
     }
 }
 

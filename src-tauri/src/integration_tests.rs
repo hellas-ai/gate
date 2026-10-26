@@ -15,6 +15,7 @@ struct Upstream {
     root: String,
     calls: Arc<AtomicUsize>,
     hold: Arc<AtomicBool>,
+    fail: Arc<AtomicBool>,
     started: Arc<Notify>,
     release: Arc<Notify>,
     task: tokio::task::JoinHandle<()>,
@@ -40,6 +41,8 @@ impl Upstream {
         let url = format!("https://{}", listener.local_addr().unwrap());
         let calls = Arc::new(AtomicUsize::new(0));
         let hold = Arc::new(AtomicBool::new(false));
+        let fail = Arc::new(AtomicBool::new(false));
+        let broken = fail.clone();
         let started = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
         let (c, h, s, r) = (
@@ -55,6 +58,7 @@ impl Upstream {
                 };
                 let (a, c, h, s, r) =
                     (acceptor.clone(), c.clone(), h.clone(), s.clone(), r.clone());
+                let broken = broken.clone();
                 tokio::spawn(async move {
                     let Ok(mut stream) = a.accept(stream).await else {
                         return;
@@ -74,6 +78,10 @@ impl Upstream {
                     if h.load(Ordering::SeqCst) {
                         r.notified().await;
                     }
+                    if broken.load(Ordering::SeqCst) {
+                        let _ = stream.shutdown().await;
+                        return;
+                    }
                     let _=stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello").await;
                     let _ = stream.shutdown().await;
                 });
@@ -84,6 +92,7 @@ impl Upstream {
             root,
             calls,
             hold,
+            fail,
             started,
             release,
             task,
@@ -1294,4 +1303,244 @@ async fn saving_paid_pool_rebuilds_real_sdk_backend_with_current_settings() {
     // Pool startup/reload creates no funded channel and preserves the same journal root.
     assert!(!directory.path().join("paid-channels/same-pool").exists());
     app.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn real_run_records_verified_success_cancellation_and_failed_incomplete_delivery() {
+    let upstream = Upstream::start().await;
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let sa = tempfile::tempdir().unwrap();
+    let sb = tempfile::tempdir().unwrap();
+    let alice = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+        .await
+        .unwrap();
+    let bob = Arc::new(
+        AppState::with_vault(b.path(), Vault::fixture(sb.path()))
+            .await
+            .unwrap(),
+    );
+    alice.initialize_software("Alice".into()).await.unwrap();
+    bob.initialize_software("Bob".into()).await.unwrap();
+    let (request, _) = grant_https(&alice, &bob, &upstream, "alice", 121).await;
+    let events = std::sync::Mutex::new(Vec::new());
+    let completed = crate::run::execute(&bob, request.clone(), |event| {
+        events.lock().unwrap().push(event)
+    })
+    .await
+    .unwrap();
+    let events = events.into_inner().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ExecutionEvent::Verification { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event,ExecutionEvent::Finished {run_id} if run_id==&completed))
+    );
+    assert_eq!(
+        bob.history
+            .list(10)
+            .unwrap()
+            .iter()
+            .find(|entry| entry.id == completed)
+            .unwrap()
+            .status,
+        "complete"
+    );
+    upstream.started.notified().await;
+    upstream.hold.store(true, Ordering::SeqCst);
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let active = bob.clone();
+    let pending = request.clone();
+    let cancelled = tokio::spawn(async move {
+        crate::run::execute(&active, pending, |event| {
+            let _ = sender.send(event);
+        })
+        .await
+    });
+    let ExecutionEvent::Started { run_id } = receiver.recv().await.unwrap() else {
+        panic!("start event");
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        upstream.started.notified(),
+    )
+    .await
+    .unwrap();
+    bob.cancellations
+        .lock()
+        .await
+        .get(&run_id)
+        .unwrap()
+        .send_replace(true);
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), cancelled)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap(),
+        run_id
+    );
+    let remaining = std::iter::from_fn(|| receiver.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        remaining
+            .iter()
+            .any(|event| matches!(event, ExecutionEvent::Cancelled { .. }))
+    );
+    assert!(!remaining.iter().any(|event| matches!(
+        event,
+        ExecutionEvent::Verification { .. } | ExecutionEvent::Finished { .. }
+    )));
+    assert_eq!(
+        bob.history
+            .list(10)
+            .unwrap()
+            .iter()
+            .find(|entry| entry.id == run_id)
+            .unwrap()
+            .status,
+        "cancelled"
+    );
+    upstream.release.notify_one();
+    bob.local().await.unwrap().clients.reset().await.unwrap();
+    upstream.hold.store(false, Ordering::SeqCst);
+    upstream.fail.store(true, Ordering::SeqCst);
+    let events = std::sync::Mutex::new(Vec::new());
+    let failed = crate::run::execute(&bob, request, |event| events.lock().unwrap().push(event))
+        .await
+        .unwrap();
+    let events = events.into_inner().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ExecutionEvent::Failed { .. }))
+    );
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        ExecutionEvent::Verification { .. } | ExecutionEvent::Finished { .. }
+    )));
+    let history = bob.history.list(10).unwrap();
+    let entry = history.iter().find(|entry| entry.id == failed).unwrap();
+    assert_eq!(entry.status, "failed");
+    assert!(!entry.error.is_empty());
+    assert!(entry.verification.is_empty());
+    bob.shutdown().await.unwrap();
+    assert!(
+        crate::run::execute(&bob, serde_json::from_str(&entry.request).unwrap(), |_| {})
+            .await
+            .is_err()
+    );
+    alice.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dynamic_and_declarative_quota_edits_share_authority_revision_and_counters() {
+    let upstream = Upstream::start().await;
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let sa = tempfile::tempdir().unwrap();
+    let sb = tempfile::tempdir().unwrap();
+    let alice = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+        .await
+        .unwrap();
+    let bob = AppState::with_vault(b.path(), Vault::fixture(sb.path()))
+        .await
+        .unwrap();
+    alice.initialize_software("Alice".into()).await.unwrap();
+    bob.initialize_software("Bob".into()).await.unwrap();
+    let (request, share) = grant_https(&alice, &bob, &upstream, "alice", 123).await;
+    let quota = alice.quota(&share.allowances[0]).await.unwrap();
+    assert_eq!(quota.requests_per_day, Some(3));
+    let edit = QuotaInput {
+        allowance: share.allowances[0].clone(),
+        expected_revision: quota.revision,
+        requests_per_day: 1,
+        max_in_flight: 1,
+    };
+    alice.set_quota(edit.clone()).await.unwrap();
+    let recipient = bob.local().await.unwrap();
+    assert!(finished(
+        &execute(&recipient.clients, &recipient, &request)
+            .await
+            .unwrap()
+    ));
+    assert!(
+        execute(&recipient.clients, &recipient, &request)
+            .await
+            .is_err()
+    );
+    assert!(
+        alice
+            .set_quota(QuotaInput {
+                requests_per_day: 2,
+                ..edit
+            })
+            .await
+            .is_err(),
+        "stale dynamic revision is explicit"
+    );
+    let quota = alice.quota(&share.allowances[0]).await.unwrap();
+    let view = alice.provider_view().await.unwrap();
+    let desired = DesiredState {
+        schema: 1,
+        expected_provider_revision: view.revision,
+        upstreams: vec![DesiredUpstream {
+            service: "web".into(),
+            method: "get".into(),
+            hosts: vec!["127.0.0.1".into()],
+            allow_private_addresses: true,
+            keys: vec![],
+        }],
+        resources: view.resources,
+        contacts: vec![],
+        shares: vec![],
+        gateway_keys: vec![],
+        revoke_shares: vec![],
+        revoke_gateway_keys: vec![],
+        quotas: vec![QuotaInput {
+            allowance: share.allowances[0].clone(),
+            expected_revision: quota.revision,
+            requests_per_day: 2,
+            max_in_flight: 1,
+        }],
+        provider_enabled: None,
+        gateway: None,
+        gateway_enabled: None,
+    };
+    let preview = alice.preview_apply(desired.clone()).await.unwrap();
+    assert!(!preview.requires_passkey);
+    let report = alice.apply_document(&preview.id).await.unwrap();
+    assert!(report.error.is_none());
+    assert_eq!(report.applied.len(), 1);
+    let quota = alice.quota(&share.allowances[0]).await.unwrap();
+    assert_eq!(quota.requests_per_day, Some(2));
+    assert_eq!(quota.revision, desired.quotas[0].expected_revision + 1);
+    let preview = alice.preview_apply(desired).await.unwrap();
+    let again = alice.apply_document(&preview.id).await.unwrap();
+    assert!(again.error.is_none());
+    assert_eq!(report.authority_revision, again.authority_revision);
+    assert_eq!(
+        quota.revision,
+        alice.quota(&share.allowances[0]).await.unwrap().revision
+    );
+    assert!(finished(
+        &execute(&recipient.clients, &recipient, &request)
+            .await
+            .unwrap()
+    ));
+    assert!(
+        execute(&recipient.clients, &recipient, &request)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        upstream.calls.load(Ordering::SeqCst),
+        2,
+        "editing the limit never resets consumed requests"
+    );
+    bob.shutdown().await.unwrap();
+    alice.shutdown().await.unwrap();
 }

@@ -201,59 +201,65 @@ pub async fn run_request(
     request: RunRequest,
     on_event: tauri::ipc::Channel<ExecutionEvent>,
 ) -> ApiResult<String> {
-    use futures::StreamExt;
-    let local = state.local().await.map_err(ApiError::internal)?;
-    let _permit = state
-        .runs
-        .clone()
-        .try_acquire_owned()
-        .map_err(ApiError::internal)?;
-    let id = state.history.begin(&request).map_err(ApiError::internal)?;
-    let (cancel, mut cancelled) = tokio::sync::watch::channel(false);
-    state.cancellations.lock().await.insert(id.clone(), cancel);
-    let _ = on_event.send(ExecutionEvent::Started { run_id: id.clone() });
-    let result: anyhow::Result<bool>=async {
-        let mut stream=local.clients.fetch(&local,&request).await?;let mut terminal=false;
-        loop {
-            let next=tokio::select! {biased;_ = cancelled.wait_for(|value|*value)=>{return Ok(false);},next=stream.next()=>next};
-            let Some(event)=next else {break;};let event=event?;
-            let text=serde_json::to_string(&event)?;state.history.append_result(&id,&text)?;
-            terminal|=matches!(event,hellas_rpc::output::OutputEvent::Finished{..});
-            let _=on_event.send(ExecutionEvent::Output{text});
-        }
-        anyhow::ensure!(terminal,"Fetch stream ended without a verified terminal event");Ok(true)
-    }.await;
-    state.cancellations.lock().await.remove(&id);
-    match result {
-        Ok(true) => {
-            let summary = "SDK verified the signed terminal result and output stream";
-            state
-                .history
-                .complete(&id, summary)
-                .map_err(ApiError::internal)?;
-            let _ = on_event.send(ExecutionEvent::Verification {
-                summary: summary.into(),
-            });
-            let _ = on_event.send(ExecutionEvent::Finished { run_id: id.clone() });
-        }
-        Ok(false) => {
-            state.history.cancel(&id).map_err(ApiError::internal)?;
-            let _ = on_event.send(ExecutionEvent::Cancelled { run_id: id.clone() });
-        }
-        Err(e) => {
-            state
-                .history
-                .fail(&id, &e.to_string())
-                .map_err(ApiError::internal)?;
-            let _ = on_event.send(ExecutionEvent::Failed {
-                run_id: id.clone(),
-                message: e.to_string(),
-            });
-        }
-    }
-    Ok(id)
+    crate::run::execute(&state, request, |event| {
+        let _ = on_event.send(event);
+    })
+    .await
+    .map_err(ApiError::internal)
 }
+
 #[tauri::command]
 pub async fn recover_software(state: State<'_, Arc<AppState>>) -> ApiResult<AppStatus> {
     state.recover_software().await.map_err(ApiError::internal)
+}
+
+#[tauri::command]
+pub async fn issue_admin_access(
+    state: State<'_, Arc<AppState>>,
+    input: AdminAccessInput,
+) -> ApiResult<AdminAccess> {
+    state
+        .issue_admin_access(input)
+        .await
+        .map_err(ApiError::internal)
+}
+#[tauri::command]
+pub async fn rotate_gateway_key(
+    state: State<'_, Arc<AppState>>,
+    old: String,
+    input: GatewayKeyInput,
+) -> ApiResult<(GatewayKeyView, String)> {
+    state
+        .rotate_gateway_key(&old, input)
+        .await
+        .map_err(ApiError::internal)
+}
+
+#[tauri::command]
+pub async fn preview_apply(
+    state: State<'_, Arc<AppState>>,
+    document: DesiredState,
+) -> ApiResult<ApplyPreview> {
+    state
+        .preview_apply(document)
+        .await
+        .map_err(ApiError::internal)
+}
+#[tauri::command]
+pub async fn apply_document(state: State<'_, Arc<AppState>>, id: String) -> ApiResult<ApplyReport> {
+    state.apply_document(&id).await.map_err(ApiError::internal)
+}
+#[tauri::command]
+pub async fn set_quota(state: State<'_, Arc<AppState>>, input: QuotaInput) -> ApiResult<()> {
+    state.set_quota(input).await.map_err(ApiError::internal)
+}
+
+#[tauri::command]
+pub async fn get_quota(state: State<'_, Arc<AppState>>, id: String) -> ApiResult<QuotaView> {
+    state.quota(&id).await.map_err(ApiError::internal)
+}
+#[tauri::command]
+pub async fn discard_apply(state: State<'_, Arc<AppState>>, id: String) -> ApiResult<()> {
+    state.discard_apply(&id).await;
+    Ok(())
 }

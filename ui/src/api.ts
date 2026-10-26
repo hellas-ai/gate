@@ -11,6 +11,11 @@ async function call<R>(command: string, args?: Record<string, unknown>): Promise
   }
 }
 export const api = {
+  previewApply: (document:T.DesiredState):Promise<T.ApplyPreview> => call("preview_apply",{document}),
+  applyDocument: (id:string):Promise<T.ApplyReport> => call("apply_document",{id}),
+  discardApply: (id:string):Promise<void> => call("discard_apply",{id}),
+  quota: (id:string):Promise<T.QuotaView> => call("get_quota",{id}),
+  setQuota: (input:T.QuotaInput):Promise<void> => call("set_quota",{input}),
   status: (): Promise<T.AppStatus> => call("get_status"),
   initializeSoftware: (name: string): Promise<T.AppStatus> => call("initialize_software", { name }),
   recoverSoftware: (): Promise<T.AppStatus> => call("recover_software"),
@@ -37,6 +42,8 @@ export const api = {
   gatewayAddress: (): Promise<string> => call("gateway_address"),
   gatewayKeys: (): Promise<T.GatewayKeyView[]> => call("list_gateway_keys"),
   issueGatewayKey: (input: T.GatewayKeyInput): Promise<[T.GatewayKeyView, string]> => call("issue_gateway_key", { input }),
+  issueAdminAccess: (input:T.AdminAccessInput):Promise<T.AdminAccess> => call("issue_admin_access",{input}),
+  rotateGatewayKey: (old:string,input:T.GatewayKeyInput):Promise<[T.GatewayKeyView,string]> => call("rotate_gateway_key",{old,input}),
   revokeGatewayKey: (id: string): Promise<void> => call("revoke_gateway_key", { id }),
   savePaidPool: (input: T.PaidPoolInput): Promise<void> => call("save_paid_pool", { input }),
   run: async (request: T.RunRequest, onEvent: (event: T.ExecutionEvent) => void): Promise<string> => {

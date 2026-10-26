@@ -446,7 +446,119 @@ pub struct GatewayKeyView {
 #[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct UpstreamKeyView {
+    pub secret_reference: String,
     pub name: String,
     pub fingerprint: String,
     pub last_use: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminAccessInput {
+    pub request_id: String,
+    pub label: String,
+    pub holder: String,
+    pub period: crate::period::Period,
+}
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct AdminAccess {
+    pub authority: String,
+    pub authorization: String,
+    pub holder: String,
+    pub expires: u64,
+    pub socket_path: String,
+    pub certificate_base64: String,
+    pub server_name: String,
+    pub credential_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesiredKey {
+    pub name: String,
+    pub origins: Vec<String>,
+    pub paths: Vec<String>,
+    pub methods: Vec<String>,
+    pub header: String,
+    pub prefix: String,
+    pub secret_reference: String,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesiredUpstream {
+    pub service: String,
+    pub method: String,
+    pub hosts: Vec<String>,
+    pub allow_private_addresses: bool,
+    pub keys: Vec<DesiredKey>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QuotaInput {
+    pub allowance: String,
+    pub expected_revision: u64,
+    pub requests_per_day: u64,
+    pub max_in_flight: u16,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesiredState {
+    pub schema: u32,
+    pub expected_provider_revision: u64,
+    pub upstreams: Vec<DesiredUpstream>,
+    pub resources: Vec<ResourceInput>,
+    pub contacts: Vec<ContactInput>,
+    pub shares: Vec<ShareInput>,
+    pub gateway_keys: Vec<GatewayKeyInput>,
+    pub revoke_shares: Vec<String>,
+    pub revoke_gateway_keys: Vec<String>,
+    pub quotas: Vec<QuotaInput>,
+    pub provider_enabled: Option<bool>,
+    pub gateway: Option<GatewayConfig>,
+    pub gateway_enabled: Option<bool>,
+}
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyPreview {
+    pub id: String,
+    pub provider_revision: u64,
+    pub steps: Vec<String>,
+    pub requires_passkey: bool,
+}
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyReport {
+    pub applied: Vec<String>,
+    pub unapplied: Vec<String>,
+    pub uncertain: Vec<String>,
+    pub error: Option<String>,
+    pub provider_revision: u64,
+    pub authority_revision: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaView {
+    pub revision: u64,
+    pub requests_per_day: Option<u64>,
+    pub max_in_flight: u16,
 }

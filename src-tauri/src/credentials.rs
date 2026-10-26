@@ -71,7 +71,10 @@ impl PreparedIssue {
         vault: &Vault,
     ) -> anyhow::Result<()> {
         let caller = node
-            .authenticate_session(&identity.credential, SessionKey::Passkey(&identity.passkey))
+            .authenticate_session(
+                &identity.credential,
+                SessionKey::Passkey(identity.passkey.as_ref()),
+            )
             .await?;
         self.reconcile_as(node, &caller, identity.public.root, vault)
             .await
@@ -178,8 +181,7 @@ pub async fn gateway_anchor(
                 .into(),
                 not_before: now,
                 expires: Period::Unlimited
-                    .expires(now)?
-                    .min(identity.public.owner_scope.expires),
+                    .expires_within(now, identity.public.owner_scope.expires)?,
                 delegation_depth: 0,
                 issuance: None,
             };
@@ -290,5 +292,210 @@ impl PreparedIssue {
             Err(e) => return Err(e),
         }
         Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdminPrepared {
+    intent: hellas_auth::Digest,
+    issue: PreparedIssue,
+}
+pub async fn issue_admin(
+    local: &crate::control::LocalNode,
+    input: crate::dto::AdminAccessInput,
+) -> anyhow::Result<crate::dto::AdminAccess> {
+    let _: GrantId = input.request_id.parse()?;
+    ensure!(
+        !input.label.trim().is_empty() && input.label.len() <= 64,
+        "name the CLI device"
+    );
+    let holder = NodeKey::from_public_key(hellas_auth::PublicKey::Secp256k1(crate::trust::fixed(
+        &input.holder,
+    )?))?;
+    let path = local
+        .directory
+        .join("admin-access")
+        .join(format!("{}.json", input.request_id));
+    let intent = hellas_auth::Digest::hash(&serde_json::to_vec(&input)?);
+    let session = local.session(true).await?;
+    let held = match vault::read::<AdminPrepared>(&path)? {
+        Some(held) => {
+            ensure!(
+                held.intent == intent,
+                "prepared CLI access ID conflicts with this intent"
+            );
+            held
+        }
+        None => {
+            let now = UnixMillis::now()?;
+            let mut scope = local.identity.public.owner_scope.clone();
+            let status = session.status().await?;
+            let bound = local.coordinator.provider().await?.is_some();
+            let available = |name: &str| {
+                use hellas_sdk::work::operations::{Mount, OPERATIONS};
+                OPERATIONS
+                    .iter()
+                    .find(|operation| operation.name == name)
+                    .is_none_or(|operation| match operation.mount {
+                        Mount::Host => true,
+                        Mount::Work => bound,
+                        Mount::Machine => {
+                            bound
+                                && status
+                                    .machine
+                                    .as_ref()
+                                    .is_some_and(|machine| machine.max_in_flight > 0)
+                        }
+                    })
+            };
+            // Select only currently mounted service capabilities; the SDK validates
+            // this scope again before issuing any verifier.
+            scope
+                .permissions
+                .retain(|permission| available(permission.operation.as_str()));
+            if let Some(ceiling) = &mut scope.issuance {
+                ceiling
+                    .operations
+                    .retain(|operation| available(operation.as_str()));
+            }
+            scope.not_before = now;
+            scope.expires = input.period.expires_within(now, scope.expires)?;
+            let generation = session.status().await?.generation;
+            let issue = PreparedIssue::prepare(
+                &local
+                    .directory
+                    .join("prepared-admin-access")
+                    .join(format!("{}.json", input.request_id)),
+                &local.vault,
+                (local.identity.public.root, intent),
+                scope,
+                CredentialHolder::Node(holder),
+                generation,
+                input.label,
+            )
+            .await?;
+            let held = AdminPrepared { intent, issue };
+            vault::write(&path, &held)?;
+            held
+        }
+    };
+    held.issue.reconcile_credential(&session).await?;
+    let credential = held.issue.secret(&local.vault).await?;
+    use base64::Engine;
+    Ok(crate::dto::AdminAccess {
+        authority: local.identity.public.authority.to_string(),
+        authorization: local.identity.public.root.to_string(),
+        holder: hex::encode(holder.as_bytes()),
+        expires: held.issue.credential.scope().expires.0,
+        socket_path: local.socket.display().to_string(),
+        certificate_base64: base64::engine::general_purpose::STANDARD
+            .encode(&local.identity.public.certificate),
+        server_name: "localhost".into(),
+        credential_hex: hex::encode(credential_bytes_for_handoff(&credential)),
+    })
+}
+fn credential_bytes_for_handoff(credential: &CredentialSecret) -> zeroize::Zeroizing<Vec<u8>> {
+    let mut bytes = zeroize::Zeroizing::new(credential.id().0.to_vec());
+    bytes.extend_from_slice(credential.expose_secret());
+    bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{dto::*, state::AppState};
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cli_handoff_requires_device_key_and_fresh_passkey_for_sensitive_calls() {
+        let directory = tempfile::tempdir().unwrap();
+        let secrets = tempfile::tempdir().unwrap();
+        let app = AppState::with_vault(directory.path(), Vault::fixture(secrets.path()))
+            .await
+            .unwrap();
+        app.initialize_software("Owner".into()).await.unwrap();
+        let cli = hellas_sdk::NodeIdentity::generate();
+        let input = AdminAccessInput {
+            request_id: hex::encode([117; 16]),
+            label: "CLI device".into(),
+            holder: hex::encode(cli.node_key().public_key().bytes()),
+            period: Period::Week,
+        };
+        let handoff = app.issue_admin_access(input.clone()).await.unwrap();
+        let again = app.issue_admin_access(input).await.unwrap();
+        assert_eq!(handoff.credential_hex, again.credential_hex);
+        let credential =
+            crate::identity::decode_credential(&hex::decode(&handoff.credential_hex).unwrap())
+                .unwrap();
+        let local = app.local().await.unwrap();
+        let (tls, server) = hellas_sdk::node_control::profile::local_trust(
+            rustls::pki_types::CertificateDer::from(
+                STANDARD.decode(handoff.certificate_base64).unwrap(),
+            ),
+            handoff.server_name,
+        )
+        .unwrap();
+        let (client, _) = hellas_sdk::node_control::connect_local(
+            &local.socket,
+            tls.clone(),
+            server.clone(),
+            local.identity.public.authority,
+            &credential,
+            SessionKey::Node(cli.node_key()),
+        )
+        .await
+        .unwrap();
+        let status = client
+            .get_host_status(hellas_rpc::pb::host::GetHostStatusRequest {
+                authorization: local.authorization(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(status.generation, 1);
+        assert!(
+            hellas_sdk::node_control::connect_local(
+                &local.socket,
+                tls.clone(),
+                server.clone(),
+                local.identity.public.authority,
+                &credential,
+                SessionKey::Node(local.identity.node.node_key())
+            )
+            .await
+            .is_err()
+        );
+        let change = || hellas_rpc::pb::host::ConfigureProviderRequest {
+            authorization: local.authorization(),
+            update: Some(crate::provider_setup::update(
+                0,
+                ProviderChange::Endpoint {
+                    service: "cli".into(),
+                    method: "get".into(),
+                    hosts: vec!["example.com".into()],
+                    allow_private_addresses: false,
+                },
+            )),
+        };
+        assert_eq!(
+            client
+                .configure_provider(change())
+                .await
+                .unwrap_err()
+                .code(),
+            hellas_wire::WireCode::PermissionDenied
+        );
+        let (approved, _) = hellas_sdk::node_control::connect_local(
+            &local.socket,
+            tls,
+            server,
+            local.identity.public.authority,
+            &credential,
+            SessionKey::Passkey(local.identity.passkey.as_ref()),
+        )
+        .await
+        .unwrap();
+        approved.configure_provider(change()).await.unwrap();
+        assert_eq!(app.provider_view().await.unwrap().revision, 1);
+        app.shutdown().await.unwrap();
     }
 }

@@ -33,4 +33,34 @@ impl Period {
             || anyhow::anyhow!("expiry exceeds clock range"),
         )?))
     }
+    pub fn expires_within(
+        self,
+        now: UnixMillis,
+        ceiling: UnixMillis,
+    ) -> anyhow::Result<UnixMillis> {
+        anyhow::ensure!(ceiling > now, "the authorizing grant has expired");
+        Ok(self.expires(now)?.min(ceiling))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn all_fixed_periods_share_checked_conversion_and_self_issuance_ceiling() {
+        assert_eq!(Period::default().millis(), 7 * 86_400_000);
+        assert_eq!(Period::Unlimited.millis(), Period::MAX_MS);
+        assert!(Period::Day.expires(UnixMillis(u64::MAX)).is_err());
+        assert_eq!(
+            Period::Unlimited
+                .expires_within(UnixMillis(10), UnixMillis(20))
+                .unwrap(),
+            UnixMillis(20)
+        );
+        assert!(
+            Period::Week
+                .expires_within(UnixMillis(20), UnixMillis(20))
+                .is_err()
+        );
+    }
 }

@@ -20,6 +20,7 @@ pub struct AppState {
     operation: Mutex<()>,
     stopping: AtomicBool,
     failure: Mutex<Option<String>>,
+    plans: Mutex<std::collections::BTreeMap<String, crate::apply::Plan>>,
     pub runs: Arc<tokio::sync::Semaphore>,
     pub cancellations: Mutex<std::collections::BTreeMap<String, tokio::sync::watch::Sender<bool>>>,
 }
@@ -39,6 +40,7 @@ impl AppState {
             operation: Mutex::new(()),
             stopping: AtomicBool::new(false),
             failure: Mutex::new(None),
+            plans: Mutex::new(std::collections::BTreeMap::new()),
             runs: Arc::new(tokio::sync::Semaphore::new(64)),
             cancellations: Mutex::new(std::collections::BTreeMap::new()),
         };
@@ -73,6 +75,23 @@ impl AppState {
         let identity = Identity::create(&self.directory, &self.vault, name).await?;
         self.mount(identity).await?;
         self.status().await
+    }
+    pub(crate) async fn begin_run(
+        &self,
+        request: &RunRequest,
+    ) -> anyhow::Result<(
+        Arc<LocalNode>,
+        tokio::sync::OwnedSemaphorePermit,
+        String,
+        tokio::sync::watch::Receiver<bool>,
+    )> {
+        let _lock = self.operation.lock().await;
+        let local = self.local().await?;
+        let permit = self.runs.clone().try_acquire_owned()?;
+        let id = self.history.begin(request)?;
+        let (cancel, cancelled) = tokio::sync::watch::channel(false);
+        self.cancellations.lock().await.insert(id.clone(), cancel);
+        Ok((local, permit, id, cancelled))
     }
     pub async fn local(&self) -> anyhow::Result<Arc<LocalNode>> {
         anyhow::ensure!(
@@ -141,6 +160,7 @@ impl AppState {
         if let Some(local) = self.local.lock().await.take() {
             local.clients.shutdown().await?;
         }
+        self.plans.lock().await.clear();
         let _drained = self.runs.acquire_many(64).await?;
         Ok(true)
     }
@@ -212,98 +232,10 @@ impl AppState {
         expected: u64,
         input: ResourceInput,
     ) -> anyhow::Result<ProviderView> {
-        use hellas_rpc::pb::host::{
-            GetHostStatusRequest, SetMachineCapacityRequest, SetProviderStateRequest,
-        };
         let _lock = self.operation.lock().await;
         let local = self.local().await?;
-        anyhow::ensure!(
-            local.composition.view()?.revision == expected,
-            "provider revision conflict"
-        );
-        let client = local.client(false).await?;
-        let status = client
-            .get_host_status(GetHostStatusRequest {
-                authorization: local.authorization(),
-            })
-            .await?;
-        anyhow::ensure!(
-            status.provider.as_ref().is_some_and(|s| s.state == 2),
-            "start the provider before administering resources"
-        );
-        let name = input.name.clone();
-        local.composition.catalogue(input)?;
-        client
-            .set_provider_state(SetProviderStateRequest {
-                enabled: false,
-                authorization: local.authorization(),
-            })
-            .await?;
-        client
-            .set_provider_state(SetProviderStateRequest {
-                enabled: true,
-                authorization: local.authorization(),
-            })
-            .await
-            .context("restarting provider with the prepared resource catalogue")?;
-        if status.machine.as_ref().is_none_or(|m| m.max_in_flight == 0) {
-            client
-                .set_machine_capacity(SetMachineCapacityRequest {
-                    authorization: local.authorization(),
-                    expected_revision: status.machine.map_or(0, |m| m.revision),
-                    max_in_flight: 128,
-                    limits: hellas_rpc::protocol::value::canonical_dag_cbor(&Vec::<
-                        hellas_sdk::work::model::grant::budget::Limit,
-                    >::new(
-                    ))?,
-                })
-                .await?;
-        }
-        let policy = local.composition.policy(&name)?;
-        use hellas_sdk::work::model::grant::{admin::*, budget::*};
-        let account = BudgetNode::Account(policy.account);
-        if crate::control::work(
-            &client,
-            local.authorization(),
-            WorkControlCommand::InspectBudget { node: account },
-        )
-        .await
-        .is_err()
-        {
-            crate::control::work(
-                &client,
-                local.authorization(),
-                WorkControlCommand::ConfigureBudget {
-                    definition: BudgetDef {
-                        node: account,
-                        parent: BudgetNode::Machine,
-                        revision: hellas_auth::authority::Revision(1),
-                        limits: vec![],
-                        max_in_flight: std::num::NonZeroU16::new(128)
-                            .context("invalid account capacity")?,
-                    },
-                },
-            )
-            .await
-            .context("configuring the upstream account budget")?;
-        }
-        let configured = crate::control::work(
-            &client,
-            local.authorization(),
-            WorkControlCommand::Catalogue,
-        )
-        .await?;
-        if !matches!(configured, WorkControlReply::Catalogue(ref entries) if entries.contains(&policy))
-        {
-            crate::control::work(
-                &client,
-                local.authorization(),
-                WorkControlCommand::ConfigureResource { policy: name },
-            )
-            .await
-            .context("activating the resource in Work authority")?;
-        }
-        local.composition.view()
+        let session = local.session(false).await?;
+        crate::provider_setup::configure_resource(&local, &session, expected, input).await
     }
 }
 
@@ -353,37 +285,10 @@ impl AppState {
         enabled: bool,
         config: Option<GatewayConfig>,
     ) -> anyhow::Result<AppStatus> {
-        use hellas_rpc::pb::host::*;
         let _lock = self.operation.lock().await;
         let local = self.local().await?;
-        let client = local.client(false).await?;
-        if let Some(config) = config {
-            local.clients.target(&local, &config.client).await?;
-            let status = client
-                .get_host_status(GetHostStatusRequest {
-                    authorization: local.authorization(),
-                })
-                .await?;
-            if status.gateway.is_some_and(|g| g.state == 2) {
-                client
-                    .set_gateway_state(SetGatewayStateRequest {
-                        enabled: false,
-                        authorization: local.authorization(),
-                    })
-                    .await?;
-                local.clients.reset().await?;
-            }
-            local.gateway.set(config).await?;
-        }
-        client
-            .set_gateway_state(SetGatewayStateRequest {
-                enabled,
-                authorization: local.authorization(),
-            })
-            .await?;
-        if !enabled {
-            local.clients.reset().await?;
-        }
+        let session = local.session(false).await?;
+        crate::gateway::configure(&local, &session, enabled, config).await?;
         self.status().await
     }
     pub async fn gateway_address(&self) -> anyhow::Result<String> {
@@ -433,6 +338,59 @@ impl AppState {
         self.mount(identity).await?;
         *self.failure.lock().await = None;
         self.status().await
+    }
+}
+
+impl AppState {
+    pub async fn issue_admin_access(&self, input: AdminAccessInput) -> anyhow::Result<AdminAccess> {
+        let _lock = self.operation.lock().await;
+        crate::credentials::issue_admin(self.local().await?.as_ref(), input).await
+    }
+    pub async fn rotate_gateway_key(
+        &self,
+        old: &str,
+        input: GatewayKeyInput,
+    ) -> anyhow::Result<(GatewayKeyView, String)> {
+        let _lock = self.operation.lock().await;
+        crate::gateway::rotate(self.local().await?.as_ref(), old, input).await
+    }
+}
+
+impl AppState {
+    pub async fn preview_apply(&self, document: DesiredState) -> anyhow::Result<ApplyPreview> {
+        let _lock = self.operation.lock().await;
+        let local = self.local().await?;
+        let plan = crate::apply::plan(&local, document).await?;
+        let id = hex::encode(crate::identity::random::<16>()?);
+        let preview = plan.preview(id.clone());
+        let mut plans = self.plans.lock().await;
+        anyhow::ensure!(plans.len() < 8, "discard or apply earlier previews first");
+        plans.insert(id, plan);
+        Ok(preview)
+    }
+    pub async fn apply_document(&self, id: &str) -> anyhow::Result<ApplyReport> {
+        let _lock = self.operation.lock().await;
+        let local = self.local().await?;
+        let plan = self
+            .plans
+            .lock()
+            .await
+            .remove(id)
+            .context("preview is missing or already consumed; preview the document again")?;
+        crate::apply::execute(&local, plan).await
+    }
+    pub async fn quota(&self, id: &str) -> anyhow::Result<QuotaView> {
+        let _lock = self.operation.lock().await;
+        crate::contacts::quota(self.local().await?.as_ref(), id).await
+    }
+    pub async fn discard_apply(&self, id: &str) {
+        self.plans.lock().await.remove(id);
+    }
+    pub async fn set_quota(&self, input: QuotaInput) -> anyhow::Result<()> {
+        let _lock = self.operation.lock().await;
+        let local = self.local().await?;
+        let session = local.session(false).await?;
+        crate::contacts::set_quota(&local, &session, input).await
     }
 }
 

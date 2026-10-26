@@ -107,7 +107,7 @@ impl LocalNode {
     }
     pub async fn client(&self, step_up: bool) -> anyhow::Result<Client> {
         let key = if step_up {
-            SessionKey::Passkey(&self.identity.passkey)
+            SessionKey::Passkey(self.identity.passkey.as_ref())
         } else {
             SessionKey::Node(self.identity.node.node_key())
         };
