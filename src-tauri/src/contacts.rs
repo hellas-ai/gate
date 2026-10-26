@@ -198,19 +198,12 @@ fn allowance_id(subject: PrincipalId, resource: &str) -> GrantId {
     bytes.copy_from_slice(&hash.as_bytes()[..16]);
     GrantId(bytes)
 }
-async fn budget(
-    client: &control::Client,
-    local: &LocalNode,
-    mut definition: BudgetDef,
-) -> anyhow::Result<()> {
-    match control::work(
-        client,
-        local.authorization(),
-        WorkControlCommand::InspectBudget {
+async fn budget(session: &control::Session, mut definition: BudgetDef) -> anyhow::Result<()> {
+    match session
+        .work(WorkControlCommand::InspectBudget {
             node: definition.node,
-        },
-    )
-    .await
+        })
+        .await
     {
         Ok(WorkControlReply::Budget {
             definition: old, ..
@@ -225,12 +218,9 @@ async fn budget(
         Err(_) => {}
         _ => anyhow::bail!("invalid budget reply"),
     }
-    control::work(
-        client,
-        local.authorization(),
-        WorkControlCommand::ConfigureBudget { definition },
-    )
-    .await?;
+    session
+        .work(WorkControlCommand::ConfigureBudget { definition })
+        .await?;
     Ok(())
 }
 pub async fn share(
@@ -244,7 +234,7 @@ pub async fn share(
 pub async fn share_session(
     directory: &Path,
     local: &LocalNode,
-    input: ShareInput,
+    mut input: ShareInput,
     session: &control::Session,
 ) -> anyhow::Result<ShareView> {
     ensure!(
@@ -253,6 +243,7 @@ pub async fn share_session(
     );
     ensure!(input.label.len() <= 64, "share label too long");
     let id: GrantId = input.request_id.parse()?;
+    input.request_id = id.to_string();
     let path = named(directory, "shares", &id.to_string())?;
     let intent = Digest::hash(&serde_json::to_vec(&input)?);
     if let Some(held) = vault::read::<Shared>(&path)? {
@@ -275,9 +266,7 @@ pub async fn share_session(
         contact.devices.contains(&holder),
         "confirm this recipient device before sharing"
     );
-    let client = &session.client;
-    let WorkControlReply::Catalogue(policies) =
-        control::work(client, local.authorization(), WorkControlCommand::Catalogue).await?
+    let WorkControlReply::Catalogue(policies) = session.work(WorkControlCommand::Catalogue).await?
     else {
         anyhow::bail!("invalid resource catalogue");
     };
@@ -332,8 +321,7 @@ pub async fn share_session(
             ),
         ] {
             budget(
-                client,
-                local,
+                session,
                 BudgetDef {
                     node,
                     parent,
@@ -352,8 +340,7 @@ pub async fn share_session(
             enabled: true,
             allow_account_backed: true,
         };
-        let WorkControlReply::Allowances(existing) =
-            control::work(client, local.authorization(), WorkControlCommand::List).await?
+        let WorkControlReply::Allowances(existing) = session.work(WorkControlCommand::List).await?
         else {
             anyhow::bail!("invalid allowance listing");
         };
@@ -363,12 +350,9 @@ pub async fn share_session(
                 "allowance conflicts with selected upstream"
             );
         } else {
-            control::work(
-                client,
-                local.authorization(),
-                WorkControlCommand::Create { id, terms },
-            )
-            .await?;
+            session
+                .work(WorkControlCommand::Create { id, terms })
+                .await?;
         }
         allowances.push(id);
     }
@@ -392,16 +376,21 @@ pub async fn share_session(
         issuance: None,
     };
     let prepared_path = named(directory, "prepared-issues", &id.to_string())?;
-    let issue = PreparedIssue::prepare(
-        &prepared_path,
-        &local.vault,
-        (id, intent),
-        scope,
-        CredentialHolder::Node(holder),
-        status.generation,
-        input.label,
-    )
-    .await?;
+    let issue = session
+        .track(
+            format!("Prepare credential for share {id}"),
+            false,
+            PreparedIssue::prepare(
+                &prepared_path,
+                &local.vault,
+                (id, intent),
+                scope,
+                CredentialHolder::Node(holder),
+                status.generation,
+                input.label,
+            ),
+        )
+        .await?;
     let shared = Shared {
         intent,
         issue,
@@ -410,7 +399,9 @@ pub async fn share_session(
         allowances,
     };
     // Publish exact prepared IDs before any authority call; retry is a separate reconcile operation.
-    vault::write(&path, &shared)?;
+    session.track_local(format!("Publish share intent {id}"), || {
+        vault::write(&path, &shared)
+    })?;
     shared
         .issue
         .reconcile_session(session, &local.vault)
@@ -560,24 +551,25 @@ pub async fn revoke_session(
     Ok(())
 }
 pub async fn pause(local: &LocalNode, id: &str, paused: bool) -> anyhow::Result<()> {
+    let session = local.session(false).await?;
+    pause_session(id, paused, &session).await
+}
+pub async fn pause_session(
+    id: &str,
+    paused: bool,
+    session: &control::Session,
+) -> anyhow::Result<()> {
     let id: GrantId = id.parse()?;
-    let client = local.client(false).await?;
-    let WorkControlReply::Status { allowance, .. } = control::work(
-        &client,
-        local.authorization(),
-        WorkControlCommand::Inspect { id },
-    )
-    .await?
+    let WorkControlReply::Status { allowance, .. } =
+        session.work(WorkControlCommand::Inspect { id }).await?
     else {
         anyhow::bail!("invalid allowance status");
     };
     if allowance.enabled != paused {
         return Ok(());
     }
-    control::work(
-        &client,
-        local.authorization(),
-        WorkControlCommand::Revise {
+    session
+        .work(WorkControlCommand::Revise {
             id,
             expected_revision: allowance.revision,
             terms: AllowanceTerms {
@@ -587,9 +579,8 @@ pub async fn pause(local: &LocalNode, id: &str, paused: bool) -> anyhow::Result<
                 enabled: !paused,
                 allow_account_backed: true,
             },
-        },
-    )
-    .await?;
+        })
+        .await?;
     Ok(())
 }
 
@@ -627,7 +618,7 @@ pub async fn quota(local: &LocalNode, id: &str) -> anyhow::Result<QuotaView> {
 }
 
 pub async fn set_quota(
-    local: &LocalNode,
+    _local: &LocalNode,
     session: &control::Session,
     input: QuotaInput,
 ) -> anyhow::Result<()> {
@@ -635,23 +626,16 @@ pub async fn set_quota(
     ensure!(input.requests_per_day > 0, "quota must be positive");
     let concurrency =
         NonZeroU16::new(input.max_in_flight).context("concurrency must be positive")?;
-    let WorkControlReply::Status { allowance, .. } = control::work(
-        &session.client,
-        local.authorization(),
-        WorkControlCommand::Inspect { id },
-    )
-    .await?
+    let WorkControlReply::Status { allowance, .. } =
+        session.work(WorkControlCommand::Inspect { id }).await?
     else {
         anyhow::bail!("invalid allowance status");
     };
-    let WorkControlReply::Budget { mut definition, .. } = control::work(
-        &session.client,
-        local.authorization(),
-        WorkControlCommand::InspectBudget {
+    let WorkControlReply::Budget { mut definition, .. } = session
+        .work(WorkControlCommand::InspectBudget {
             node: allowance.budget,
-        },
-    )
-    .await?
+        })
+        .await?
     else {
         anyhow::bail!("invalid budget status");
     };
@@ -682,12 +666,9 @@ pub async fn set_quota(
         .revision
         .next()
         .context("budget revision overflow")?;
-    control::work(
-        &session.client,
-        local.authorization(),
-        WorkControlCommand::ConfigureBudget { definition },
-    )
-    .await?;
+    session
+        .work(WorkControlCommand::ConfigureBudget { definition })
+        .await?;
     Ok(())
 }
 

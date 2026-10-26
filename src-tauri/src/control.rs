@@ -143,16 +143,24 @@ pub async fn work(
 pub struct Session {
     pub client: Client,
     pub authorization: Vec<u8>,
+    pub(crate) progress: std::sync::Mutex<crate::mutations::Progress>,
 }
 impl LocalNode {
     pub async fn session(&self, step_up: bool) -> anyhow::Result<Session> {
-        Ok(Session {
-            client: self.client(step_up).await?,
-            authorization: self.authorization(),
-        })
+        Ok(Session::new(
+            self.client(step_up).await?,
+            self.authorization(),
+        ))
     }
 }
 impl Session {
+    pub(crate) fn new(client: Client, authorization: Vec<u8>) -> Self {
+        Self {
+            client,
+            authorization,
+            progress: Default::default(),
+        }
+    }
     pub async fn inspect(&self, query: InspectionQuery) -> anyhow::Result<AuthorityInspection> {
         use hellas_rpc::protocol::value::{canonical_dag_cbor, decode_dag_cbor};
         let reply = self
@@ -165,30 +173,39 @@ impl Session {
         Ok(decode_dag_cbor(&reply.reply)?)
     }
     pub async fn grant(&self, command: GrantCommand) -> anyhow::Result<()> {
-        self.client
-            .grant_control(GrantControlRequest {
+        self.track(
+            format!("Auth grant {command:?}"),
+            true,
+            self.client.grant_control(GrantControlRequest {
                 command: hellas_rpc::protocol::value::canonical_dag_cbor(&command)?,
-            })
-            .await?;
+            }),
+        )
+        .await?;
         Ok(())
     }
     pub async fn issue(&self, credential: &Credential) -> anyhow::Result<()> {
-        self.client
-            .issue_credential(IssueCredentialRequest {
+        self.track(
+            format!("Issue credential {}", credential.id()),
+            true,
+            self.client.issue_credential(IssueCredentialRequest {
                 authorization: self.authorization.clone(),
                 credential: hellas_rpc::protocol::value::canonical_dag_cbor(credential)?,
-            })
-            .await?;
+            }),
+        )
+        .await?;
         Ok(())
     }
     pub async fn revoke(&self, id: CredentialId, expected: Revision) -> anyhow::Result<()> {
-        self.client
-            .revoke_credential(RevokeCredentialRequest {
+        self.track(
+            format!("Revoke credential {id} at revision {}", expected.0),
+            true,
+            self.client.revoke_credential(RevokeCredentialRequest {
                 authorization: self.authorization.clone(),
                 credential_id: id.0.to_vec(),
                 expected_revision: expected.0,
-            })
-            .await?;
+            }),
+        )
+        .await?;
         Ok(())
     }
     pub async fn status(&self) -> anyhow::Result<HostStatus> {

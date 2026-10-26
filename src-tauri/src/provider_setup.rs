@@ -93,11 +93,17 @@ impl Composition {
             .map_err(|_| anyhow::anyhow!("provider configuration lock failed"))?
             .clone())
     }
-    fn publish(&self, config: Configuration) -> anyhow::Result<()> {
+    fn publish(&self, expected: u64, config: Configuration) -> anyhow::Result<()> {
         let mut held = self
             .state
             .lock()
             .map_err(|_| anyhow::anyhow!("provider configuration lock failed"))?;
+        ensure!(
+            held.revision == expected,
+            "provider revision conflict: expected {}, current {}",
+            expected,
+            held.revision
+        );
         vault::write(&self.directory.join("provider-configuration.json"), &config)?;
         *held = config;
         Ok(())
@@ -135,8 +141,9 @@ impl Composition {
         })
     }
     /// A composition catalogue is not authority; WorkControl must still activate it.
-    pub fn catalogue(&self, input: ResourceInput) -> anyhow::Result<()> {
+    pub fn catalogue(&self, expected: u64, input: ResourceInput) -> anyhow::Result<()> {
         let mut config = self.snapshot()?;
+        ensure!(config.revision == expected, "provider revision conflict");
         ensure!(
             config
                 .endpoints
@@ -170,7 +177,7 @@ impl Composition {
             "at most 16 resources are supported"
         );
         self.validate(&config)?;
-        self.publish(config)
+        self.publish(expected, config)
     }
     fn metadata(config: &Configuration) -> ProviderMetadata {
         ProviderMetadata {
@@ -612,12 +619,16 @@ struct Staged {
 }
 impl PreparedProviderConfiguration for Staged {
     fn commit(&mut self) -> Result<ProviderMetadata, ProviderErrorBox> {
-        self.composition.publish(self.next.clone())?;
+        self.composition
+            .publish(self.old.revision, self.next.clone())?;
         self.committed = true;
         Ok(Composition::metadata(&self.next))
     }
     fn rollback(&mut self) -> Result<(), ProviderErrorBox> {
-        self.composition.publish(self.old.clone())?;
+        if self.committed {
+            self.composition
+                .publish(self.next.revision, self.old.clone())?;
+        }
         self.committed = false;
         Ok(())
     }
@@ -699,9 +710,7 @@ pub async fn configure_resource(
     expected: u64,
     input: ResourceInput,
 ) -> anyhow::Result<ProviderView> {
-    use hellas_rpc::pb::host::{
-        GetHostStatusRequest, SetMachineCapacityRequest, SetProviderStateRequest,
-    };
+    use hellas_rpc::pb::host::{GetHostStatusRequest, SetMachineCapacityRequest};
     anyhow::ensure!(
         local.composition.view()?.revision == expected,
         "provider revision conflict"
@@ -717,47 +726,41 @@ pub async fn configure_resource(
         "start the provider before administering resources"
     );
     let name = input.name.clone();
-    local.composition.catalogue(input)?;
-    client
-        .set_provider_state(SetProviderStateRequest {
-            enabled: false,
-            authorization: local.authorization(),
-        })
-        .await?;
-    client
-        .set_provider_state(SetProviderStateRequest {
-            enabled: true,
-            authorization: local.authorization(),
-        })
+    session.track_local(format!("Publish resource catalogue {name}"), || {
+        local.composition.catalogue(expected, input)
+    })?;
+    session.provider_state(false).await?;
+    session
+        .provider_state(true)
         .await
         .context("restarting provider with the prepared resource catalogue")?;
     if status.machine.as_ref().is_none_or(|m| m.max_in_flight == 0) {
-        client
-            .set_machine_capacity(SetMachineCapacityRequest {
-                authorization: local.authorization(),
-                expected_revision: status.machine.map_or(0, |m| m.revision),
-                max_in_flight: 128,
-                limits: hellas_rpc::protocol::value::canonical_dag_cbor(&Vec::<
-                    hellas_sdk::work::model::grant::budget::Limit,
-                >::new())?,
-            })
+        session
+            .track(
+                "Configure machine capacity".into(),
+                true,
+                client.set_machine_capacity(SetMachineCapacityRequest {
+                    authorization: local.authorization(),
+                    expected_revision: status.machine.map_or(0, |m| m.revision),
+                    max_in_flight: 128,
+                    limits: hellas_rpc::protocol::value::canonical_dag_cbor(&Vec::<
+                        hellas_sdk::work::model::grant::budget::Limit,
+                    >::new(
+                    ))?,
+                }),
+            )
             .await?;
     }
     let policy = local.composition.policy(&name)?;
     use hellas_sdk::work::model::grant::{admin::*, budget::*};
     let account = BudgetNode::Account(policy.account);
-    if crate::control::work(
-        client,
-        local.authorization(),
-        WorkControlCommand::InspectBudget { node: account },
-    )
-    .await
-    .is_err()
+    if session
+        .work(WorkControlCommand::InspectBudget { node: account })
+        .await
+        .is_err()
     {
-        crate::control::work(
-            client,
-            local.authorization(),
-            WorkControlCommand::ConfigureBudget {
+        session
+            .work(WorkControlCommand::ConfigureBudget {
                 definition: BudgetDef {
                     node: account,
                     parent: BudgetNode::Machine,
@@ -766,28 +769,24 @@ pub async fn configure_resource(
                     max_in_flight: std::num::NonZeroU16::new(128)
                         .context("invalid account capacity")?,
                 },
-            },
-        )
-        .await
-        .context("configuring the upstream account budget")?;
+            })
+            .await
+            .context("configuring the upstream account budget")?;
     }
-    let configured =
-        crate::control::work(client, local.authorization(), WorkControlCommand::Catalogue).await?;
+    let configured = session.work(WorkControlCommand::Catalogue).await?;
     if !matches!(configured, WorkControlReply::Catalogue(ref entries) if entries.contains(&policy))
     {
-        crate::control::work(
-            client,
-            local.authorization(),
-            WorkControlCommand::ConfigureResource { policy: name },
-        )
-        .await
-        .context("activating the resource in Work authority")?;
+        session
+            .work(WorkControlCommand::ConfigureResource { policy: name })
+            .await
+            .context("activating the resource in Work authority")?;
     }
     local.composition.view()
 }
 
 pub struct ProviderStep {
     pub expected: u64,
+    pub after_resources: bool,
     pub change: ProviderChange,
     pub reference: Option<String>,
 }
@@ -840,11 +839,16 @@ impl Composition {
                 .insert(key, reference);
         }
         let result = session
-            .client
-            .configure_provider(hellas_rpc::pb::host::ConfigureProviderRequest {
-                authorization: session.authorization.clone(),
-                update: Some(update),
-            })
+            .track(
+                format!("Configure provider at revision {expected}"),
+                false,
+                session
+                    .client
+                    .configure_provider(hellas_rpc::pb::host::ConfigureProviderRequest {
+                        authorization: session.authorization.clone(),
+                        update: Some(update),
+                    }),
+            )
             .await;
         if let Some(key) = key {
             self.sources
@@ -878,11 +882,40 @@ impl Composition {
             );
             ensure!(upstream.keys.len() <= 32, "at most 32 keys per upstream");
             let current = old.endpoints.get(&route);
-            if current.is_none_or(|e| {
-                e.hosts != upstream.hosts || e.private != upstream.allow_private_addresses
+            let mut expanded_hosts = current
+                .map(|endpoint| endpoint.hosts.clone())
+                .unwrap_or_default();
+            for host in &upstream.hosts {
+                if !expanded_hosts.contains(host) {
+                    expanded_hosts.push(host.clone());
+                }
+            }
+            let expanded_private = upstream.allow_private_addresses
+                || current.is_some_and(|endpoint| endpoint.private);
+            if current.is_none_or(|endpoint| {
+                endpoint.hosts != expanded_hosts || endpoint.private != expanded_private
             }) {
                 changes.push(ProviderStep {
                     expected: revision,
+                    after_resources: false,
+                    change: ProviderChange::Endpoint {
+                        service: upstream.service.clone(),
+                        method: upstream.method.clone(),
+                        hosts: expanded_hosts.clone(),
+                        allow_private_addresses: expanded_private,
+                    },
+                    reference: None,
+                });
+                revision = revision
+                    .checked_add(1)
+                    .context("provider revision overflow")?;
+            }
+            if expanded_hosts != upstream.hosts
+                || expanded_private != upstream.allow_private_addresses
+            {
+                changes.push(ProviderStep {
+                    expected: revision,
+                    after_resources: true,
                     change: ProviderChange::Endpoint {
                         service: upstream.service.clone(),
                         method: upstream.method.clone(),
@@ -950,6 +983,7 @@ impl Composition {
                     };
                     changes.push(ProviderStep {
                         expected: revision,
+                        after_resources: false,
                         change,
                         reference: Some(key.secret_reference.clone()),
                     });
@@ -963,6 +997,7 @@ impl Composition {
                 for name in current.keys.keys().filter(|name| !keys.contains_key(*name)) {
                     changes.push(ProviderStep {
                         expected: revision,
+                        after_resources: true,
                         change: ProviderChange::RemoveKey {
                             service: upstream.service.clone(),
                             method: upstream.method.clone(),
@@ -993,6 +1028,7 @@ impl Composition {
         }) {
             changes.push(ProviderStep {
                 expected: revision,
+                after_resources: true,
                 change: ProviderChange::RemoveEndpoint {
                     service: endpoint.service.clone(),
                     method: endpoint.method.clone(),
@@ -1026,8 +1062,9 @@ impl Composition {
         self.validate(&desired)?;
         Ok(changes)
     }
-    pub fn retire_catalogue(&self, name: &str) -> anyhow::Result<()> {
+    pub fn retire_catalogue(&self, expected: u64, name: &str) -> anyhow::Result<()> {
         let mut config = self.snapshot()?;
+        ensure!(config.revision == expected, "provider revision conflict");
         if !config.resources.iter().any(|r| r.name == name) {
             return Ok(());
         }
@@ -1036,7 +1073,7 @@ impl Composition {
             .revision
             .checked_add(1)
             .context("provider revision overflow")?;
-        self.publish(config)
+        self.publish(expected, config)
     }
 }
 

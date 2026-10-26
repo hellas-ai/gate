@@ -672,15 +672,18 @@ async fn gateway_admits_only_current_named_credentials_and_zdr_does_not_archive(
     bob.set_gateway(true, Some(config)).await.unwrap();
     let address = bob.gateway_address().await.unwrap();
     let input = GatewayKeyInput {
-        request_id: hex::encode([51; 16]),
+        request_id: hex::encode([0xab; 16]).to_uppercase(),
         label: "tool one".into(),
         period: crate::period::Period::Week,
     };
     let (first, bearer) = bob.issue_gateway_key(input.clone()).await.unwrap();
-    let (retry, again) = bob.issue_gateway_key(input).await.unwrap();
+    assert_eq!(first.id, hex::encode([0xab; 16]));
+    let mut retry_input = input;
+    retry_input.request_id = first.id.clone();
+    let (retry, again) = bob.issue_gateway_key(retry_input).await.unwrap();
     assert_eq!(first.id, retry.id);
     assert_eq!(bearer, again);
-    let (_, second) = bob
+    let (second_key, second) = bob
         .issue_gateway_key(GatewayKeyInput {
             request_id: hex::encode([52; 16]),
             label: "tool two".into(),
@@ -747,6 +750,57 @@ async fn gateway_admits_only_current_named_credentials_and_zdr_does_not_archive(
             .unwrap()
             .iter()
             .any(|key| key.id == first.id && key.revoked)
+    );
+    let listed = bob
+        .gateway_keys()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|key| key.id == second_key.id)
+        .unwrap();
+    let (rotated, rotated_secret) = bob
+        .rotate_gateway_key(
+            &listed.id,
+            GatewayKeyInput {
+                request_id: hex::encode([0xcd; 16]).to_uppercase(),
+                label: "rotated tool".into(),
+                period: crate::period::Period::Week,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(rotated.id, hex::encode([0xcd; 16]));
+    assert_eq!(
+        http.post(&url)
+            .bearer_auth(&second)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    assert_ne!(
+        http.post(&url)
+            .bearer_auth(&rotated_secret)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    assert!(
+        b.path()
+            .join("gateway-keys")
+            .join(format!("{}.json", rotated.id))
+            .exists()
+    );
+    assert!(
+        !b.path()
+            .join("gateway-keys")
+            .join(format!("{}.json", rotated.id.to_uppercase()))
+            .exists()
     );
     bob.set_gateway(false, None).await.unwrap();
     assert!(http.post(&url).send().await.is_err());
@@ -1741,4 +1795,528 @@ async fn shutdown_closes_opening_for_an_admitted_run_before_lazy_paid_chain_star
         history.iter().find(|entry| entry.id == id).unwrap().status,
         "failed"
     );
+}
+
+fn desired_https(view: ProviderView) -> DesiredState {
+    DesiredState {
+        schema: 1,
+        expected_provider_revision: view.revision,
+        upstreams: vec![DesiredUpstream {
+            service: "web".into(),
+            method: "get".into(),
+            hosts: vec!["127.0.0.1".into()],
+            allow_private_addresses: true,
+            keys: vec![],
+        }],
+        resources: view.resources,
+        contacts: vec![],
+        shares: vec![],
+        gateway_keys: vec![],
+        revoke_shares: vec![],
+        revoke_gateway_keys: vec![],
+        quotas: vec![],
+        provider_enabled: None,
+        gateway: None,
+        gateway_enabled: None,
+    }
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_resource_and_retirement_previews_refuse_before_touching_live_work() {
+    let upstream = Upstream::start().await;
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let sa = tempfile::tempdir().unwrap();
+    let sb = tempfile::tempdir().unwrap();
+    let alice = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+        .await
+        .unwrap();
+    let bob = AppState::with_vault(b.path(), Vault::fixture(sb.path()))
+        .await
+        .unwrap();
+    alice.initialize_software("Alice".into()).await.unwrap();
+    bob.initialize_software("Bob".into()).await.unwrap();
+    let (mut request, share) = grant_https(&alice, &bob, &upstream, "alice", 126).await;
+    let desired = desired_https(alice.provider_view().await.unwrap());
+    let mut update = desired.clone();
+    if let ResourceKind::Https {
+        max_response_bytes, ..
+    } = &mut update.resources[0].resource
+    {
+        *max_response_bytes = 8192;
+    }
+    let stale_resource = alice.preview_apply(update).await.unwrap();
+    let mut retire = desired.clone();
+    retire.resources.clear();
+    let stale_retire = alice.preview_apply(retire).await.unwrap();
+    let mut newer = desired.resources[0].clone();
+    if let ResourceKind::Https {
+        max_response_bytes, ..
+    } = &mut newer.resource
+    {
+        *max_response_bytes = 2048;
+    }
+    alice
+        .configure_resource(desired.expected_provider_revision, newer)
+        .await
+        .unwrap();
+    let mut body: hellas_rpc::http_fetch::HttpFetchRequest =
+        serde_json::from_str(&request.input).unwrap();
+    body.max_response_bytes = 2048;
+    request.input = serde_json::to_string(&body).unwrap();
+    // Refresh the allowance to the operator's newer resource before holding real work.
+    alice
+        .pause_allowance(&share.allowances[0], true)
+        .await
+        .unwrap();
+    alice
+        .pause_allowance(&share.allowances[0], false)
+        .await
+        .unwrap();
+    bob.import_access(&alice.export_access(&share.id).await.unwrap())
+        .await
+        .unwrap();
+    let local = alice.local().await.unwrap();
+    let recipient = bob.local().await.unwrap();
+    upstream.hold.store(true, Ordering::SeqCst);
+    let active = recipient.clone();
+    let pending = request.clone();
+    let mut inflight =
+        tokio::spawn(async move { execute(&active.clients, &active, &pending).await });
+    tokio::select! {result=&mut inflight=>panic!("live Fetch failed before reaching the fixture: {result:?}"),result=tokio::time::timeout(std::time::Duration::from_secs(20),upstream.started.notified())=>{result.unwrap();}}
+
+    let metadata = std::fs::read(a.path().join("provider-configuration.json")).unwrap();
+    let revision = local
+        .session(false)
+        .await
+        .unwrap()
+        .status()
+        .await
+        .unwrap()
+        .authority_revision;
+    for preview in [stale_resource, stale_retire] {
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            alice.apply_document(&preview.id),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(error.to_string().contains("revision conflict"));
+        assert_eq!(
+            std::fs::read(a.path().join("provider-configuration.json")).unwrap(),
+            metadata
+        );
+        assert_eq!(
+            local
+                .session(false)
+                .await
+                .unwrap()
+                .status()
+                .await
+                .unwrap()
+                .authority_revision,
+            revision
+        );
+        assert_eq!(alice.status().await.unwrap().provider.state, "running");
+        assert!(!inflight.is_finished());
+    }
+    upstream.release.notify_one();
+    assert!(finished(&inflight.await.unwrap().unwrap()));
+    bob.shutdown().await.unwrap();
+    alice.shutdown().await.unwrap();
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn desired_key_resource_and_https_origin_switches_converge_and_reapply_idempotently() {
+    let directory = tempfile::tempdir().unwrap();
+    let secrets = tempfile::tempdir().unwrap();
+    let vault = Vault::fixture(secrets.path());
+    let app = AppState::with_vault(directory.path(), vault.clone())
+        .await
+        .unwrap();
+    app.initialize_software("Owner".into()).await.unwrap();
+    app.bind_provider(true).await.unwrap();
+    app.configure_provider(
+        0,
+        ProviderChange::Endpoint {
+            service: "web".into(),
+            method: "get".into(),
+            hosts: vec!["example.com".into()],
+            allow_private_addresses: false,
+        },
+    )
+    .await
+    .unwrap();
+    app.configure_provider(
+        1,
+        ProviderChange::AddKey {
+            key: UpstreamKeyInput {
+                service: "web".into(),
+                method: "get".into(),
+                key: "old".into(),
+                origins: vec!["https://example.com".into()],
+                paths: vec!["/".into()],
+                methods: vec!["GET".into()],
+                header: "authorization".into(),
+                prefix: "Bearer ".into(),
+                secret: "fixture-old-key".into(),
+            },
+        },
+    )
+    .await
+    .unwrap();
+    app.set_provider(true).await.unwrap();
+    app.configure_resource(
+        2,
+        ResourceInput {
+            name: "page".into(),
+            service: "web".into(),
+            method: "get".into(),
+            resource: ResourceKind::Https {
+                origin: "https://example.com".into(),
+                paths: vec!["/".into()],
+                methods: vec!["GET".into()],
+                credential: Some("old".into()),
+                max_response_bytes: 4096,
+                tls_roots: vec![],
+            },
+        },
+    )
+    .await
+    .unwrap();
+    vault.set("new-source", b"fixture-new-key").await.unwrap();
+    let view = app.provider_view().await.unwrap();
+    let mut desired = desired_https(view);
+    desired.upstreams[0].hosts = vec!["example.com".into()];
+    desired.upstreams[0].allow_private_addresses = false;
+    desired.upstreams[0].keys = vec![DesiredKey {
+        name: "new".into(),
+        origins: vec!["https://example.com".into()],
+        paths: vec!["/".into()],
+        methods: vec!["GET".into()],
+        header: "authorization".into(),
+        prefix: "Bearer ".into(),
+        secret_reference: "new-source".into(),
+    }];
+    if let ResourceKind::Https { credential, .. } = &mut desired.resources[0].resource {
+        *credential = Some("new".into());
+    }
+    let preview = app.preview_apply(desired.clone()).await.unwrap();
+    let report = app.apply_document(&preview.id).await.unwrap();
+    assert!(report.error.is_none(), "{:?}", report.error);
+    assert_eq!(report.provider_revision, 6);
+    assert_eq!(app.status().await.unwrap().provider.state, "running");
+    let current = app.provider_view().await.unwrap();
+    assert_eq!(current.upstreams[0].keys.len(), 1);
+    assert_eq!(current.upstreams[0].keys[0].name, "new");
+    let before = std::fs::read(directory.path().join("provider-configuration.json")).unwrap();
+    let again = app.preview_apply(desired.clone()).await.unwrap();
+    let reapplied = app.apply_document(&again.id).await.unwrap();
+    assert!(reapplied.error.is_none());
+    assert_eq!(report.authority_revision, reapplied.authority_revision);
+    assert_eq!(
+        before,
+        std::fs::read(directory.path().join("provider-configuration.json")).unwrap()
+    );
+    desired.expected_provider_revision = report.provider_revision;
+    desired.upstreams[0].hosts = vec!["other.example".into()];
+    desired.upstreams[0].keys[0].origins = vec!["https://other.example".into()];
+    if let ResourceKind::Https { origin, .. } = &mut desired.resources[0].resource {
+        *origin = "https://other.example".into();
+    }
+    let preview = app.preview_apply(desired.clone()).await.unwrap();
+    let report = app.apply_document(&preview.id).await.unwrap();
+    assert!(report.error.is_none(), "{:?}", report.error);
+    assert_eq!(
+        app.provider_view().await.unwrap().upstreams[0].hosts,
+        vec!["other.example"]
+    );
+    let preview = app.preview_apply(desired).await.unwrap();
+    let again = app.apply_document(&preview.id).await.unwrap();
+    assert!(again.error.is_none());
+    assert_eq!(report.provider_revision, again.provider_revision);
+    assert_eq!(report.authority_revision, again.authority_revision);
+    app.shutdown().await.unwrap();
+}
+
+async fn restricted_session(
+    local: &crate::control::LocalNode,
+    operations: &[&str],
+) -> crate::control::Session {
+    use hellas_auth::authority::*;
+    let mut scope = local.identity.public.owner_scope.clone();
+    scope.issuance = None;
+    scope.delegation_depth = 0;
+    scope
+        .permissions
+        .retain(|permission| operations.contains(&permission.operation.as_str()));
+    let (credential, secret) = Credential::prepare(
+        scope,
+        CredentialHolder::Node(
+            NodeKey::from_public_key(local.identity.node.node_key().public_key()).unwrap(),
+        ),
+        local
+            .session(false)
+            .await
+            .unwrap()
+            .status()
+            .await
+            .unwrap()
+            .generation,
+    )
+    .unwrap();
+    local
+        .session(true)
+        .await
+        .unwrap()
+        .issue(&credential)
+        .await
+        .unwrap();
+    let (tls, server) = hellas_sdk::node_control::profile::local_trust(
+        rustls::pki_types::CertificateDer::from(local.identity.public.certificate.clone()),
+        "localhost".into(),
+    )
+    .unwrap();
+    let (client, _) = hellas_sdk::node_control::connect_local(
+        &local.socket,
+        tls,
+        server,
+        local.identity.public.authority,
+        &secret,
+        hellas_sdk::work::node::SessionKey::Passkey(local.identity.passkey.as_ref()),
+    )
+    .await
+    .unwrap();
+    crate::control::Session::new(client, local.authorization())
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn late_auth_refusal_reports_committed_share_budgets_and_allowance_exactly() {
+    use hellas_sdk::work::model::grant::admin::{WorkControlCommand, WorkControlReply};
+    let upstream = Upstream::start().await;
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let c = tempfile::tempdir().unwrap();
+    let sa = tempfile::tempdir().unwrap();
+    let sb = tempfile::tempdir().unwrap();
+    let sc = tempfile::tempdir().unwrap();
+    let alice = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+        .await
+        .unwrap();
+    let bob = AppState::with_vault(b.path(), Vault::fixture(sb.path()))
+        .await
+        .unwrap();
+    let carol = AppState::with_vault(c.path(), Vault::fixture(sc.path()))
+        .await
+        .unwrap();
+    alice.initialize_software("Alice".into()).await.unwrap();
+    bob.initialize_software("Bob".into()).await.unwrap();
+    let carol_status = carol.initialize_software("Carol".into()).await.unwrap();
+    grant_https(&alice, &bob, &upstream, "alice", 130).await;
+    let contact = alice
+        .add_contact(ContactInput {
+            card: carol_status.identity.contact_card,
+            holder: carol_status.identity.node_key.clone(),
+            confirmed_holder: true,
+            label: "Carol".into(),
+        })
+        .await
+        .unwrap();
+    let input = ShareInput {
+        request_id: hex::encode([0xde; 16]),
+        contact: contact.id,
+        holder: carol_status.identity.node_key,
+        allowances: vec![AllowanceInput {
+            resource: "page".into(),
+            requests_per_day: 7,
+            max_in_flight: 1,
+        }],
+        period: crate::period::Period::Week,
+        label: "partial share".into(),
+    };
+    let mut desired = desired_https(alice.provider_view().await.unwrap());
+    desired.shares = vec![input.clone()];
+    let local = alice.local().await.unwrap();
+    let plan = crate::apply::plan(&local, desired).await.unwrap();
+    let limited = restricted_session(
+        &local,
+        &[
+            hellas_sdk::work::node::HOST_STATUS,
+            hellas_sdk::work::work_store::grant::WORK_ALLOWANCE_READ,
+            hellas_sdk::work::work_store::grant::WORK_BUDGET_CONFIGURE,
+            hellas_sdk::work::work_store::grant::WORK_ALLOWANCE_CONFIGURE,
+            hellas_auth::authority::GRANT_ADMINISTER,
+        ],
+    )
+    .await;
+    let report = crate::apply::execute_session(&local, plan, &limited)
+        .await
+        .unwrap();
+    assert!(report.error.is_some());
+    assert!(report.uncertain.is_empty());
+    assert!(report.applied.iter().any(
+        |operation| operation.contains("Work ConfigureBudget") && operation.contains("Subject")
+    ));
+    assert!(
+        report
+            .applied
+            .iter()
+            .any(|operation| operation.contains("Work Create"))
+    );
+    assert!(
+        report
+            .applied
+            .iter()
+            .any(|operation| operation.contains("Publish share intent"))
+    );
+    assert!(
+        report
+            .unapplied
+            .iter()
+            .any(|operation| operation.contains("Auth grant"))
+    );
+    assert!(
+        report
+            .unapplied
+            .iter()
+            .any(|operation| operation.starts_with("Finish "))
+    );
+    assert!(
+        !report.unapplied.iter().any(|operation| operation
+            .starts_with("Issue/reconcile exact share")
+            && !operation.contains(": Auth grant")),
+        "earlier Work commits cannot be reported wholly unapplied"
+    );
+    let saved: contacts::Shared = crate::vault::read(
+        &a.path()
+            .join("shares")
+            .join(format!("{}.json", input.request_id)),
+    )
+    .unwrap()
+    .unwrap();
+    let owner = local.session(false).await.unwrap();
+    let WorkControlReply::Status { allowance, .. } = owner
+        .work(WorkControlCommand::Inspect {
+            id: saved.allowances[0],
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("committed allowance");
+    };
+    let WorkControlReply::Budget { definition, .. } = owner
+        .work(WorkControlCommand::InspectBudget {
+            node: allowance.budget,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("committed subject budget");
+    };
+    assert!(definition.limits.iter().any(|limit| limit.amount == 7));
+    assert!(
+        local
+            .session(true)
+            .await
+            .unwrap()
+            .inspect(hellas_auth::authority::InspectionQuery::Grant { id: saved.issue.id })
+            .await
+            .is_err()
+    );
+    bob.shutdown().await.unwrap();
+    carol.shutdown().await.unwrap();
+    alice.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn late_resource_refusal_reports_catalogue_and_restart_then_reapply_activates_authority() {
+    use hellas_sdk::work::model::grant::admin::{WorkControlCommand, WorkControlReply};
+    let upstream = Upstream::start().await;
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let sa = tempfile::tempdir().unwrap();
+    let sb = tempfile::tempdir().unwrap();
+    let alice = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+        .await
+        .unwrap();
+    let bob = AppState::with_vault(b.path(), Vault::fixture(sb.path()))
+        .await
+        .unwrap();
+    alice.initialize_software("Alice".into()).await.unwrap();
+    bob.initialize_software("Bob".into()).await.unwrap();
+    grant_https(&alice, &bob, &upstream, "alice", 131).await;
+    let mut desired = desired_https(alice.provider_view().await.unwrap());
+    if let ResourceKind::Https {
+        max_response_bytes, ..
+    } = &mut desired.resources[0].resource
+    {
+        *max_response_bytes = 8192;
+    }
+    let local = alice.local().await.unwrap();
+    let original = local.composition.policy("page").unwrap();
+    let plan = crate::apply::plan(&local, desired.clone()).await.unwrap();
+    let limited = restricted_session(
+        &local,
+        &[
+            hellas_sdk::work::node::HOST_STATUS,
+            hellas_sdk::work::node::HOST_PROVIDER_CONFIGURE,
+            hellas_sdk::work::work_store::grant::WORK_ALLOWANCE_READ,
+        ],
+    )
+    .await;
+    let report = crate::apply::execute_session(&local, plan, &limited)
+        .await
+        .unwrap();
+    assert!(report.error.is_some());
+    assert!(
+        report
+            .applied
+            .iter()
+            .any(|operation| operation.contains("Publish resource catalogue"))
+    );
+    assert!(
+        report
+            .applied
+            .iter()
+            .any(|operation| operation.contains("Set provider enabled=false"))
+    );
+    assert!(
+        report
+            .applied
+            .iter()
+            .any(|operation| operation.contains("Set provider enabled=true"))
+    );
+    assert!(
+        report
+            .unapplied
+            .iter()
+            .any(|operation| operation.contains("Work ConfigureResource"))
+    );
+    assert!(report.uncertain.is_empty());
+    let WorkControlReply::Catalogue(active) = local
+        .session(false)
+        .await
+        .unwrap()
+        .work(WorkControlCommand::Catalogue)
+        .await
+        .unwrap()
+    else {
+        panic!("authority catalogue");
+    };
+    assert!(active.contains(&original));
+    assert_ne!(local.composition.policy("page").unwrap(), original);
+    let repeated = alice.preview_apply(desired).await.unwrap();
+    let completed = alice.apply_document(&repeated.id).await.unwrap();
+    assert!(completed.error.is_none(), "{:?}", completed.error);
+    let WorkControlReply::Catalogue(active) = local
+        .session(false)
+        .await
+        .unwrap()
+        .work(WorkControlCommand::Catalogue)
+        .await
+        .unwrap()
+    else {
+        panic!("authority catalogue");
+    };
+    assert!(active.contains(&local.composition.policy("page").unwrap()));
+    bob.shutdown().await.unwrap();
+    alice.shutdown().await.unwrap();
 }

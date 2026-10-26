@@ -16,6 +16,7 @@ pub mod history;
 pub mod identity;
 #[cfg(test)]
 mod integration_tests;
+mod mutations;
 pub mod paid;
 pub mod period;
 pub mod provider_identity;

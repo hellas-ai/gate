@@ -303,9 +303,9 @@ struct AdminPrepared {
 }
 pub async fn issue_admin(
     local: &crate::control::LocalNode,
-    input: crate::dto::AdminAccessInput,
+    mut input: crate::dto::AdminAccessInput,
 ) -> anyhow::Result<crate::dto::AdminAccess> {
-    let _: GrantId = input.request_id.parse()?;
+    input.request_id = input.request_id.parse::<GrantId>()?.to_string();
     ensure!(
         !input.label.trim().is_empty() && input.label.len() <= 64,
         "name the CLI device"

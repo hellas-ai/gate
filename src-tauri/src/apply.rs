@@ -7,7 +7,6 @@ use crate::{
     provider_setup::{self, ProviderStep},
 };
 use anyhow::{Context, ensure};
-use hellas_rpc::pb::host::{SetGatewayStateRequest, SetProviderStateRequest};
 use hellas_sdk::work::model::grant::admin::{WorkControlCommand, WorkControlReply};
 
 pub struct Plan {
@@ -18,8 +17,8 @@ pub struct Plan {
 enum Step {
     Contact(ContactInput),
     Provider(ProviderStep),
-    Resource(ResourceInput),
-    Retire(String),
+    Resource { expected: u64, input: ResourceInput },
+    Retire { expected: u64, name: String },
     Share(ShareInput),
     GatewayKey(GatewayKeyInput),
     RevokeShare(String),
@@ -57,10 +56,10 @@ impl Step {
                     key,
                 } => format!("Remove named key {key} on {service}/{method}"),
             },
-            Self::Resource(input) => {
+            Self::Resource { input, .. } => {
                 format!("Activate resource {} through Work authority", input.name)
             }
-            Self::Retire(name) => {
+            Self::Retire { name, .. } => {
                 format!("Pause allowances for {name} and retire its runtime catalogue entry")
             }
             Self::Share(input) => format!(
@@ -109,7 +108,26 @@ impl Plan {
         }
     }
 }
-pub async fn plan(local: &LocalNode, document: DesiredState) -> anyhow::Result<Plan> {
+pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Result<Plan> {
+    for share in &mut document.shares {
+        share.request_id = share
+            .request_id
+            .parse::<hellas_auth::authority::GrantId>()?
+            .to_string();
+    }
+    for key in &mut document.gateway_keys {
+        key.request_id = key
+            .request_id
+            .parse::<hellas_auth::authority::GrantId>()?
+            .to_string();
+    }
+    for id in document
+        .revoke_shares
+        .iter_mut()
+        .chain(document.revoke_gateway_keys.iter_mut())
+    {
+        *id = id.parse::<hellas_auth::authority::GrantId>()?.to_string();
+    }
     ensure!(document.schema == 1, "unsupported desired-state schema");
     ensure!(
         serde_json::to_vec(&document)?.len() <= 4 << 20,
@@ -162,7 +180,7 @@ pub async fn plan(local: &LocalNode, document: DesiredState) -> anyhow::Result<P
         let _: hellas_auth::authority::GrantId = id.parse()?;
     }
     let current = local.composition.view()?;
-    let mut changes = local
+    let changes = local
         .composition
         .diff(&document.upstreams, &document.resources)
         .await?;
@@ -177,12 +195,12 @@ pub async fn plan(local: &LocalNode, document: DesiredState) -> anyhow::Result<P
         })
         .map(|r| r.name.clone())
         .collect();
-    let resources: Vec<_> = document
-        .resources
-        .into_iter()
-        .filter(|r| !current.resources.contains(r))
-        .collect();
-    let changed = !changes.is_empty() || !retired.is_empty() || !resources.is_empty();
+    let resources = document.resources;
+    let changed = !changes.is_empty()
+        || !retired.is_empty()
+        || resources
+            .iter()
+            .any(|resource| !current.resources.contains(resource));
     if changed {
         ensure!(
             document.expected_provider_revision == current.revision,
@@ -194,6 +212,30 @@ pub async fn plan(local: &LocalNode, document: DesiredState) -> anyhow::Result<P
     let session = local.session(false).await?;
     let status = session.status().await?;
     let running = status.provider.is_some_and(|p| p.state == 2);
+    let active = if running {
+        match session.work(WorkControlCommand::Catalogue).await? {
+            WorkControlReply::Catalogue(policies) => policies,
+            _ => anyhow::bail!("invalid resource catalogue"),
+        }
+    } else {
+        Vec::new()
+    };
+    let resources = resources
+        .into_iter()
+        .map(|resource| {
+            let changed = !current.resources.contains(&resource);
+            let activated = if changed {
+                false
+            } else {
+                active.contains(&local.composition.policy(&resource.name)?)
+            };
+            Ok((resource, changed, activated))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|(_, changed, activated)| *changed || !*activated)
+        .map(|(resource, changed, _)| (resource, changed))
+        .collect::<Vec<_>>();
     let work_needed = !retired.is_empty()
         || !resources.is_empty()
         || !document.shares.is_empty()
@@ -215,17 +257,37 @@ pub async fn plan(local: &LocalNode, document: DesiredState) -> anyhow::Result<P
     if !running && document.provider_enabled == Some(true) {
         steps.push(Step::ProviderState(true));
     }
-    for name in &retired {
-        steps.push(Step::Retire(name.clone()));
-    }
-    for step in &mut changes {
-        step.expected = step
-            .expected
-            .checked_add(retired.len() as u64)
+    let mut expected = current.revision;
+    for name in retired {
+        steps.push(Step::Retire { expected, name });
+        expected = expected
+            .checked_add(1)
             .context("provider revision overflow")?;
     }
-    steps.extend(changes.into_iter().map(Step::Provider));
-    steps.extend(resources.into_iter().map(Step::Resource));
+    let (before, after): (Vec<_>, Vec<_>) =
+        changes.into_iter().partition(|step| !step.after_resources);
+    for mut step in before {
+        step.expected = expected;
+        steps.push(Step::Provider(step));
+        expected = expected
+            .checked_add(1)
+            .context("provider revision overflow")?;
+    }
+    for (input, changed) in resources {
+        steps.push(Step::Resource { expected, input });
+        if changed {
+            expected = expected
+                .checked_add(1)
+                .context("provider revision overflow")?;
+        }
+    }
+    for mut step in after {
+        step.expected = expected;
+        steps.push(Step::Provider(step));
+        expected = expected
+            .checked_add(1)
+            .context("provider revision overflow")?;
+    }
     steps.extend(document.shares.into_iter().map(Step::Share));
     steps.extend(document.gateway_keys.into_iter().map(Step::GatewayKey));
     steps.extend(document.quotas.into_iter().map(Step::Quota));
@@ -260,14 +322,25 @@ pub async fn plan(local: &LocalNode, document: DesiredState) -> anyhow::Result<P
     })
 }
 pub async fn execute(local: &LocalNode, plan: Plan) -> anyhow::Result<ApplyReport> {
+    check_revision(local, plan.revision)?;
     let session = local.session(plan.requires_passkey).await?;
     execute_session(local, plan, &session).await
+}
+fn check_revision(local: &LocalNode, expected: u64) -> anyhow::Result<()> {
+    let current = local.composition.view()?.revision;
+    ensure!(
+        current == expected,
+        "provider revision conflict: expected {expected}, current {current}; preview again"
+    );
+    Ok(())
 }
 pub async fn execute_session(
     local: &LocalNode,
     plan: Plan,
     session: &Session,
 ) -> anyhow::Result<ApplyReport> {
+    check_revision(local, plan.revision)?;
+    session.take_progress()?;
     let labels: Vec<_> = plan.steps.iter().map(Step::description).collect();
     let mut applied = Vec::new();
     let mut unapplied = Vec::new();
@@ -277,7 +350,9 @@ pub async fn execute_session(
         let result: anyhow::Result<()> = async {
             match step {
                 Step::Contact(input) => {
-                    contacts::add(&local.directory, input)?;
+                    session.track_local("Publish verified contact/device".into(), || {
+                        contacts::add(&local.directory, input)
+                    })?;
                 }
                 Step::Provider(step) => {
                     local
@@ -285,46 +360,27 @@ pub async fn execute_session(
                         .apply(session, step.expected, step.change, step.reference)
                         .await?;
                 }
-                Step::Resource(input) => {
-                    provider_setup::configure_resource(
-                        local,
-                        session,
-                        local.composition.view()?.revision,
-                        input,
-                    )
-                    .await?;
+                Step::Resource { expected, input } => {
+                    provider_setup::configure_resource(local, session, expected, input).await?;
                 }
-                Step::Retire(name) => {
-                    let WorkControlReply::Allowances(allowances) = crate::control::work(
-                        &session.client,
-                        local.authorization(),
-                        WorkControlCommand::List,
-                    )
-                    .await?
+                Step::Retire { expected, name } => {
+                    check_revision(local, expected)?;
+                    let WorkControlReply::Allowances(allowances) =
+                        session.work(WorkControlCommand::List).await?
                     else {
                         anyhow::bail!("invalid allowance listing");
                     };
                     for allowance in allowances
                         .iter()
-                        .filter(|a| a.enabled && a.policies.contains(&name))
+                        .filter(|allowance| allowance.enabled && allowance.policies.contains(&name))
                     {
-                        contacts::pause(local, &allowance.id.to_string(), true).await?;
+                        contacts::pause_session(&allowance.id.to_string(), true, session).await?;
                     }
-                    local.composition.retire_catalogue(&name)?;
-                    session
-                        .client
-                        .set_provider_state(SetProviderStateRequest {
-                            authorization: session.authorization.clone(),
-                            enabled: false,
-                        })
-                        .await?;
-                    session
-                        .client
-                        .set_provider_state(SetProviderStateRequest {
-                            authorization: session.authorization.clone(),
-                            enabled: true,
-                        })
-                        .await?;
+                    session.track_local(format!("Retire runtime resource {name}"), || {
+                        local.composition.retire_catalogue(expected, &name)
+                    })?;
+                    session.provider_state(false).await?;
+                    session.provider_state(true).await?;
                 }
                 Step::Share(input) => {
                     contacts::share_session(&local.directory, local, input, session).await?;
@@ -342,50 +398,67 @@ pub async fn execute_session(
                     contacts::set_quota(local, session, input).await?;
                 }
                 Step::ProviderState(enabled) => {
-                    session
-                        .client
-                        .set_provider_state(SetProviderStateRequest {
-                            authorization: session.authorization.clone(),
-                            enabled,
-                        })
-                        .await?;
+                    session.provider_state(enabled).await?;
                 }
                 Step::GatewayConfig(config, enabled) => {
                     gateway::configure(local, session, enabled, Some(config)).await?;
                 }
                 Step::GatewayState(enabled) => {
-                    session
-                        .client
-                        .set_gateway_state(SetGatewayStateRequest {
-                            authorization: session.authorization.clone(),
-                            enabled,
-                        })
-                        .await?;
+                    session.gateway_state(enabled).await?;
                     if !enabled {
-                        local.clients.reset().await?;
+                        session
+                            .track(
+                                "Drain and release gateway clients".into(),
+                                false,
+                                local.clients.reset(),
+                            )
+                            .await?;
                     }
                 }
             }
             Ok(())
         }
         .await;
+        let progress = session.take_progress()?;
         if let Err(failure) = result {
-            let refused = failure
-                .downcast_ref::<hellas_wire::WireStatus>()
-                .is_some_and(|s| {
-                    matches!(
-                        s.code(),
-                        hellas_wire::WireCode::PermissionDenied
-                            | hellas_wire::WireCode::InvalidArgument
-                            | hellas_wire::WireCode::FailedPrecondition
-                    )
-                });
-            if !refused {
-                uncertain.push(labels[index].clone());
-                unapplied.extend(labels[index + 1..].iter().cloned());
+            let had_effects = !progress.completed.is_empty();
+            applied.extend(
+                progress
+                    .completed
+                    .into_iter()
+                    .map(|operation| format!("{}: {operation}", labels[index])),
+            );
+            if let Some((operation, atomic_rpc)) = progress.pending {
+                let refused = atomic_rpc
+                    && failure
+                        .downcast_ref::<hellas_wire::WireStatus>()
+                        .is_some_and(|status| {
+                            matches!(
+                                status.code(),
+                                hellas_wire::WireCode::PermissionDenied
+                                    | hellas_wire::WireCode::InvalidArgument
+                                    | hellas_wire::WireCode::FailedPrecondition
+                            )
+                        });
+                let detail = format!("{}: {operation}", labels[index]);
+                if refused {
+                    unapplied.push(detail);
+                } else {
+                    uncertain.push(detail);
+                }
+                unapplied.push(format!(
+                    "Finish {} (remaining operations were not attempted)",
+                    labels[index]
+                ));
+            } else if had_effects {
+                unapplied.push(format!(
+                    "Finish {} (stopped after the acknowledged operations above)",
+                    labels[index]
+                ));
             } else {
-                unapplied.extend(labels[index..].iter().cloned());
+                unapplied.push(labels[index].clone());
             }
+            unapplied.extend(labels[index + 1..].iter().cloned());
             error = Some(format!("{failure:#}"));
             break;
         }
@@ -483,6 +556,18 @@ mod tests {
             .unwrap();
         calls.store(0, Ordering::SeqCst);
         let desired = document();
+        let mut conflicted = desired.clone();
+        conflicted.gateway_keys[0].request_id =
+            conflicted.gateway_keys[0].request_id.to_uppercase();
+        conflicted.revoke_gateway_keys = vec![desired.gateway_keys[0].request_id.clone()];
+        assert!(
+            plan(&local, conflicted)
+                .await
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("both active and revoked")
+        );
         assert!(
             plan(&local, desired.clone()).await.is_err(),
             "missing declared secret must fail before a passkey session"
@@ -601,15 +686,33 @@ mod tests {
         )
         .await
         .unwrap();
-        let limited = Session {
-            client,
-            authorization: local.authorization(),
-        };
+        let limited = Session::new(client, local.authorization());
         let report = execute_session(&local, plan, &limited).await.unwrap();
-        assert_eq!(report.applied.len(), 1);
         assert!(report.applied[0].contains("Configure endpoint"));
-        assert_eq!(report.unapplied.len(), 1);
-        assert!(report.unapplied[0].contains("gateway.invoke"));
+        assert!(
+            report
+                .applied
+                .iter()
+                .any(|operation| operation.contains("Prepare gateway credential"))
+        );
+        assert!(
+            report
+                .applied
+                .iter()
+                .any(|operation| operation.contains("Publish gateway key intent"))
+        );
+        assert!(
+            report
+                .unapplied
+                .iter()
+                .any(|operation| operation.contains("Auth grant"))
+        );
+        assert!(
+            report
+                .unapplied
+                .iter()
+                .any(|operation| operation.starts_with("Finish "))
+        );
         assert!(report.uncertain.is_empty());
         assert!(report.error.is_some());
         assert_eq!(report.provider_revision, 1);

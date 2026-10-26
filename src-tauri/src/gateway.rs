@@ -125,9 +125,8 @@ struct NamedKey {
     intent: Digest,
     issue: PreparedIssue,
 }
-fn path(directory: &Path, id: &str) -> anyhow::Result<PathBuf> {
-    let _: GrantId = id.parse()?;
-    Ok(directory.join("gateway-keys").join(format!("{id}.json")))
+fn path(directory: &Path, id: GrantId) -> PathBuf {
+    directory.join("gateway-keys").join(format!("{id}.json"))
 }
 
 pub async fn issue(
@@ -139,7 +138,7 @@ pub async fn issue(
 }
 pub async fn issue_session(
     local: &LocalNode,
-    input: GatewayKeyInput,
+    mut input: GatewayKeyInput,
     session: &crate::control::Session,
 ) -> anyhow::Result<(GatewayKeyView, String)> {
     ensure!(
@@ -147,7 +146,8 @@ pub async fn issue_session(
         "name this gateway key"
     );
     let id: GrantId = input.request_id.parse()?;
-    let path = path(&local.directory, &input.request_id)?;
+    input.request_id = id.to_string();
+    let path = path(&local.directory, id);
     let intent = Digest::hash(&serde_json::to_vec(&input)?);
     let named = match vault::read::<NamedKey>(&path)? {
         Some(key) => {
@@ -175,21 +175,28 @@ pub async fn issue_session(
                 issuance: None,
             };
             let generation = session.status().await?.generation;
-            let issue = PreparedIssue::prepare(
-                &local
-                    .directory
-                    .join("prepared-gateway-keys")
-                    .join(format!("{id}.json")),
-                &local.vault,
-                (id, intent),
-                scope,
-                CredentialHolder::Bearer,
-                generation,
-                input.label,
-            )
-            .await?;
+            let issue = session
+                .track(
+                    format!("Prepare gateway credential {id}"),
+                    false,
+                    PreparedIssue::prepare(
+                        &local
+                            .directory
+                            .join("prepared-gateway-keys")
+                            .join(format!("{id}.json")),
+                        &local.vault,
+                        (id, intent),
+                        scope,
+                        CredentialHolder::Bearer,
+                        generation,
+                        input.label,
+                    ),
+                )
+                .await?;
             let key = NamedKey { intent, issue };
-            vault::write(&path, &key)?;
+            session.track_local(format!("Publish gateway key intent {id}"), || {
+                vault::write(&path, &key)
+            })?;
             key
         }
     };
@@ -254,8 +261,8 @@ pub async fn revoke_session(
     id: &str,
     session: &crate::control::Session,
 ) -> anyhow::Result<()> {
-    let key =
-        vault::read::<NamedKey>(&path(&local.directory, id)?)?.context("gateway key not found")?;
+    let key = vault::read::<NamedKey>(&path(&local.directory, id.parse()?))?
+        .context("gateway key not found")?;
     let view = session
         .inspect(InspectionQuery::Credential {
             id: key.issue.credential.id(),
@@ -290,34 +297,46 @@ pub async fn configure(
     enabled: bool,
     config: Option<GatewayConfig>,
 ) -> anyhow::Result<()> {
-    use hellas_rpc::pb::host::*;
-    let client = &session.client;
     if let Some(config) = config {
-        local.clients.target(local, &config.client).await?;
-        let status = client
-            .get_host_status(GetHostStatusRequest {
-                authorization: local.authorization(),
-            })
+        session
+            .track(
+                "Open/recover gateway execution client".into(),
+                false,
+                local.clients.target(local, &config.client),
+            )
             .await?;
-        if status.gateway.is_some_and(|g| g.state == 2) {
-            client
-                .set_gateway_state(SetGatewayStateRequest {
-                    enabled: false,
-                    authorization: local.authorization(),
-                })
+        if session
+            .status()
+            .await?
+            .gateway
+            .is_some_and(|gateway| gateway.state == 2)
+        {
+            session.gateway_state(false).await?;
+            session
+                .track(
+                    "Drain and release old gateway clients".into(),
+                    false,
+                    local.clients.reset(),
+                )
                 .await?;
-            local.clients.reset().await?;
         }
-        local.gateway.set(config).await?;
+        session
+            .track(
+                "Publish gateway configuration".into(),
+                false,
+                local.gateway.set(config),
+            )
+            .await?;
     }
-    client
-        .set_gateway_state(SetGatewayStateRequest {
-            enabled,
-            authorization: local.authorization(),
-        })
-        .await?;
+    session.gateway_state(enabled).await?;
     if !enabled {
-        local.clients.reset().await?;
+        session
+            .track(
+                "Drain and release gateway clients".into(),
+                false,
+                local.clients.reset(),
+            )
+            .await?;
     }
     Ok(())
 }
