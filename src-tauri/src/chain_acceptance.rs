@@ -166,7 +166,7 @@ async fn network(directory: &Path, owners: &[Key]) -> (Validators, PaidPolicyInp
         genesis_digest: hellas_auth::Digest::from(digest.0).to_string(),
         threshold_identity: hex::encode(scheme.identity().encode()),
         validators: (rpc..rpc + 6)
-            .map(|port| format!("ws://127.0.0.1:{port}"))
+            .map(|port| format!(" \tWS://127.0.0.1:{port}\n"))
             .collect(),
         committee: genesis
             .validators
@@ -639,6 +639,63 @@ async fn funded_gateway(responses: bool) {
     );
     completed_gateway_response(&http, &url, &request, responses, &bearer).await;
     assert!(!b.path().join("gateway-archive").exists());
+    if !responses {
+        let original = bl.clients.target(&bl, &request.client).await.unwrap();
+        let saved = std::fs::read(b.path().join("gateway-configuration.json")).unwrap();
+        upstream.hold.store(true, Ordering::SeqCst);
+        upstream.started.notified().await;
+        let held_http = http.clone();
+        let held_url = url.clone();
+        let held_request = request.clone();
+        let held_bearer = bearer.clone();
+        let pending = tokio::spawn(async move {
+            completed_gateway_response(&held_http, &held_url, &held_request, false, &held_bearer)
+                .await;
+        });
+        tokio::time::timeout(Duration::from_secs(120), upstream.started.notified())
+            .await
+            .unwrap();
+        let mut bad_path = config.clone();
+        bad_path.http_routes[0].path = "/proxy?invalid".into();
+        let mut duplicate = config.clone();
+        duplicate.http_routes.push(duplicate.http_routes[0].clone());
+        for candidate in [bad_path, duplicate] {
+            let mut desired = desired_https(bob.provider_view().await.unwrap());
+            desired.gateway = Some(candidate.clone());
+            assert!(bob.preview_apply(desired).await.is_err());
+            let refusal = tokio::time::timeout(
+                Duration::from_secs(5),
+                bob.set_gateway(true, Some(candidate)),
+            )
+            .await
+            .expect("route validation must not wait for accepted work to drain")
+            .unwrap_err();
+            assert!(
+                matches!(
+                    refusal.downcast_ref::<hellas_gateway::GatewayError>(),
+                    Some(hellas_gateway::GatewayError::Config(
+                        hellas_gateway::GatewayConfigError::RoutePath
+                            | hellas_gateway::GatewayConfigError::DuplicateRoute
+                    ))
+                ),
+                "{refusal:#}"
+            );
+            assert_eq!(
+                std::fs::read(b.path().join("gateway-configuration.json")).unwrap(),
+                saved
+            );
+            assert_eq!(bob.gateway_address().await.unwrap(), address);
+            assert_eq!(bob.status().await.unwrap().gateway.state, "running");
+            assert!(Arc::ptr_eq(
+                &original,
+                &bl.clients.target(&bl, &request.client).await.unwrap()
+            ));
+            assert!(!pending.is_finished());
+        }
+        upstream.release.notify_one();
+        pending.await.unwrap();
+        upstream.hold.store(false, Ordering::SeqCst);
+    }
     let mut archived = config;
     archived.zdr = false;
     bob.set_gateway(true, Some(archived)).await.unwrap();

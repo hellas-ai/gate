@@ -388,6 +388,7 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
             .map(Step::RevokeKey),
     );
     if let Some(config) = document.gateway {
+        drop(gateway::validate(&config)?);
         let enabled = document
             .gateway_enabled
             .unwrap_or_else(|| status.gateway.as_ref().is_some_and(|g| g.state == 2));

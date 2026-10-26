@@ -1372,7 +1372,7 @@ async fn paid_policy_fixture(directory: &std::path::Path) -> PaidPolicyInput {
     .await
     .unwrap();
     PaidPolicyInput {
-        chain:ChainInput {network:genesis.network_id,genesis_digest:hellas_auth::Digest::from(digest.0).to_string(),threshold_identity:"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb".into(),validators:(1..=6).map(|port|format!("http://127.0.0.1:{}",10000+port)).collect(),committee:genesis.validators.into_iter().map(|v|GenesisValidatorInput {public_key:v.public_key,label:v.label}).collect(),allocations:vec![]},
+        chain:ChainInput {network:genesis.network_id,genesis_digest:hellas_auth::Digest::from(digest.0).to_string(),threshold_identity:"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb".into(),validators:(1..=6).map(|port|format!("ws://127.0.0.1:{}",10000+port)).collect(),committee:genesis.validators.into_iter().map(|v|GenesisValidatorInput {public_key:v.public_key,label:v.label}).collect(),allocations:vec![]},
         service:"openai".into(),method:"responses".into(),presentation:FetchPresentation::Responses,policy_salt:hex::encode([9;32]),compute_credit_limit:40,delivery_credit_limit:40,fixed_price:10,dispatch_blocks:1,delivery_blocks:1,oracle_blocks:1,value:1000,reserve:200,fee_base:0,fee_slot:0,fee_proof:0,fee_lifetime:0,min_omit_response_blocks:hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS,poll_ms:25,max_observation_age_ms:5000,
     }
 }
@@ -3308,6 +3308,12 @@ async fn refused_first_paid_route_cannot_select_the_shared_chain() {
     chain_a.method = "get".into();
     chain_a.presentation = FetchPresentation::Http;
     let mut chain_b = chain_a.clone();
+    chain_b.chain.validators = chain_b
+        .chain
+        .validators
+        .iter()
+        .map(|url| format!(" \t{}\n", url.replacen("ws://", "WS://", 1)))
+        .collect();
     // The opposite valid BLS generator is an independently pinned finality
     // identity for a distinct chain definition on this same network.
     chain_b.chain.threshold_identity.replace_range(..2, "b7");
@@ -3325,6 +3331,44 @@ async fn refused_first_paid_route_cannot_select_the_shared_chain() {
         tokio::spawn(async move { execute(&recipient.clients, &recipient, &request).await });
     upstream.started.notified().await;
     let metadata = std::fs::read(a.path().join("provider-configuration.json")).unwrap();
+    let mut http = chain_a.clone();
+    http.chain.validators[0] = http.chain.validators[0].replace("ws://", "http://");
+    let mut duplicate = chain_a.clone();
+    duplicate.chain.validators[1] = format!(" {}/", duplicate.chain.validators[0]);
+    let mut count = chain_a.clone();
+    count.chain.validators.pop();
+    let mut threshold = chain_a.clone();
+    threshold.chain.threshold_identity = hex::encode([0; 48]);
+    let mut window = chain_a.clone();
+    window.min_omit_response_blocks = hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS - 1;
+    let mut timing = chain_a.clone();
+    timing.poll_ms = 0;
+    for policy in [http, duplicate, count, threshold, window, timing] {
+        let error = alice
+            .configure_paid_serve(
+                2,
+                Some(PaidServeInput {
+                    policy,
+                    routes: vec![],
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .downcast_ref::<hellas_sdk::work_config::WorkConfigError>()
+                .is_some(),
+            "{error:#}"
+        );
+        assert!(!local.chain.initialized());
+        assert!(!a.path().join("chain").exists());
+        assert_eq!(
+            std::fs::read(a.path().join("provider-configuration.json")).unwrap(),
+            metadata
+        );
+        assert_eq!(alice.status().await.unwrap().provider.state, "running");
+        assert!(!pending.is_finished());
+    }
     let refusal = alice
         .configure_paid_serve(2, Some(input))
         .await
@@ -3357,7 +3401,17 @@ async fn refused_first_paid_route_cannot_select_the_shared_chain() {
         .await
         .unwrap();
     let config_b = crate::paid::config(&chain_b, a.path().join("unused-b")).unwrap();
+    assert_eq!(
+        config_b.validators,
+        chain_a
+            .chain
+            .validators
+            .iter()
+            .map(|url| format!("{url}/"))
+            .collect::<Vec<_>>()
+    );
     let node = local.chain.get(&config_b).await.unwrap();
+    assert_eq!(node.config().validators, config_b.validators);
     config_b.check_node(&node).unwrap();
     assert!(
         crate::paid::config(&chain_a, a.path().join("unused-a"))

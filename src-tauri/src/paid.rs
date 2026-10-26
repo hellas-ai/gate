@@ -43,14 +43,6 @@ pub fn config(
     input: &PaidPolicyInput,
     journal_root: std::path::PathBuf,
 ) -> anyhow::Result<WorkConfig> {
-    ensure!(
-        input.poll_ms > 0 && input.max_observation_age_ms > 0,
-        "paid polling and progress limits must be positive"
-    );
-    ensure!(
-        input.chain.validators.len() == hellas_sdk::work_config::VALIDATOR_COUNT,
-        "configure all six validator RPC addresses"
-    );
     let genesis = if input.chain.committee.is_empty() {
         None
     } else {
@@ -116,10 +108,7 @@ pub fn config(
         ),
         min_omit_response_blocks: input.min_omit_response_blocks,
     };
-    config.node_config(config.journal_root.join("validation"), None)?;
-    config.work_policy.check()?;
-    config.payment_policy.check()?;
-    Ok(config)
+    Ok(config.validate()?)
 }
 pub fn pool_path(directory: &Path, id: &str) -> anyhow::Result<std::path::PathBuf> {
     ensure!(

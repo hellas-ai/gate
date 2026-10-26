@@ -30,6 +30,63 @@ impl Configuration {
         Ok(())
     }
 }
+pub(crate) fn validate(
+    config: &GatewayConfig,
+) -> anyhow::Result<Option<hellas_gateway::HttpGatewayConfig>> {
+    if config.http_routes.is_empty() {
+        return Ok(None);
+    }
+    let WorkTarget::Paid {
+        service, method, ..
+    } = &config.client.target
+    else {
+        anyhow::bail!("HTTP gateway requires a paid HTTP pool");
+    };
+    let http = hellas_gateway::HttpGatewayConfig {
+        service: service.clone(),
+        method: method.clone(),
+        routes: config
+            .http_routes
+            .iter()
+            .map(|route| hellas_gateway::HttpRoute {
+                path: route.path.clone(),
+                method: route.method.clone(),
+                url: route.url.clone(),
+                credential: route.credential.clone(),
+                tls: hellas_rpc::http_fetch::HttpTls {
+                    roots: if route.tls_roots.is_empty() {
+                        hellas_rpc::http_fetch::HttpTrustRoots::WebPki
+                    } else {
+                        hellas_rpc::http_fetch::HttpTrustRoots::Certificates {
+                            der_base64: route.tls_roots.clone(),
+                        }
+                    },
+                    spki_sha256: vec![],
+                },
+                headers: vec![],
+                max_response_bytes: route.max_response_bytes,
+            })
+            .collect(),
+        backends: Default::default(),
+        max_in_flight: 4,
+    };
+    http.validate()?;
+    Ok(Some(http))
+}
+fn validate_presentation(http: bool, target: &crate::clients::Target) -> anyhow::Result<()> {
+    if http {
+        ensure!(
+            matches!(target.presentation, FetchPresentation::Http),
+            "HTTP gateway requires a paid HTTP pool"
+        );
+    } else {
+        ensure!(
+            matches!(target.presentation, FetchPresentation::Responses),
+            "Responses gateway requires a Responses contract"
+        );
+    }
+    Ok(())
+}
 pub fn factory(local: Arc<LocalNode>) -> GatewayFactory {
     Arc::new(move |access| {
         let local = local.clone();
@@ -40,16 +97,27 @@ pub fn factory(local: Arc<LocalNode>) -> GatewayFactory {
                     .get()
                     .await
                     .context("configure a gateway target first")?;
+                let http = validate(&config)?;
                 let target = local.clients.target(&local, &config.client).await?;
+                validate_presentation(http.is_some(), &target)?;
                 let archive = hellas_gateway::ArchiveOptions {
                     directory: local.directory.join("gateway-archive"),
                     zdr: config.zdr,
                 };
-                let handle = if config.http_routes.is_empty() {
-                    ensure!(
-                        matches!(target.presentation, FetchPresentation::Responses),
-                        "Responses gateway requires a Responses contract"
-                    );
+                let handle = if let Some(http) = http {
+                    hellas_gateway::start_http(hellas_gateway::HttpGatewayOptions {
+                        config: http,
+                        paid: target.backend.clone(),
+                        archive,
+                        host: "127.0.0.1".into(),
+                        port: config.port,
+                        access,
+                        allow_remote: false,
+                        wrap: None,
+                        wrap_args: vec![],
+                    })
+                    .await?
+                } else {
                     hellas_gateway::start_fetch(hellas_gateway::FetchGatewayOptions {
                         access,
                         archive,
@@ -63,52 +131,6 @@ pub fn factory(local: Arc<LocalNode>) -> GatewayFactory {
                         method: target.method.clone(),
                         request_overrides: Default::default(),
                         work: target.backend.clone(),
-                    })
-                    .await?
-                } else {
-                    ensure!(
-                        matches!(config.client.target, WorkTarget::Paid { .. })
-                            && matches!(target.presentation, FetchPresentation::Http),
-                        "HTTP gateway requires a paid HTTP pool"
-                    );
-                    let routes = config
-                        .http_routes
-                        .into_iter()
-                        .map(|r| hellas_gateway::HttpRoute {
-                            path: r.path,
-                            method: r.method,
-                            url: r.url,
-                            credential: r.credential,
-                            tls: hellas_rpc::http_fetch::HttpTls {
-                                roots: if r.tls_roots.is_empty() {
-                                    hellas_rpc::http_fetch::HttpTrustRoots::WebPki
-                                } else {
-                                    hellas_rpc::http_fetch::HttpTrustRoots::Certificates {
-                                        der_base64: r.tls_roots,
-                                    }
-                                },
-                                spki_sha256: vec![],
-                            },
-                            headers: vec![],
-                            max_response_bytes: r.max_response_bytes,
-                        })
-                        .collect();
-                    hellas_gateway::start_http(hellas_gateway::HttpGatewayOptions {
-                        config: hellas_gateway::HttpGatewayConfig {
-                            service: target.service.clone(),
-                            method: target.method.clone(),
-                            routes,
-                            backends: Default::default(),
-                            max_in_flight: 4,
-                        },
-                        paid: target.backend.clone(),
-                        archive,
-                        host: "127.0.0.1".into(),
-                        port: config.port,
-                        access,
-                        allow_remote: false,
-                        wrap: None,
-                        wrap_args: vec![],
                     })
                     .await?
                 };
@@ -445,13 +467,15 @@ pub async fn configure(
     config: Option<GatewayConfig>,
 ) -> anyhow::Result<()> {
     if let Some(config) = config {
-        session
+        let http = validate(&config)?;
+        let target = session
             .track(
                 "Open/recover gateway execution client".into(),
                 false,
                 local.clients.target(local, &config.client),
             )
             .await?;
+        validate_presentation(http.is_some(), &target)?;
         if session
             .status()
             .await?
