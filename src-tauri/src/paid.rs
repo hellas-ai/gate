@@ -330,6 +330,16 @@ pub async fn provision(
             "stop and drain the provider before provisioning; existing setup journals have one exclusive owner"
         );
         let node = local.chain.get(&options.work_config).await?;
+        // Select funding against the SDK's coherent live-owner snapshot before
+        // reserving a signed offer. This prepares no signature or transaction.
+        hellas_sdk::coin_owner::OwnerReshape::prepare(
+            &node.view()?.client(),
+            options.work_config.chain.network,
+            hellas_sdk::kernel::Key::from_bytes(*local.coordinator.owner().await?.as_bytes()),
+            &options.stake_coins,
+            None,
+        )
+        .await?;
         let provisioned =
             hellas_sdk::work_provision::provision_offer(options, &node, &local.coordinator).await?;
         view.signed_offer = Some(STANDARD.encode(provisioned.offer.encode()?));

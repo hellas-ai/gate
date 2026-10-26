@@ -14,7 +14,7 @@ check: check-pin bindings ui-build
 	cargo test --locked --workspace
 
 check-chain:
-	cargo test --locked --features chain-tests --lib paid_preview_provision_and_http_work_use_real_validators_and_delegated_coins
+	cargo test --locked --features chain-tests --lib integration_tests::chain_acceptance::paid_
 
 ui-check:
 	tsc --noEmit -p ui/tsconfig.json

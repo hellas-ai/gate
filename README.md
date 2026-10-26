@@ -28,7 +28,7 @@ Rust tests. The optional real-chain acceptance starts six local validators and
 uses actual SDK execution, passkey-authorized delegation and funded channels:
 
 ```sh
-nix develop -c cargo test --locked --features chain-tests --lib paid_preview_provision_and_http_work_use_real_validators_and_delegated_coins
+nix develop -c make check-chain
 ```
 
 Linux can compile the Windows-specific code with the checked-in MinGW shell:

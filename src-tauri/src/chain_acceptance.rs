@@ -224,7 +224,11 @@ async fn network(directory: &Path, owners: &[Key]) -> (Validators, PaidPolicyInp
     processes.pace();
     (processes, policy)
 }
-async fn delegate(local: &crate::control::LocalNode, policy: &PaidPolicyInput) -> CoinId {
+async fn delegate(
+    local: &crate::control::LocalNode,
+    policy: &PaidPolicyInput,
+    native: Option<&hellas_sdk::kernel::Secp256k1Signer>,
+) -> CoinId {
     use hellas_sdk::coin_owner::OwnerReshape;
     use hellas_sdk::work::authenticator::kernel_auth;
     let config = crate::paid::config(policy, local.directory.join("unused-plan")).unwrap();
@@ -234,7 +238,10 @@ async fn delegate(local: &crate::control::LocalNode, policy: &PaidPolicyInput) -
         .expect("six local validators must finalize")
         .unwrap();
     let client = view.client();
-    let owner = Key::from_bytes(*local.coordinator.owner().await.unwrap().as_bytes());
+    let owner = native.map_or_else(
+        || Key::from_bytes(*local.identity.public.owner.as_bytes()),
+        |key| key.party_key(),
+    );
     let listing = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             match client.get_coins_by_owner(owner.into()).await {
@@ -280,13 +287,17 @@ async fn delegate(local: &crate::control::LocalNode, policy: &PaidPolicyInput) -
     .await
     .unwrap();
     let output = plan.output_ids().iter().next().copied().unwrap();
-    let assertion = local
-        .identity
-        .passkey
-        .assert(hellas_auth::Digest::from(plan.payload_hash().to_bytes()))
-        .await
-        .unwrap();
-    let auth = kernel_auth(&local.identity.passkey.public_key().unwrap(), &assertion).unwrap();
+    let auth = if let Some(native) = native {
+        hellas_sdk::kernel::Auth::native(native.sign(plan.payload_hash()))
+    } else {
+        let assertion = local
+            .identity
+            .passkey
+            .assert(hellas_auth::Digest::from(plan.payload_hash().to_bytes()))
+            .await
+            .unwrap();
+        kernel_auth(&local.identity.passkey.public_key().unwrap(), &assertion).unwrap()
+    };
     client
         .submit_tx(hellas_chain::domain::Transaction::Kernel(
             plan.authorize(auth).unwrap(),
@@ -337,11 +348,13 @@ async fn funded_gateway(responses: bool) {
     let bst = bob.initialize_software("Bob".into()).await.unwrap();
     let al = alice.local().await.unwrap();
     let bl = bob.local().await.unwrap();
+    let native = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar([83; 32]).unwrap();
     let (_validators, mut policy) = network(
         directory,
         &[
             Key::from_bytes(*al.coordinator.owner().await.unwrap().as_bytes()),
             Key::from_bytes(*bl.coordinator.owner().await.unwrap().as_bytes()),
+            native.party_key(),
         ],
     )
     .await;
@@ -360,9 +373,12 @@ async fn funded_gateway(responses: bool) {
         grant_https(&alice, &bob, &upstream, "paid", 232).await
     };
     let revision = alice.provider_view().await.unwrap().revision;
-    let stake = delegate(&al, &policy).await;
-    let payment = delegate(&bl, &policy).await;
-    eprintln!("real-chain fixture: both passkey owner delegations finalized");
+    let stake = delegate(&al, &policy, None).await;
+    let payment = delegate(&bl, &policy, None).await;
+    let native_coin = delegate(&bl, &policy, Some(&native)).await;
+    eprintln!(
+        "real-chain fixture: native and passkey owner delegations finalized through the same SDK"
+    );
     alice
         .configure_paid_serve(
             revision,
@@ -424,6 +440,26 @@ async fn funded_gateway(responses: bool) {
             .contains("stop and drain")
     );
     alice.set_provider(false).await.unwrap();
+    let mut wrong = input.clone();
+    wrong.stake_coins = vec![hex::encode(native_coin.to_bytes())];
+    let refused = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            match alice.provision_paid(wrong.clone(), true).await {
+                Err(error) if error.to_string().contains("catching up") => {
+                    tokio::time::sleep(Duration::from_millis(50)).await
+                }
+                result => break result,
+            }
+        }
+    })
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert!(
+        matches!(refused.downcast_ref::<hellas_sdk::coin_owner::CoinOwnerError>(),Some(hellas_sdk::coin_owner::CoinOwnerError::Missing(id)) if *id==native_coin),
+        "{refused:#}"
+    );
+    assert!(!a.path().join("paid-provider").exists());
     let offered = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             match alice.provision_paid(input.clone(), true).await {
@@ -480,24 +516,51 @@ async fn funded_gateway(responses: bool) {
         service: policy.service.clone(),
         method: policy.method.clone(),
     };
-    let events = tokio::time::timeout(Duration::from_secs(240), async {
+    tokio::time::timeout(Duration::from_secs(240), async {
         loop {
-            match execute(&bl.clients, &bl, &request).await {
-                Ok(events) => break events,
-                Err(error)
-                    if error.to_string().contains("no eligible paid provider")
-                        || error.to_string().contains("refused as not ready") =>
-                {
-                    eprintln!("paid fixture awaiting admission: {error:#}");
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                }
-                Err(error) => panic!("paid execution: {error:#}"),
+            let events = std::sync::Mutex::new(vec![]);
+            let id = crate::run::execute(&bob, request.clone(), |event| {
+                events.lock().unwrap().push(event)
+            })
+            .await
+            .unwrap();
+            let record = bob
+                .history
+                .list(512)
+                .unwrap()
+                .into_iter()
+                .find(|entry| entry.id == id)
+                .unwrap();
+            let events = events.into_inner().unwrap();
+            if record.status == "complete" {
+                assert!(
+                    events
+                        .iter()
+                        .any(|event| matches!(event, ExecutionEvent::Verification { .. }))
+                );
+                assert!(
+                    events.iter().any(
+                        |event| matches!(event,ExecutionEvent::Finished{run_id} if run_id==&id)
+                    )
+                );
+                break;
             }
+            assert_eq!(record.status, "failed");
+            assert!(!events.iter().any(|event| matches!(
+                event,
+                ExecutionEvent::Verification { .. } | ExecutionEvent::Finished { .. }
+            )));
+            let error = record.error;
+            assert!(
+                error.contains("no eligible paid provider")
+                    || error.contains("refused as not ready"),
+                "paid Run: {error}"
+            );
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     })
     .await
     .unwrap();
-    assert!(finished(&events), "{events:?}");
     let (key, bearer) = bob
         .issue_gateway_key(GatewayKeyInput {
             request_id: hex::encode([234; 16]),
@@ -546,25 +609,13 @@ async fn funded_gateway(responses: bool) {
         ),
         calls
     );
-    let response = gateway_request(&http, &url, &request, responses)
-        .bearer_auth(&bearer)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    assert!(response.text().await.unwrap().contains("hello"));
+    completed_gateway_response(&http, &url, &request, responses, &bearer).await;
     assert!(!b.path().join("gateway-archive").exists());
     let mut archived = config;
     archived.zdr = false;
     bob.set_gateway(true, Some(archived)).await.unwrap();
     let url = format!("{}{path}", bob.gateway_address().await.unwrap());
-    let response = gateway_request(&http, &url, &request, responses)
-        .bearer_auth(&bearer)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    assert!(response.text().await.unwrap().contains("hello"));
+    completed_gateway_response(&http, &url, &request, responses, &bearer).await;
     assert!(
         std::fs::read_dir(b.path().join("gateway-archive"))
             .unwrap()
@@ -612,4 +663,34 @@ async fn paid_preview_provision_and_http_work_use_real_validators_and_delegated_
 #[tokio::test(flavor = "multi_thread")]
 async fn paid_responses_gateway_uses_real_validators_and_delegated_coins() {
     funded_gateway(true).await;
+}
+
+async fn completed_gateway_response(
+    http: &reqwest::Client,
+    url: &str,
+    request: &RunRequest,
+    responses: bool,
+    bearer: &str,
+) {
+    tokio::time::timeout(Duration::from_secs(120), async {
+        loop {
+            let response = gateway_request(http, url, request, responses)
+                .bearer_auth(bearer)
+                .send()
+                .await
+                .unwrap();
+            let status = response.status();
+            match response.text().await {
+                Ok(body) if status == 200 && body.contains("hello") => break,
+                Err(error) if status == 200 && error.is_decode() => {} // An admission refusal after streaming headers must not count as completion.
+                Ok(body) if status == 503 || status == 502 => {
+                    eprintln!("paid gateway awaiting admission: {status}: {body}")
+                }
+                other => panic!("paid gateway response {status}: {other:?}"),
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    })
+    .await
+    .expect("a full verified response, not only HTTP headers");
 }
