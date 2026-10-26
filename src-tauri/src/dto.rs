@@ -343,7 +343,7 @@ pub struct ChainInput {
     pub committee: Vec<GenesisValidatorInput>,
     pub allocations: Vec<GenesisAllocationInput>,
 }
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
 #[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]

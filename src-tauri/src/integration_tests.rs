@@ -3427,3 +3427,215 @@ async fn refused_first_paid_route_cannot_select_the_shared_chain() {
     bob.shutdown().await.unwrap();
     alice.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn refused_gateway_presentation_keeps_the_live_listener_and_first_chain_unselected() {
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let sa = tempfile::tempdir().unwrap();
+    let sb = tempfile::tempdir().unwrap();
+    let alice = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+        .await
+        .unwrap();
+    let bob = AppState::with_vault(b.path(), Vault::fixture(sb.path()))
+        .await
+        .unwrap();
+    alice.initialize_software("Alice".into()).await.unwrap();
+    bob.initialize_software("Bob".into()).await.unwrap();
+    let origin = crate::responses_fixture::Origin::start().await;
+    let (request, _) = grant_responses(&alice, &bob, &origin, 239).await;
+    let local = bob.local().await.unwrap();
+    let provider = alice.status().await.unwrap().identity.transport_id;
+    let mut policy_b = paid_policy_fixture(b.path()).await;
+    policy_b.chain.threshold_identity.replace_range(..2, "b7");
+    let mut policy_a = policy_b.clone();
+    policy_a.chain.threshold_identity.replace_range(..2, "97");
+    policy_a.presentation = FetchPresentation::Http;
+    policy_a.service = "web".into();
+    policy_a.method = "get".into();
+    let approved = trust::list(b.path()).unwrap().pop().unwrap();
+    trust::approve(
+        b.path(),
+        TrustInput {
+            id: "paid".into(),
+            expected_revision: 0,
+            genesis: approved.genesis,
+            apple: false,
+            environments: vec![
+                crate::paid::work_policy(FetchPresentation::Http, "web", "get")
+                    .unwrap()
+                    .allowed_environment()
+                    .to_string(),
+                crate::paid::work_policy(FetchPresentation::Responses, "openai", "responses")
+                    .unwrap()
+                    .allowed_environment()
+                    .to_string(),
+            ],
+            app_id: String::new(),
+            cd_hashes: vec![],
+            reason: "Independent fixture pins".into(),
+        },
+    )
+    .unwrap();
+    for (id, policy) in [("a", policy_a.clone()), ("b", policy_b.clone())] {
+        bob.save_paid_pool(PaidPoolInput {
+            id: id.into(),
+            providers: vec![PaidProviderInput {
+                provider: provider.clone(),
+                addresses: vec![],
+                trust_policy: "paid".into(),
+                bond: hex::encode([240; 32]),
+                coins: vec![hex::encode([241; 32])],
+                omission_bond: 601,
+                acceptance_blocks: 16,
+                terminal_blocks: 64,
+                payment_blocks: 32,
+                timeout_seconds: 60,
+                policy,
+            }],
+            max_pending_requests: 8,
+        })
+        .await
+        .unwrap();
+    }
+    let config = GatewayConfig {
+        client: request.client.clone(),
+        http_routes: vec![],
+        port: Some(0),
+        zdr: true,
+    };
+    bob.set_gateway(true, Some(config.clone())).await.unwrap();
+    let (_, bearer) = bob
+        .issue_gateway_key(GatewayKeyInput {
+            request_id: hex::encode([242; 16]),
+            label: "held Responses".into(),
+            period: crate::period::Period::Week,
+        })
+        .await
+        .unwrap();
+    let address = bob.gateway_address().await.unwrap();
+    let http = reqwest::Client::builder().no_proxy().build().unwrap();
+    let body = http
+        .post(format!("{address}/v1/responses"))
+        .bearer_auth(&bearer)
+        .header("content-type", "application/json")
+        .body(request.input.clone())
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(body.contains("hello"));
+    origin.hold.store(true, Ordering::SeqCst);
+    origin.started.notified().await;
+    let pending = http
+        .post(format!("{address}/v1/responses"))
+        .bearer_auth(&bearer)
+        .header("content-type", "application/json")
+        .body(request.input);
+    let held = tokio::spawn(async move { pending.send().await.unwrap().text().await.unwrap() });
+    origin.started.notified().await;
+    let original = local.clients.target(&local, &request.client).await.unwrap();
+    let count = local.clients.cached_targets().await;
+    let saved = std::fs::read(b.path().join("gateway-configuration.json")).unwrap();
+    for (pool, policy, routes) in [
+        ("a", &policy_a, vec![]),
+        (
+            "b",
+            &policy_b,
+            vec![HttpRouteInput {
+                path: "/proxy".into(),
+                method: "GET".into(),
+                url: "https://example.com/".into(),
+                credential: None,
+                tls_roots: vec![],
+                max_response_bytes: 4096,
+            }],
+        ),
+    ] {
+        let candidate = GatewayConfig {
+            client: WorkClientConfig {
+                target: WorkTarget::Paid {
+                    pool_id: pool.into(),
+                    provider: provider.clone(),
+                    service: policy.service.clone(),
+                    method: policy.method.clone(),
+                },
+                trust_policy: "paid".into(),
+            },
+            http_routes: routes,
+            port: Some(0),
+            zdr: true,
+        };
+        let mut desired = desired_https(bob.provider_view().await.unwrap());
+        desired.upstreams.clear();
+        desired.gateway = Some(candidate.clone());
+        assert!(
+            bob.preview_apply(desired)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("gateway requires")
+        );
+        let refusal = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            bob.set_gateway(true, Some(candidate)),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(
+            refusal.to_string().contains("gateway requires"),
+            "{refusal:#}"
+        );
+        assert!(!local.chain.initialized());
+        assert!(!b.path().join("chain").exists());
+        assert!(!b.path().join("paid-channels").exists());
+        assert_eq!(local.clients.cached_targets().await, count);
+        assert!(Arc::ptr_eq(
+            &original,
+            &local.clients.target(&local, &request.client).await.unwrap()
+        ));
+        assert_eq!(bob.gateway_address().await.unwrap(), address);
+        assert_eq!(bob.status().await.unwrap().gateway.state, "running");
+        assert_eq!(
+            std::fs::read(b.path().join("gateway-configuration.json")).unwrap(),
+            saved
+        );
+        assert!(!held.is_finished());
+    }
+    origin.release.notify_one();
+    assert!(held.await.unwrap().contains("hello"));
+    bob.set_gateway(
+        true,
+        Some(GatewayConfig {
+            client: WorkClientConfig {
+                target: WorkTarget::Paid {
+                    pool_id: "b".into(),
+                    provider,
+                    service: policy_b.service.clone(),
+                    method: policy_b.method.clone(),
+                },
+                trust_policy: "paid".into(),
+            },
+            http_routes: vec![],
+            port: Some(0),
+            zdr: true,
+        }),
+    )
+    .await
+    .unwrap();
+    let config_b = crate::paid::config(&policy_b, b.path().join("unused-b")).unwrap();
+    let node = local.chain.get(&config_b).await.unwrap();
+    config_b.check_node(&node).unwrap();
+    assert!(
+        crate::paid::config(&policy_a, b.path().join("unused-a"))
+            .unwrap()
+            .check_node(&node)
+            .is_err()
+    );
+    assert_eq!(bob.status().await.unwrap().gateway.state, "running");
+    bob.shutdown().await.unwrap();
+    alice.shutdown().await.unwrap();
+}

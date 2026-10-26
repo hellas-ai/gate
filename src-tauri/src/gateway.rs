@@ -31,6 +31,17 @@ impl Configuration {
     }
 }
 pub(crate) fn validate(
+    local: &LocalNode,
+    config: &GatewayConfig,
+) -> anyhow::Result<Option<hellas_gateway::HttpGatewayConfig>> {
+    let http = http_config(config)?;
+    validate_presentation(
+        http.is_some(),
+        local.clients.presentation(local, &config.client)?,
+    )?;
+    Ok(http)
+}
+fn http_config(
     config: &GatewayConfig,
 ) -> anyhow::Result<Option<hellas_gateway::HttpGatewayConfig>> {
     if config.http_routes.is_empty() {
@@ -73,15 +84,15 @@ pub(crate) fn validate(
     http.validate()?;
     Ok(Some(http))
 }
-fn validate_presentation(http: bool, target: &crate::clients::Target) -> anyhow::Result<()> {
+fn validate_presentation(http: bool, presentation: FetchPresentation) -> anyhow::Result<()> {
     if http {
         ensure!(
-            matches!(target.presentation, FetchPresentation::Http),
+            matches!(presentation, FetchPresentation::Http),
             "HTTP gateway requires a paid HTTP pool"
         );
     } else {
         ensure!(
-            matches!(target.presentation, FetchPresentation::Responses),
+            matches!(presentation, FetchPresentation::Responses),
             "Responses gateway requires a Responses contract"
         );
     }
@@ -97,9 +108,16 @@ pub fn factory(local: Arc<LocalNode>) -> GatewayFactory {
                     .get()
                     .await
                     .context("configure a gateway target first")?;
-                let http = validate(&config)?;
-                let target = local.clients.target(&local, &config.client).await?;
-                validate_presentation(http.is_some(), &target)?;
+                let http = validate(&local, &config)?;
+                let required = if http.is_some() {
+                    FetchPresentation::Http
+                } else {
+                    FetchPresentation::Responses
+                };
+                let target = local
+                    .clients
+                    .target_for(&local, &config.client, Some(required))
+                    .await?;
                 let archive = hellas_gateway::ArchiveOptions {
                     directory: local.directory.join("gateway-archive"),
                     zdr: config.zdr,
@@ -467,15 +485,21 @@ pub async fn configure(
     config: Option<GatewayConfig>,
 ) -> anyhow::Result<()> {
     if let Some(config) = config {
-        let http = validate(&config)?;
-        let target = session
+        let http = validate(local, &config)?;
+        let required = if http.is_some() {
+            FetchPresentation::Http
+        } else {
+            FetchPresentation::Responses
+        };
+        session
             .track(
                 "Open/recover gateway execution client".into(),
                 false,
-                local.clients.target(local, &config.client),
+                local
+                    .clients
+                    .target_for(local, &config.client, Some(required)),
             )
             .await?;
-        validate_presentation(http.is_some(), &target)?;
         if session
             .status()
             .await?

@@ -26,6 +26,47 @@ pub struct Target {
     pub method: String,
     pub presentation: FetchPresentation,
 }
+enum Selection {
+    Authorized {
+        access: contacts::Imported,
+        offer: Box<hellas_sdk::work::model::grant::records::SignedOffer>,
+        policy: Box<hellas_sdk::work::model::grant::records::GrantPolicy>,
+    },
+    Paid {
+        pool: PaidPoolInput,
+        selected: Box<PaidProviderInput>,
+        options: hellas_sdk::paid_gateway::PaidGatewayOptions,
+    },
+}
+fn route(
+    policy: &hellas_sdk::work::model::profile::WorkPolicy,
+) -> anyhow::Result<(String, String, FetchPresentation)> {
+    let hellas_sdk::work::model::profile::WorkPolicy::Fetch {
+        route: hellas_sdk::work::model::fetch::FetchRoutePolicy::SealedRoute { service, method },
+        contract,
+        ..
+    } = policy
+    else {
+        anyhow::bail!("select a named Fetch resource");
+    };
+    Ok((
+        service.clone(),
+        method.clone(),
+        if contract.schema() == hellas_rpc::FetchSchema::StatelessResponsesV1 {
+            FetchPresentation::Responses
+        } else {
+            FetchPresentation::Http
+        },
+    ))
+}
+impl Selection {
+    fn presentation(&self) -> anyhow::Result<FetchPresentation> {
+        match self {
+            Self::Authorized { policy, .. } => Ok(route(&policy.work)?.2),
+            Self::Paid { selected, .. } => Ok(selected.policy.presentation),
+        }
+    }
+}
 struct CachedTarget {
     version: String,
     target: Arc<Target>,
@@ -137,55 +178,8 @@ impl Clients {
             .public()
             .to_string())
     }
-    pub async fn target(
-        &self,
-        local: &LocalNode,
-        input: &WorkClientConfig,
-    ) -> anyhow::Result<Arc<Target>> {
-        let policy = trust::store(&self.directory).load(&input.trust_policy)?;
-        // Resolve every saved pool/trust revision before considering an outer hit.
-        let pool = if let WorkTarget::Paid { pool_id, .. } = &input.target {
-            Some(
-                vault::read::<PaidPoolInput>(&paid::pool_path(&self.directory, pool_id)?)?
-                    .context("configure a typed paid pool first")?,
-            )
-        } else {
-            None
-        };
-        let pool_version = if let Some(pool) = &pool {
-            let approvals = pool
-                .providers
-                .iter()
-                .map(|provider| trust::store(&self.directory).load(&provider.trust_policy))
-                .collect::<Result<Vec<_>, _>>()?;
-            serde_json::to_string(&(pool, approvals))?
-        } else {
-            String::new()
-        };
-        let version = serde_json::to_string(&(input, policy, pool_version.clone()))?;
-        let key = match &input.target {
-            WorkTarget::Authorized {
-                access_id,
-                allowance,
-                ..
-            } => {
-                let access = contacts::imported(&self.directory, access_id)?;
-                format!("authorized:{}:{allowance}", access.authority)
-            }
-            WorkTarget::Paid { .. } => format!("paid:{}", serde_json::to_string(&input.target)?),
-        };
-        let mut cache = self.cache.lock().await;
-        ensure!(
-            !self.closed.load(Ordering::SeqCst),
-            "client admission is closed because Gate is shutting down"
-        );
-        if let Some(held) = cache.get(&key)
-            && held.version == version
-            && held.target.backend.is_active()
-        {
-            return Ok(held.target.clone());
-        }
-        let target = match &input.target {
+    fn selection(&self, local: &LocalNode, input: &WorkClientConfig) -> anyhow::Result<Selection> {
+        match &input.target {
             WorkTarget::Authorized {
                 access_id,
                 allowance,
@@ -225,26 +219,128 @@ impl Clients {
                     .policies
                     .iter()
                     .find(|p| p.name == *resource)
-                    .context("selected resource is absent from this allowance")?;
-                let hellas_sdk::work::model::profile::WorkPolicy::Fetch {
-                    route:
-                        hellas_sdk::work::model::fetch::FetchRoutePolicy::SealedRoute {
-                            service,
-                            method,
-                        },
-                    contract,
-                    ..
-                } = &selected.work
+                    .context("selected resource is absent from this allowance")?
+                    .clone();
+                route(&selected.work)?;
+                Ok(Selection::Authorized {
+                    access,
+                    offer: Box::new(offer),
+                    policy: Box::new(selected),
+                })
+            }
+            WorkTarget::Paid {
+                pool_id,
+                provider,
+                service,
+                method,
+            } => {
+                let pool: PaidPoolInput = vault::read(&paid::pool_path(&self.directory, pool_id)?)?
+                    .context("configure a typed paid pool first")?;
+                let options = paid::pool_options(&self.directory, &pool)?;
+                let selected = pool
+                    .providers
+                    .iter()
+                    .find(|p| p.provider == *provider)
+                    .context("provider is absent from paid pool")?
+                    .clone();
+                ensure!(
+                    selected.trust_policy == input.trust_policy,
+                    "Run trust policy must match selected pool provider"
+                );
+                ensure!(
+                    *service == selected.policy.service && *method == selected.policy.method,
+                    "paid route differs from selected policy"
+                );
+                let _: hellas_sdk::iroh::EndpointId = provider.parse()?;
+                Ok(Selection::Paid {
+                    pool,
+                    selected: Box::new(selected),
+                    options,
+                })
+            }
+        }
+    }
+    pub(crate) fn presentation(
+        &self,
+        local: &LocalNode,
+        input: &WorkClientConfig,
+    ) -> anyhow::Result<FetchPresentation> {
+        self.selection(local, input)?.presentation()
+    }
+    pub async fn target(
+        &self,
+        local: &LocalNode,
+        input: &WorkClientConfig,
+    ) -> anyhow::Result<Arc<Target>> {
+        self.target_for(local, input, None).await
+    }
+    pub(crate) async fn target_for(
+        &self,
+        local: &LocalNode,
+        input: &WorkClientConfig,
+        required: Option<FetchPresentation>,
+    ) -> anyhow::Result<Arc<Target>> {
+        let selection = self.selection(local, input)?;
+        if let Some(required) = required {
+            ensure!(
+                selection.presentation()? == required,
+                "selected execution contract differs from required presentation"
+            );
+        }
+        let policy = trust::store(&self.directory).load(&input.trust_policy)?;
+        // Resolve every saved pool/trust revision before considering an outer hit.
+        let pool = match &selection {
+            Selection::Paid { pool, .. } => Some(pool),
+            _ => None,
+        };
+        let pool_version = if let Some(pool) = &pool {
+            let approvals = pool
+                .providers
+                .iter()
+                .map(|provider| trust::store(&self.directory).load(&provider.trust_policy))
+                .collect::<Result<Vec<_>, _>>()?;
+            serde_json::to_string(&(pool, approvals))?
+        } else {
+            String::new()
+        };
+        let version = serde_json::to_string(&(input, policy, pool_version.clone()))?;
+        let key = match &input.target {
+            WorkTarget::Authorized {
+                access_id,
+                allowance,
+                ..
+            } => {
+                let access = contacts::imported(&self.directory, access_id)?;
+                format!("authorized:{}:{allowance}", access.authority)
+            }
+            WorkTarget::Paid { .. } => format!("paid:{}", serde_json::to_string(&input.target)?),
+        };
+        let mut cache = self.cache.lock().await;
+        ensure!(
+            !self.closed.load(Ordering::SeqCst),
+            "client admission is closed because Gate is shutting down"
+        );
+        if let Some(held) = cache.get(&key)
+            && held.version == version
+            && held.target.backend.is_active()
+        {
+            return Ok(held.target.clone());
+        }
+        let target = match &input.target {
+            WorkTarget::Authorized {
+                access_id: _,
+                allowance,
+                resource,
+            } => {
+                let Selection::Authorized {
+                    access,
+                    offer,
+                    policy: selected,
+                } = selection
                 else {
-                    anyhow::bail!("select a named Fetch resource");
+                    anyhow::bail!("authorized selection required");
                 };
-                let (service, method) = (service.clone(), method.clone());
-                let presentation =
-                    if contract.schema() == hellas_rpc::FetchSchema::StatelessResponsesV1 {
-                        FetchPresentation::Responses
-                    } else {
-                        FetchPresentation::Http
-                    };
+                let (service, method, presentation) = route(&selected.work)?;
                 let approved = trust::resolve(
                     &self.directory,
                     &input.trust_policy,
@@ -302,21 +398,14 @@ impl Clients {
                 service,
                 method,
             } => {
-                let pool = pool.context("paid pool is absent")?;
-                let options = paid::pool_options(&self.directory, &pool)?;
-                let selected = pool
-                    .providers
-                    .iter()
-                    .find(|p| p.provider == *provider)
-                    .context("provider is absent from paid pool")?;
-                ensure!(
-                    selected.trust_policy == input.trust_policy,
-                    "Run trust policy must match selected pool provider"
-                );
-                ensure!(
-                    *service == selected.policy.service && *method == selected.policy.method,
-                    "paid route differs from selected policy"
-                );
+                let Selection::Paid {
+                    pool: _,
+                    selected,
+                    options,
+                } = selection
+                else {
+                    anyhow::bail!("paid selection required");
+                };
                 let provider_id: hellas_sdk::iroh::EndpointId = provider.parse()?;
                 let first = options.providers.first().context("paid pool is empty")?;
                 let chain = self.chain.get(&first.config).await?;
@@ -412,6 +501,10 @@ impl Clients {
         Ok(hellas_sdk::iroh::SecretKey::from_bytes(
             &bytes.as_slice().try_into()?,
         ))
+    }
+    #[cfg(test)]
+    pub(crate) async fn cached_targets(&self) -> usize {
+        self.cache.lock().await.len()
     }
     pub async fn reset(&self) -> anyhow::Result<()> {
         let mut cache = self.cache.lock().await;
