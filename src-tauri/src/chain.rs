@@ -29,6 +29,10 @@ impl ChainNode {
         config.check_node(node)?;
         Ok(node.clone())
     }
+    #[cfg(test)]
+    pub(crate) fn initialized(&self) -> bool {
+        self.node.get().is_some()
+    }
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         if let Some(node) = self.node.get() {
             node.clone().shutdown().await?;

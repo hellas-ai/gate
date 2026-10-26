@@ -1544,3 +1544,200 @@ async fn dynamic_and_declarative_quota_edits_share_authority_revision_and_counte
     bob.shutdown().await.unwrap();
     alice.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn revocation_during_real_upstream_work_prevents_verified_delivery_and_future_admission() {
+    let upstream = Upstream::start().await;
+    upstream.hold.store(true, Ordering::SeqCst);
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let sa = tempfile::tempdir().unwrap();
+    let sb = tempfile::tempdir().unwrap();
+    let alice = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+        .await
+        .unwrap();
+    let bob = Arc::new(
+        AppState::with_vault(b.path(), Vault::fixture(sb.path()))
+            .await
+            .unwrap(),
+    );
+    alice.initialize_software("Alice".into()).await.unwrap();
+    bob.initialize_software("Bob".into()).await.unwrap();
+    let (request, share) = grant_https(&alice, &bob, &upstream, "alice", 125).await;
+    let active = bob.clone();
+    let pending = request.clone();
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured = events.clone();
+    let run = tokio::spawn(async move {
+        crate::run::execute(&active, pending, |event| {
+            captured.lock().unwrap().push(event)
+        })
+        .await
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        upstream.started.notified(),
+    )
+    .await
+    .unwrap();
+    alice.revoke_share(&share.id).await.unwrap();
+    upstream.release.notify_one();
+    let id = tokio::time::timeout(std::time::Duration::from_secs(20), run)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let events = events.lock().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ExecutionEvent::Failed { .. }))
+    );
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        ExecutionEvent::Verification { .. } | ExecutionEvent::Finished { .. }
+    )));
+    drop(events);
+    assert_eq!(
+        bob.history
+            .list(10)
+            .unwrap()
+            .iter()
+            .find(|entry| entry.id == id)
+            .unwrap()
+            .status,
+        "failed"
+    );
+    let local = bob.local().await.unwrap();
+    assert!(execute(&local.clients, &local, &request).await.is_err());
+    assert_eq!(upstream.calls.load(Ordering::SeqCst), 1);
+    bob.shutdown().await.unwrap();
+    alice.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn shutdown_closes_opening_for_an_admitted_run_before_lazy_paid_chain_start() {
+    let directory = tempfile::tempdir().unwrap();
+    let secrets = tempfile::tempdir().unwrap();
+    let app = Arc::new(
+        AppState::with_vault(directory.path(), Vault::fixture(secrets.path()))
+            .await
+            .unwrap(),
+    );
+    app.initialize_software("Client".into()).await.unwrap();
+    let policy = paid_policy_fixture(directory.path()).await;
+    trust::approve(
+        directory.path(),
+        TrustInput {
+            id: "provider".into(),
+            expected_revision: 0,
+            genesis: hex::encode([4; 32]),
+            apple: false,
+            environments: vec![
+                crate::paid::work_policy(policy.presentation, &policy.service, &policy.method)
+                    .unwrap()
+                    .allowed_environment()
+                    .to_string(),
+            ],
+            app_id: String::new(),
+            cd_hashes: vec![],
+            reason: "Independent fixture pin".into(),
+        },
+    )
+    .unwrap();
+    let provider = hellas_sdk::iroh::SecretKey::from_bytes(&[3; 32])
+        .public()
+        .to_string();
+    app.save_paid_pool(PaidPoolInput {
+        id: "paid".into(),
+        providers: vec![PaidProviderInput {
+            provider: provider.clone(),
+            addresses: vec![],
+            trust_policy: "provider".into(),
+            bond: hex::encode([12; 32]),
+            coins: vec![hex::encode([1; 32])],
+            omission_bond: 601,
+            acceptance_blocks: 16,
+            terminal_blocks: 64,
+            payment_blocks: 32,
+            timeout_seconds: 1,
+            policy,
+        }],
+        max_pending_requests: 4,
+    })
+    .await
+    .unwrap();
+    let request = RunRequest {
+        kind: RunKind::Fetch,
+        input: br#"{"model":"fixture","input":"hello","max_output_tokens":8}"#
+            .to_vec()
+            .into_iter()
+            .map(char::from)
+            .collect(),
+        client: WorkClientConfig {
+            target: WorkTarget::Paid {
+                pool_id: "paid".into(),
+                provider,
+                service: "openai".into(),
+                method: "responses".into(),
+            },
+            trust_policy: "provider".into(),
+        },
+    };
+    let local = app.local().await.unwrap();
+    assert!(!local.clients.chain_initialized());
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let pause = barrier.clone();
+    let (started, mut waiting) = tokio::sync::mpsc::unbounded_channel();
+    let running = app.clone();
+    let pending = request.clone();
+    let run = tokio::spawn(async move {
+        crate::run::execute(&running, pending, |event| {
+            if let ExecutionEvent::Started { .. } = event {
+                started.send(()).unwrap();
+                pause.wait();
+            }
+        })
+        .await
+    });
+    waiting.recv().await.unwrap();
+    let quitting = app.clone();
+    let shutdown = tokio::spawn(async move { quitting.shutdown().await });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        local.clients.drained.notified(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        !shutdown.is_finished(),
+        "Quit still owns the admitted run's permit"
+    );
+    assert!(!local.clients.chain_initialized());
+    barrier.wait();
+    let id = tokio::time::timeout(std::time::Duration::from_secs(5), run)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), shutdown)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+    );
+    assert!(
+        !local.clients.chain_initialized(),
+        "no lazy chain may start after its only drain"
+    );
+    assert!(!local.socket.exists());
+    assert!(!directory.path().join("chain").exists());
+    assert!(!directory.path().join("paid-channels").exists());
+    assert!(local.clients.target(&local, &request.client).await.is_err());
+    let history = app.history.list(10).unwrap();
+    assert_eq!(
+        history.iter().find(|entry| entry.id == id).unwrap().status,
+        "failed"
+    );
+}

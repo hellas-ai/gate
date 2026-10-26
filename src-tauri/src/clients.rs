@@ -11,7 +11,10 @@ use hellas_sdk::{
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::sync::Mutex;
@@ -102,6 +105,9 @@ impl WorkExecutionBackend for RetirableBackend {
 pub struct Clients {
     directory: PathBuf,
     chain: crate::chain::ChainNode,
+    closed: AtomicBool,
+    #[cfg(test)]
+    pub(crate) drained: tokio::sync::Notify,
     cache: Mutex<BTreeMap<String, CachedTarget>>,
     paid: Mutex<BTreeMap<String, (String, Arc<RetirableBackend>)>>,
 }
@@ -110,6 +116,9 @@ impl Clients {
         Self {
             directory: directory.to_owned(),
             chain: crate::chain::ChainNode::new(directory.join("chain")),
+            closed: AtomicBool::new(false),
+            #[cfg(test)]
+            drained: tokio::sync::Notify::new(),
             cache: Mutex::new(BTreeMap::new()),
             paid: Mutex::new(BTreeMap::new()),
         }
@@ -152,6 +161,10 @@ impl Clients {
             WorkTarget::Paid { .. } => format!("paid:{}", serde_json::to_string(&input.target)?),
         };
         let mut cache = self.cache.lock().await;
+        ensure!(
+            !self.closed.load(Ordering::SeqCst),
+            "client admission is closed because Gate is shutting down"
+        );
         if let Some(held) = cache.get(&key)
             && held.version == version
             && held.target.backend.is_active()
@@ -448,7 +461,17 @@ impl Clients {
         Ok(())
     }
     pub async fn shutdown(&self) -> anyhow::Result<()> {
+        // The cache lock in reset waits for every opener which passed admission.
+        // Once closed, an admitted Run holding LocalNode can never open afterward.
+        self.closed.store(true, Ordering::SeqCst);
         self.reset().await?;
-        self.chain.shutdown().await
+        let result = self.chain.shutdown().await;
+        #[cfg(test)]
+        self.drained.notify_one();
+        result
+    }
+    #[cfg(test)]
+    pub(crate) fn chain_initialized(&self) -> bool {
+        self.chain.initialized()
     }
 }
