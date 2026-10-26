@@ -36,6 +36,9 @@ jobs:
           persist-credentials: false
       - uses: ./gate/.github/actions/setup
 
+      - name: Check Hellas pin consistency
+        run: nix develop --no-update-lock-file --command make check-pin
+
       - name: Check formatting
         run: nix develop --no-update-lock-file --command cargo fmt --all -- --check
 
@@ -106,5 +109,5 @@ jobs:
           MACOS_RESULT: ${{ needs.macos.result }}
           WINDOWS_RESULT: ${{ needs.windows-cross.result }}
         run: |
-          printf 'Linux: %s\nmacOS: %s\n' "$LINUX_RESULT" "$MACOS_RESULT"
+          printf 'Linux: %s\nmacOS: %s\nWindows: %s\n' "$LINUX_RESULT" "$MACOS_RESULT" "$WINDOWS_RESULT"
           [[ "$LINUX_RESULT" == success && "$MACOS_RESULT" == success && "$WINDOWS_RESULT" == success ]]

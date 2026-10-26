@@ -55,7 +55,8 @@ All private material uses the SDK OS secret store. An unavailable or locked stor
 is an error. Private files are used only by isolated headless tests. Public
 configuration, verified cards, offers, trust approvals, replay counters, channel
 journals and history remain in the private application data directory. Upstream
-keys are write-only in the UI: it shows their label, fingerprint and reference.
+keys are write-only in the UI: it shows their label, fingerprint, reference and
+last successful use.
 History and browser state never store access or upstream secrets.
 
 ## Serve, contacts and Run
