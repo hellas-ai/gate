@@ -6,39 +6,26 @@ use ts_rs::TS;
 #[cfg_attr(feature = "desktop", derive(TS))]
 #[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
-pub struct ServiceStatus {
-    pub state: ServiceState,
+pub struct IdentityStatus {
+    pub initialized: bool,
+    pub principal: String,
+    pub fingerprint: String,
+    pub node_key: String,
+    pub transport_id: String,
+    pub authority: String,
+    pub generation: u64,
+    pub attestation: String,
     pub detail: String,
+    pub contact_card: String,
 }
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export))]
-#[serde(rename_all = "camelCase")]
-pub enum ServiceState {
-    Stopped,
-    Starting,
-    Running,
-    Stopping,
-    Failed,
-}
-
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
 #[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
-pub struct IdentityStatus {
-    pub producer_id: String,
-    pub caller_public_key: String,
-    pub contact: String,
-    pub contact_id: String,
-    pub apple_app_id: String,
-    pub apple_cd_hashes: Vec<String>,
-    pub node_id: String,
-    pub attestation: String,
+pub struct ServiceStatus {
+    pub state: String,
     pub detail: String,
 }
-
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
 #[cfg_attr(feature = "desktop", ts(export))]
@@ -51,53 +38,13 @@ pub struct AppStatus {
     pub endpoint: String,
     pub socket_path: String,
 }
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
 #[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
-pub struct RunRequest {
-    pub kind: RunKind,
-    pub input: String,
-    #[serde(flatten)]
-    pub client: WorkClientConfig,
+pub enum RunKind {
+    Fetch,
 }
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export))]
-#[serde(rename_all = "camelCase")]
-pub struct WorkClientConfig {
-    pub target: WorkTarget,
-    #[serde(default)]
-    pub assurance: AssuranceInput,
-    #[serde(default)]
-    pub apple_app_id: String,
-    #[serde(default)]
-    pub apple_cd_hashes: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export))]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum GatewayConfig {
-    Responses {
-        #[serde(flatten)]
-        client: WorkClientConfig,
-    },
-    Http {
-        paid_pool_path: String,
-        http_routes_path: String,
-        assurance: AssuranceInput,
-        zdr: bool,
-    },
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
 #[cfg_attr(feature = "desktop", ts(export))]
@@ -109,62 +56,34 @@ pub enum GatewayConfig {
 )]
 pub enum WorkTarget {
     Authorized {
-        offer: String,
+        access_id: String,
+        allowance: String,
         resource: String,
     },
     Paid {
-        pool_config: String,
+        pool_id: String,
         provider: String,
-        #[cfg_attr(feature = "desktop", ts(optional))]
-        route: Option<FetchRouteInput>,
+        service: String,
+        method: String,
     },
 }
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
 #[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FetchRouteInput {
-    pub service: String,
-    pub method: String,
+pub struct WorkClientConfig {
+    pub target: WorkTarget,
+    pub trust_policy: String,
 }
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
 #[cfg_attr(feature = "desktop", ts(export))]
-#[serde(rename_all = "camelCase")]
-pub enum RunKind {
-    CausalLm,
-    Fetch,
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunRequest {
+    pub kind: RunKind,
+    pub input: String,
+    pub client: WorkClientConfig,
 }
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
-#[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export))]
-#[serde(rename_all = "camelCase")]
-pub enum AssuranceInput {
-    #[default]
-    ProducerSigned,
-    AppleAppAttest,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export))]
-#[serde(
-    tag = "type",
-    content = "data",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum ExecutionEvent {
-    Started { run_id: String },
-    Output { text: String },
-    Verification { summary: String },
-    Finished { run_id: String },
-    Failed { run_id: String, message: String },
-}
-
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
 #[cfg_attr(feature = "desktop", ts(export))]
@@ -180,65 +99,46 @@ pub struct HistoryEntry {
     pub verification: String,
     pub error: String,
 }
-
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ExecutionEvent {
+    Started { run_id: String },
+    Output { text: String },
+    Verification { summary: String },
+    Finished { run_id: String },
+    Failed { run_id: String, message: String },
+    Cancelled { run_id: String },
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TrustInput {
+    pub id: String,
+    pub expected_revision: u64,
+    pub genesis: String,
+    pub apple: bool,
+    pub environments: Vec<String>,
+    pub app_id: String,
+    pub cd_hashes: Vec<String>,
+    pub reason: String,
+}
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
 #[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase")]
-pub struct GatewayAccess {
-    pub address: String,
-    pub bearer: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export))]
-#[serde(rename_all = "camelCase")]
-pub struct ProviderConfig {
-    pub service: String,
-    pub method: String,
-    pub openai_api_key: String,
-    #[cfg_attr(feature = "desktop", ts(optional))]
-    pub work_config_path: Option<String>,
-    #[cfg_attr(feature = "desktop", ts(optional))]
-    pub https_config: Option<String>,
-    #[serde(default)]
-    pub contacts: Vec<String>,
-    pub requests_per_day: u32,
-    #[cfg_attr(feature = "desktop", ts(optional))]
-    pub port: Option<u16>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export))]
-#[serde(rename_all = "camelCase")]
-pub struct ProviderOffer {
-    pub contact: String,
-    pub offer: String,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::ExecutionEvent;
-
-    #[test]
-    fn execution_events_expose_the_run_id_expected_by_the_ui() {
-        for event in [
-            ExecutionEvent::Started {
-                run_id: "run-1".into(),
-            },
-            ExecutionEvent::Finished {
-                run_id: "run-1".into(),
-            },
-            ExecutionEvent::Failed {
-                run_id: "run-1".into(),
-                message: "failed".into(),
-            },
-        ] {
-            let value = serde_json::to_value(event).unwrap();
-            assert_eq!(value["data"]["runId"], "run-1");
-            assert!(value["data"].get("run_id").is_none());
-        }
-    }
+pub struct TrustRecord {
+    pub id: String,
+    pub revision: u64,
+    pub genesis: String,
+    pub assurance: String,
+    pub environments: Vec<String>,
+    pub source: String,
 }

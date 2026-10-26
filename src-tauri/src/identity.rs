@@ -1,155 +1,294 @@
-use std::fs;
-use std::io::{ErrorKind, Write};
+//! A person, a node and a local TLS identity have separate keys and custody.
+use crate::{
+    period::Period,
+    vault::{self, Vault},
+};
+use anyhow::{Context, ensure};
+use hellas_auth::{Digest, authority::*};
+use hellas_sdk::{
+    NodeIdentity,
+    kernel::SoftPasskey,
+    work::{
+        authenticator::Authenticator,
+        operations::{OPERATIONS, Scope},
+        work_store::grant::{NodeStore, OwnerApproval, PreparedBootstrap},
+    },
+};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use anyhow::Context;
-use hellas_sdk::ClientIdentity;
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Installation {
+    pub authority: AuthorityId,
+    pub root: GrantId,
+    pub owner: PrincipalId,
+    pub card: ContactCard,
+    pub prepared: PreparedBootstrap,
+    pub certificate: Vec<u8>,
+}
+pub struct Identity {
+    pub public: Installation,
+    pub node: NodeIdentity,
+    pub passkey: SoftPasskey,
+    pub credential: CredentialSecret,
+}
 
-const TAG: &[u8] = b"hellas.gate.client.v1\0";
-const SECRET_BYTES: usize = 64;
+pub fn random<const N: usize>() -> anyhow::Result<[u8; N]> {
+    let mut bytes = [0; N];
+    getrandom::fill(&mut bytes).map_err(|_| anyhow::anyhow!("secure randomness unavailable"))?;
+    Ok(bytes)
+}
+fn credential_bytes(credential: &CredentialSecret) -> zeroize::Zeroizing<Vec<u8>> {
+    let mut bytes = zeroize::Zeroizing::new(credential.id().0.to_vec());
+    bytes.extend_from_slice(credential.expose_secret());
+    bytes
+}
+pub fn decode_credential(bytes: &[u8]) -> anyhow::Result<CredentialSecret> {
+    ensure!(bytes.len() == 48, "invalid stored credential");
+    Ok(CredentialSecret::from_parts(
+        CredentialId::try_from(&bytes[..16])?,
+        bytes[16..].try_into()?,
+    ))
+}
+pub async fn save_credential(
+    vault: &Vault,
+    key: &str,
+    credential: &CredentialSecret,
+) -> anyhow::Result<()> {
+    vault.set(key, &credential_bytes(credential)).await
+}
 
-/// Load the stable transport/caller identity owned by this installation, or
-/// create it exactly once. The format is intentionally tiny and private to
-/// Gate; provider enrollment is a separate, attested record.
-pub fn load_or_create(path: &Path) -> anyhow::Result<ClientIdentity> {
-    match fs::read(path) {
-        Ok(bytes) => decode(&bytes),
-        Err(error) if error.kind() == ErrorKind::NotFound => create(path),
-        Err(error) => Err(error).with_context(|| format!("reading {} failed", path.display())),
+impl Identity {
+    /// This explicit software-only creation is never a fallback for a native prompt.
+    pub async fn create(directory: &Path, vault: &Vault, name: String) -> anyhow::Result<Self> {
+        ensure!(
+            !directory.join("node/authority").try_exists()?,
+            "node already initialized"
+        );
+        ensure!(
+            !directory.join("installation.json").try_exists()?,
+            "resume the prepared initialization instead"
+        );
+        let scalar = random()?;
+        let passkey = SoftPasskey::from_secret_scalar(scalar)
+            .map_err(|_| anyhow::anyhow!("invalid passkey scalar"))?;
+        let owner = PrincipalId::from_public_key(hellas_auth::PublicKey::P256(
+            passkey.party_key().to_bytes(),
+        ))?;
+        let node = NodeIdentity::generate();
+        let root = GrantId(random()?);
+        let authority = AuthorityId(Digest::from_bytes(random()?));
+        let now = UnixMillis::now()?;
+        let spec = admin_scope(authority, owner, now)?;
+        let holder = NodeKey::from_public_key(node.node_key().public_key())?;
+        let digest = ownership_digest(
+            Ownership::Bootstrap { root, target: None },
+            &spec,
+            &spec,
+            holder,
+        );
+        let approval = OwnerApproval {
+            administrator: spec.clone(),
+            credential: spec,
+            holder,
+            assertion: passkey.assert(digest).await?,
+        };
+        let (prepared, credential) = approval.prepare(None)?;
+        let card = ContactCard::new(
+            owner,
+            name.clone(),
+            passkey.assert(ContactCard::digest(owner, &name)).await?,
+        )?;
+        let tls = rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
+        // All secret material is durable before publishing the prepared verifier.
+        vault.set("owner-software-passkey", &scalar).await?;
+        let mut secrets = zeroize::Zeroizing::new(node.transport_secret_bytes().to_vec());
+        secrets.extend_from_slice(&node.node_secret_bytes());
+        vault.set("node-keys", &secrets).await?;
+        save_credential(vault, "application-credential", &credential).await?;
+        vault
+            .set("control-tls-key", &tls.signing_key.serialize_der())
+            .await?;
+        let public = Installation {
+            authority,
+            root,
+            owner,
+            card,
+            prepared,
+            certificate: tls.cert.der().to_vec(),
+        };
+        vault::write(&directory.join("installation.json"), &public)?;
+        Ok(Self {
+            public,
+            node,
+            passkey,
+            credential,
+        })
+    }
+    pub async fn load(directory: &Path, vault: &Vault) -> anyhow::Result<Option<Self>> {
+        let Some(public) = vault::read::<Installation>(&directory.join("installation.json"))?
+        else {
+            ensure!(
+                !directory.join("node/authority").try_exists()?,
+                "authority exists without installation metadata; owner recovery required"
+            );
+            return Ok(None);
+        };
+        let bytes = vault.required("node-keys").await?;
+        ensure!(bytes.len() == 64, "invalid node vault entry");
+        let node =
+            NodeIdentity::from_secret_bytes(bytes[..32].try_into()?, bytes[32..].try_into()?)?;
+        let bytes = vault.required("owner-software-passkey").await?;
+        let passkey = SoftPasskey::from_secret_scalar(bytes.as_slice().try_into()?)
+            .map_err(|_| anyhow::anyhow!("invalid stored passkey"))?;
+        ensure!(
+            passkey.party_key().to_bytes() == *public.owner.as_bytes(),
+            "stored passkey differs from owner"
+        );
+        let credential = decode_credential(&vault.required("application-credential").await?)?;
+        ensure!(
+            credential.id() == public.prepared.credential.id(),
+            "prepared credential ID differs from vault"
+        );
+        Ok(Some(Self {
+            public,
+            node,
+            passkey,
+            credential,
+        }))
+    }
+    pub async fn open_store(&self, directory: &Path) -> anyhow::Result<NodeStore> {
+        let path = directory.join("node");
+        let network = hellas_sdk::work::model::grant::grant_network();
+        let now = UnixMillis::now()?;
+        let store = if path.join("authority").try_exists()? {
+            NodeStore::open(&path, network, None, now).await?
+        } else {
+            NodeStore::bootstrap_prepared(
+                &path,
+                network,
+                self.public.root,
+                self.public.prepared.clone(),
+                None,
+                now,
+            )
+            .await?
+        };
+        let authority = store.state().authority();
+        ensure!(
+            authority.authority() == self.public.authority,
+            "authority differs from installation"
+        );
+        let issued = authority
+            .credential(self.credential.id())
+            .context("prepared credential is absent; owner recovery required")?;
+        ensure!(
+            issued == &self.public.prepared.credential,
+            "prepared credential differs from committed verifier"
+        );
+        Ok(store)
     }
 }
-
-fn create(path: &Path) -> anyhow::Result<ClientIdentity> {
-    let identity = ClientIdentity::generate();
-    let mut bytes = Vec::with_capacity(TAG.len() + SECRET_BYTES);
-    bytes.extend_from_slice(TAG);
-    bytes.extend_from_slice(&identity.transport_secret_bytes());
-    bytes.extend_from_slice(&identity.caller_secret_bytes());
-
-    decode(&persist(path, &bytes)?)
-}
-
-pub fn contact(
-    path: &Path,
-    identity: &ClientIdentity,
-) -> anyhow::Result<hellas_rpc::protocol::work_grant::records::Principal> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == ErrorKind::NotFound => persist(
-            path,
-            &hellas_rpc::ProducerSigningKey::generate().to_secret_bytes(),
-        )?,
-        Err(error) => return Err(error.into()),
-    };
-    let root = hellas_rpc::ProducerSigningKey::from_secret_bytes(
-        bytes
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid contact root"))?,
-    )?;
-    Ok(
-        hellas_rpc::protocol::work_grant::records::Principal::verify(
-            identity.contact_enrollment(&root)?,
-        )?,
-    )
-}
-
-fn persist(path: &Path, bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
-    let directory = path.parent().context("identity path has no parent")?;
-    let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
-    #[cfg(unix)]
-    temporary.as_file().set_permissions({
-        use std::os::unix::fs::PermissionsExt;
-        fs::Permissions::from_mode(0o600)
-    })?;
-    temporary.write_all(bytes)?;
-    temporary.flush()?;
-    temporary.as_file().sync_all()?;
-    match temporary.persist_noclobber(path) {
-        Ok(_) => {
-            #[cfg(unix)]
-            fs::File::open(directory)?.sync_all()?;
-            Ok(bytes.to_vec())
+fn admin_scope(
+    authority: AuthorityId,
+    owner: PrincipalId,
+    now: UnixMillis,
+) -> anyhow::Result<GrantSpec> {
+    let mut permissions = std::collections::BTreeSet::new();
+    let mut operations = std::collections::BTreeSet::new();
+    for op in [
+        GRANT_ISSUE,
+        GRANT_REVOKE,
+        GRANT_ADMINISTER,
+        CREDENTIAL_ISSUE,
+        CREDENTIAL_REVOKE,
+    ] {
+        let operation = OperationId::new(op)?;
+        operations.insert(operation.clone());
+        permissions.insert(Permission {
+            operation,
+            resource: authority.resource(),
+        });
+    }
+    for op in OPERATIONS {
+        operations.insert(OperationId::new(op.name)?);
+        if !matches!(op.scope, Scope::Allowance) {
+            permissions.insert(op.permission(authority, None)?);
         }
-        Err(_) if path.exists() => Ok(fs::read(path)?),
-        Err(error) => Err(error.error).context("persisting Gate identity failed"),
     }
-}
-
-fn decode(bytes: &[u8]) -> anyhow::Result<ClientIdentity> {
-    anyhow::ensure!(
-        bytes.len() == TAG.len() + SECRET_BYTES && bytes.starts_with(TAG),
-        "unsupported Gate identity format"
-    );
-    let transport = bytes[TAG.len()..TAG.len() + 32].try_into().unwrap();
-    let caller = bytes[TAG.len() + 32..].try_into().unwrap();
-    ClientIdentity::from_secret_bytes(transport, caller).map_err(Into::into)
-}
-
-pub fn producer_id(identity: &ClientIdentity) -> String {
-    encode_hex(identity.caller_key().producer_id().as_bytes())
-}
-
-pub fn public_key(identity: &ClientIdentity) -> String {
-    encode_hex(identity.caller_key().public_key().bytes())
-}
-
-fn encode_hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(DIGITS[(byte >> 4) as usize] as char);
-        output.push(DIGITS[(byte & 0x0f) as usize] as char);
-    }
-    output
+    Ok(GrantSpec {
+        authority,
+        subject: owner,
+        permissions,
+        not_before: now,
+        expires: Period::Unlimited.expires(now)?,
+        delegation_depth: MAX_DELEGATION_DEPTH,
+        issuance: Some(IssuanceCeiling {
+            operations,
+            resources: CeilingResources::Authority,
+            max_validity_ms: Period::MAX_MS,
+            max_delegation_depth: MAX_DELEGATION_DEPTH,
+        }),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn identity_is_stable_and_private() {
+    #[tokio::test]
+    async fn prepared_bootstrap_reconciles_exact_id_after_lost_reply_and_rejects_missing_secret() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("identity");
-        let first = load_or_create(&path).unwrap();
-        let second = load_or_create(&path).unwrap();
-        assert_eq!(first.node_id(), second.node_id());
-        assert_eq!(producer_id(&first), producer_id(&second));
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                fs::metadata(path).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
-    }
-
-    #[test]
-    fn contact_root_survives_restart_and_is_distinct_from_the_producer() {
-        let directory = tempfile::tempdir().unwrap();
-        let identity = load_or_create(&directory.path().join("identity")).unwrap();
-        let path = directory.path().join("contact-root");
-        let first = contact(&path, &identity).unwrap();
-        let second = contact(&path, &identity).unwrap();
-        assert_eq!(first, second);
-        assert_ne!(
-            first.bundle().genesis.statement.root_public_key,
-            identity.caller_key().public_key()
+        let secrets = tempfile::tempdir().unwrap();
+        let vault = Vault::fixture(secrets.path());
+        let identity = Identity::create(directory.path(), &vault, "Alice".into())
+            .await
+            .unwrap();
+        let id = identity.credential.id();
+        let owner = identity.public.owner;
+        let node = identity.node.node_id();
+        let store = identity.open_store(directory.path()).await.unwrap();
+        drop(store); // Simulate the committed bootstrap response being lost.
+        let identity = Identity::load(directory.path(), &vault)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(identity.credential.id(), id);
+        assert_eq!(identity.public.owner, owner);
+        assert_eq!(identity.node.node_id(), node);
+        let store = identity.open_store(directory.path()).await.unwrap();
+        assert_eq!(store.state().authority().credentials().count(), 1);
+        drop(store);
+        vault.delete("application-credential").await.unwrap();
+        assert!(Identity::load(directory.path(), &vault).await.is_err());
+        assert!(
+            Identity::create(directory.path(), &vault, "Alice".into())
+                .await
+                .is_err()
         );
-        assert_eq!(first.transport(), *identity.node_id().as_bytes());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                fs::metadata(path).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
     }
-
-    #[test]
-    fn rejects_unknown_format() {
-        assert!(decode(b"not an identity").is_err());
+    #[tokio::test]
+    async fn software_owner_card_verifies_and_assertions_set_up_never_uv() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let sa = tempfile::tempdir().unwrap();
+        let sb = tempfile::tempdir().unwrap();
+        let alice = Identity::create(a.path(), &Vault::fixture(sa.path()), "Alice".into())
+            .await
+            .unwrap();
+        let bob = Identity::create(b.path(), &Vault::fixture(sb.path()), "Bob".into())
+            .await
+            .unwrap();
+        assert_ne!(alice.public.owner, bob.public.owner);
+        assert_ne!(
+            alice.node.node_key().public_key().bytes(),
+            alice.public.owner.as_bytes()
+        );
+        let digest = ContactCard::digest(alice.public.owner, "Alice");
+        let assertion = alice.passkey.assert(digest).await.unwrap();
+        assert_eq!(assertion.authenticator_data()[32] & 0x05, 0x01);
+        assert!(ContactCard::new(alice.public.owner, "Alice".into(), assertion.clone()).is_ok());
+        assert!(ContactCard::new(bob.public.owner, "Alice".into(), assertion.clone()).is_err());
+        assert!(ContactCard::new(alice.public.owner, "Changed".into(), assertion).is_err());
     }
 }

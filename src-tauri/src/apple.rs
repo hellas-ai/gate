@@ -193,7 +193,7 @@ impl hellas_attestation::RootProver for AppleAppAttestRoot {
 
     async fn prove_open_binding(
         &self,
-        _binding: hellas_rpc::Digest,
+        _binding: hellas_auth::Digest,
     ) -> Result<hellas_rpc::RootProof, hellas_attestation::AttestationError> {
         Err(hellas_attestation::AttestationError::Platform(
             "Apple App Attest is unavailable".into(),

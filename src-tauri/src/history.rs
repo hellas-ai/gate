@@ -306,7 +306,7 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dto::{AssuranceInput, RunKind};
+    use crate::dto::RunKind;
 
     fn request() -> RunRequest {
         RunRequest {
@@ -314,12 +314,11 @@ mod tests {
             input: "hello".into(),
             client: crate::dto::WorkClientConfig {
                 target: crate::dto::WorkTarget::Authorized {
-                    offer: "fixture-offer".into(),
+                    access_id: "fixture-access".into(),
+                    allowance: "fixture-allowance".into(),
                     resource: "responses".into(),
                 },
-                assurance: AssuranceInput::ProducerSigned,
-                apple_app_id: String::new(),
-                apple_cd_hashes: Vec::new(),
+                trust_policy: "approved-provider".into(),
             },
         }
     }
@@ -337,7 +336,7 @@ mod tests {
         assert_eq!(entries[0].status, "complete");
         assert_eq!(entries[0].result, "chunk\n");
         assert_eq!(entries[0].verification, "verified");
-        assert!(entries[0].request.contains("fixture-offer"));
+        assert!(entries[0].request.contains("fixture-access"));
         assert!(history.delete(&id).unwrap());
         assert!(history.list(10).unwrap().is_empty());
     }

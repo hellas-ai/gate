@@ -1,14 +1,13 @@
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 pub mod apple;
-pub mod chain;
 #[cfg(feature = "desktop")]
 pub mod commands;
+pub mod control;
 pub mod dto;
 pub mod error;
 pub mod history;
-#[cfg(any(unix, windows))]
-pub mod host_control;
 pub mod identity;
-pub mod paid;
-pub mod provider_identity;
-pub mod provider_setup;
+pub mod period;
 pub mod state;
+pub mod trust;
+pub mod vault;

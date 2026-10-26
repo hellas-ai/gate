@@ -3,8 +3,8 @@
 
 use std::sync::Arc;
 
+use hellas_gate::commands;
 use hellas_gate::state::AppState;
-use hellas_gate::{commands, host_control};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, WindowEvent};
@@ -17,31 +17,21 @@ fn main() {
         )
         .init();
 
-    tauri::Builder::default()
+    let result = tauri::Builder::default()
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             create_private_directory(&data_dir)?;
-            let state = Arc::new(AppState::open(&data_dir)?);
+            let state = Arc::new(tauri::async_runtime::block_on(AppState::open(&data_dir))?);
             app.manage(state.clone());
-
-            #[cfg(any(unix, windows))]
-            tauri::async_runtime::spawn(async move {
-                if let Err(error) = host_control::serve(state).await {
-                    tracing::error!(%error, "local-control listener stopped");
-                }
-            });
 
             install_tray(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
-            commands::export_offers,
-            commands::provision_paid_offer,
-            commands::set_provider_enabled,
-            commands::set_gateway_enabled,
-            commands::get_gateway_access,
-            commands::run_request,
+            commands::initialize_software,
+            commands::list_trust,
+            commands::approve_trust,
             commands::list_history,
             commands::delete_history,
             commands::clear_history,
@@ -54,8 +44,11 @@ fn main() {
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("failed to run Hellas Gate");
+        .run(tauri::generate_context!());
+    if let Err(error) = result {
+        tracing::error!(%error, "Gate failed");
+        std::process::exit(1);
+    }
 }
 
 fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
