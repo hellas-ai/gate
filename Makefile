@@ -18,3 +18,4 @@ dev:
 
 ui-build: ui-check
 	node ui/build.mjs
+	node --test ui/startup.test.mjs

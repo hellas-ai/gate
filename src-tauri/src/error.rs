@@ -20,7 +20,7 @@ impl ApiError {
     }
 
     pub fn internal(error: impl std::fmt::Display) -> Self {
-        Self::new("internal", error.to_string())
+        Self::new("internal", format!("{error:#}"))
     }
 }
 

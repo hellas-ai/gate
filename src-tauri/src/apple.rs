@@ -33,8 +33,9 @@ mod native {
     use hellas_attestation::{
         AppleCredential, AttestationError, Attester, Binding, RootProver, apple_client_data_hash,
     };
+    use hellas_auth::Digest;
     use hellas_rpc::pb::execute::AssuranceEvidence;
-    use hellas_rpc::{APPLE_APP_ATTEST, ContentId, Digest, RootProof};
+    use hellas_rpc::{APPLE_APP_ATTEST, ContentId, RootProof};
 
     #[derive(Clone)]
     pub struct AppleAppAttestRoot {

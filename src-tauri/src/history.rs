@@ -70,6 +70,15 @@ impl History {
         Ok(id)
     }
 
+    pub fn cancel(&self, id: &str) -> anyhow::Result<()> {
+        let database = Database::open(&self.path)?;
+        let mut statement = database.prepare(
+            "UPDATE runs SET status = 'cancelled', error = 'Cancelled by user' WHERE id = ?1",
+        )?;
+        statement.bind_text(1, id)?;
+        statement.done()
+    }
+
     pub fn fail(&self, id: &str, error: &str) -> anyhow::Result<()> {
         let database = Database::open(&self.path)?;
         let mut statement =

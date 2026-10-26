@@ -1,79 +1,147 @@
-//! Gate's provider provisioning boundary. Sessions and funding remain in the SDK.
-use anyhow::Context as _;
-use hellas_sdk::kernel::{CoinId, Key, Secp256k1Signer};
-use std::path::{Path, PathBuf};
+//! Typed paid settings. SDK validation, signing, funding and settlement remain shared.
+use crate::{dto::*, trust, vault};
+use anyhow::{Context, ensure};
+use hellas_sdk::work::model::{
+    fetch::{FetchPolicyV2, FetchRoutePolicy, fetch_route_commitment},
+    profile::WorkPolicy,
+    work::{JobPaymentPolicyV2, PaidChannelPolicyV1},
+};
+use hellas_sdk::{
+    kernel::{EdgeValues, Fees, NetworkId},
+    work_config::{ChainCrossCheck, WorkConfig, WorkRoutes},
+};
+use std::{path::Path, time::Duration};
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProviderOffer {
-    work_config: PathBuf,
-    client: String,
-    stake_coins: Vec<String>,
-    bond_timeout: u64,
-    timeout_payout: u64,
-    max_job_price: u64,
-    #[serde(default)]
-    addresses: Vec<std::net::SocketAddr>,
-}
-
-pub async fn provision(
-    path: &Path,
-    identity: &hellas_sdk::ClientIdentity,
-    provider: hellas_rpc::ProviderEnrollmentBundle,
-    preview: bool,
-    chain: &crate::chain::ChainNode,
-) -> anyhow::Result<String> {
-    let file = std::fs::File::open(path)?;
-    use std::io::Read;
-    let mut bytes = Vec::new();
-    file.take((1 << 20) + 1).read_to_end(&mut bytes)?;
-    anyhow::ensure!(
-        bytes.len() <= 1 << 20,
-        "offer configuration exceeds its byte limit"
-    );
-    let config: ProviderOffer =
-        serde_json::from_slice(&bytes).context("invalid paid offer configuration")?;
-    let options = hellas_sdk::work_provision::ProvisionOptions {
-        work_config: hellas_sdk::work_config::load_work_config(&config.work_config)?,
-        settlement_key: Secp256k1Signer::from_secret_scalar(identity.caller_secret_bytes())
-            .map_err(|_| anyhow::anyhow!("invalid settlement key"))?,
-        provider,
-        addresses: config.addresses.iter().map(ToString::to_string).collect(),
-        client: Key::from_bytes(hex(&config.client)?),
-        stake_coins: config
-            .stake_coins
-            .iter()
-            .map(|s| hex(s).map(CoinId::from_bytes))
-            .collect::<anyhow::Result<_>>()?,
-        bond_timeout: config.bond_timeout,
-        timeout_payout: config.timeout_payout,
-        max_job_price: config.max_job_price,
+pub fn work_policy(
+    presentation: FetchPresentation,
+    service: &str,
+    method: &str,
+) -> anyhow::Result<WorkPolicy> {
+    let contract = match presentation {
+        FetchPresentation::Responses => hellas_reseller::responses_contract()?,
+        FetchPresentation::Http => hellas_rpc::FetchContract::http()?,
     };
-    if preview {
-        return Ok(encode_hex(
-            &hellas_sdk::work_provision::preview_bond(&options)?.to_bytes(),
-        ));
-    }
-    let node = chain.get(&options.work_config).await?;
-    let made = hellas_sdk::work_provision::provision_offer(options, &node).await?;
-    Ok(serde_json::to_string_pretty(&serde_json::json!({
-        "provider": identity.node_id().to_string(),
-        "bond": encode_hex(&made.bond_edge.to_bytes()),
-        "provider_genesis": made.offer,
-    }))?)
+    let route = FetchRoutePolicy::sealed_route(service, method)?;
+    let policy = WorkPolicy::Fetch {
+        policy: FetchPolicyV2 {
+            allowed_environment: contract.manifest_id(),
+            route_commitment: fetch_route_commitment(&route.canonical_body_bytes())?,
+            max_request_body_bytes: 64 << 10,
+            max_output_events: 4096,
+            max_output_bytes: 4 << 20,
+            max_spool_bytes: 8 << 20,
+            max_encoded_result_frame: 4 << 20,
+            max_encoded_prepared_input: 128 << 10,
+        },
+        route,
+        contract,
+    };
+    policy.check()?;
+    Ok(policy)
 }
-
-fn hex<const N: usize>(value: &str) -> anyhow::Result<[u8; N]> {
-    anyhow::ensure!(
-        value.len() == N * 2 && value.bytes().all(|b| b.is_ascii_hexdigit()),
-        "invalid hexadecimal identifier"
+pub fn config(
+    input: &PaidPolicyInput,
+    journal_root: std::path::PathBuf,
+) -> anyhow::Result<WorkConfig> {
+    ensure!(
+        input.poll_ms > 0 && input.max_observation_age_ms > 0,
+        "paid polling and progress limits must be positive"
     );
-    let mut result = [0; N];
-    for (index, slot) in result.iter_mut().enumerate() {
-        *slot = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)?;
+    ensure!(
+        input.chain.validators.len() == hellas_sdk::work_config::VALIDATOR_COUNT,
+        "configure all six validator RPC addresses"
+    );
+    let genesis = if input.chain.committee.is_empty() {
+        None
+    } else {
+        Some(hellas_genesis::Genesis {
+            schema_version: hellas_genesis::GENESIS_SCHEMA_VERSION,
+            network_id: input.chain.network.clone(),
+            validators: input
+                .chain
+                .committee
+                .iter()
+                .map(|v| hellas_genesis::GenesisValidator {
+                    public_key: v.public_key.clone(),
+                    label: v.label.clone(),
+                })
+                .collect(),
+            allocations: input
+                .chain
+                .allocations
+                .iter()
+                .map(|v| hellas_genesis::GenesisAllocation {
+                    address: v.address.clone(),
+                    balance: v.balance,
+                })
+                .collect(),
+        })
+    };
+    if let Some(genesis) = &genesis {
+        genesis.validate()?;
     }
-    Ok(result)
+    let config = WorkConfig {
+        chain: ChainCrossCheck {
+            network: NetworkId::new(&input.chain.network).context("invalid network identifier")?,
+            genesis_payload_digest: input.chain.genesis_digest.parse()?,
+            threshold_identity: hex::decode(&input.chain.threshold_identity)?,
+            genesis,
+        },
+        validators: input.chain.validators.clone(),
+        journal_root,
+        routes: WorkRoutes::default(),
+        policy_salt: trust::fixed(&input.policy_salt)?,
+        channel_policy: PaidChannelPolicyV1 {
+            compute_credit_limit: input.compute_credit_limit,
+            delivery_credit_limit: input.delivery_credit_limit,
+        },
+        work_policy: work_policy(input.presentation, &input.service, &input.method)?,
+        payment_policy: JobPaymentPolicyV2 {
+            fixed_price: input.fixed_price,
+            dispatch_margin_blocks: input.dispatch_blocks,
+            delivery_margin_blocks: input.delivery_blocks,
+            oracle_grace_blocks: input.oracle_blocks,
+        },
+        poll: Duration::from_millis(input.poll_ms),
+        max_observation_age: Duration::from_millis(input.max_observation_age_ms),
+        expected_payment_values: EdgeValues::new(
+            input.value,
+            input.reserve,
+            Fees::new(
+                input.fee_base,
+                input.fee_slot,
+                input.fee_proof,
+                input.fee_lifetime,
+            ),
+        ),
+        min_omit_response_blocks: input.min_omit_response_blocks,
+    };
+    config.node_config(config.journal_root.join("validation"), None)?;
+    Ok(config)
 }
-fn encode_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+pub fn pool_path(directory: &Path, id: &str) -> anyhow::Result<std::path::PathBuf> {
+    ensure!(
+        !id.is_empty()
+            && id.len() <= 64
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+        "invalid paid pool name"
+    );
+    Ok(directory.join("paid-pools").join(format!("{id}.json")))
+}
+pub fn save_pool(directory: &Path, input: PaidPoolInput) -> anyhow::Result<()> {
+    ensure!(
+        !input.providers.is_empty() && input.providers.len() <= 16,
+        "select 1 to 16 paid providers"
+    );
+    for provider in &input.providers {
+        let configuration = config(&provider.policy, directory.join("paid-validation"))?;
+        trust::resolve(
+            directory,
+            &provider.trust_policy,
+            configuration.work_policy.allowed_environment(),
+        )?;
+    }
+    vault::write(&pool_path(directory, &input.id)?, &input)
 }

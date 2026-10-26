@@ -21,6 +21,10 @@ pub struct LocalNode {
     pub coordinator: NodeCoordinator,
     pub socket: PathBuf,
     pub vault: Vault,
+    pub composition: crate::provider_setup::Composition,
+    pub directory: PathBuf,
+    pub clients: crate::clients::Clients,
+    pub gateway: crate::gateway::Configuration,
     tls: Arc<rustls::ClientConfig>,
 }
 impl LocalNode {
@@ -45,11 +49,32 @@ impl LocalNode {
             identity: Arc::new(identity),
             coordinator: coordinator.clone(),
             socket: socket.clone(),
+            composition: crate::provider_setup::Composition::open(directory, vault.clone())?,
+            directory: directory.to_owned(),
+            clients: crate::clients::Clients::new(directory),
+            gateway: crate::gateway::Configuration::open(directory)?,
             vault,
             tls,
         });
+        #[cfg(test)]
+        let endpoint =
+            hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::Minimal);
+        #[cfg(not(test))]
+        let endpoint = hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::N0);
+        let access = crate::credentials::gateway_anchor(
+            directory,
+            &local.coordinator,
+            &local.identity,
+            &local.vault,
+        )
+        .await?;
         let host = HostHandle::start(HostOptions {
-            transport: None,
+            transport: Some(
+                endpoint
+                    .secret_key(local.identity.node.transport_key())
+                    .bind()
+                    .await?,
+            ),
             start_provider: false,
             control: Some((
                 coordinator,
@@ -59,8 +84,8 @@ impl LocalNode {
                     remote: Default::default(),
                 },
             )),
-            provider: None,
-            gateway: None,
+            provider: Some(local.composition.factory(local.clone())),
+            gateway: Some((access, crate::gateway::factory(local.clone()))),
         })
         .await?;
         // A committed initialization must authenticate using precisely its prepared ID.
@@ -96,6 +121,83 @@ impl LocalNode {
         )
         .await?
         .0)
+    }
+}
+
+pub async fn work(
+    client: &Client,
+    authorization: Vec<u8>,
+    command: hellas_sdk::work::model::grant::admin::WorkControlCommand,
+) -> anyhow::Result<hellas_sdk::work::model::grant::admin::WorkControlReply> {
+    use hellas_rpc::protocol::value::{canonical_dag_cbor, decode_dag_cbor};
+    let reply = client
+        .work_control(WorkControlRequest {
+            authorization,
+            command: canonical_dag_cbor(&command)?,
+        })
+        .await?;
+    Ok(decode_dag_cbor(&reply.reply)?)
+}
+
+/// One authenticated SDK session reused for every operation in a document apply.
+pub struct Session {
+    pub client: Client,
+    pub authorization: Vec<u8>,
+}
+impl LocalNode {
+    pub async fn session(&self, step_up: bool) -> anyhow::Result<Session> {
+        Ok(Session {
+            client: self.client(step_up).await?,
+            authorization: self.authorization(),
+        })
+    }
+}
+impl Session {
+    pub async fn inspect(&self, query: InspectionQuery) -> anyhow::Result<AuthorityInspection> {
+        use hellas_rpc::protocol::value::{canonical_dag_cbor, decode_dag_cbor};
+        let reply = self
+            .client
+            .inspect_authority(InspectAuthorityRequest {
+                authorization: self.authorization.clone(),
+                query: canonical_dag_cbor(&query)?,
+            })
+            .await?;
+        Ok(decode_dag_cbor(&reply.reply)?)
+    }
+    pub async fn grant(&self, command: GrantCommand) -> anyhow::Result<()> {
+        self.client
+            .grant_control(GrantControlRequest {
+                command: hellas_rpc::protocol::value::canonical_dag_cbor(&command)?,
+            })
+            .await?;
+        Ok(())
+    }
+    pub async fn issue(&self, credential: &Credential) -> anyhow::Result<()> {
+        self.client
+            .issue_credential(IssueCredentialRequest {
+                authorization: self.authorization.clone(),
+                credential: hellas_rpc::protocol::value::canonical_dag_cbor(credential)?,
+            })
+            .await?;
+        Ok(())
+    }
+    pub async fn revoke(&self, id: CredentialId, expected: Revision) -> anyhow::Result<()> {
+        self.client
+            .revoke_credential(RevokeCredentialRequest {
+                authorization: self.authorization.clone(),
+                credential_id: id.0.to_vec(),
+                expected_revision: expected.0,
+            })
+            .await?;
+        Ok(())
+    }
+    pub async fn status(&self) -> anyhow::Result<HostStatus> {
+        Ok(self
+            .client
+            .get_host_status(GetHostStatusRequest {
+                authorization: self.authorization.clone(),
+            })
+            .await?)
     }
 }
 
@@ -177,7 +279,11 @@ mod tests {
             "control-tls-key",
         ] {
             let secret = vault.required(key).await.unwrap();
-            assert!(!metadata.windows(secret.len()).any(|w| w == secret.as_slice()));
+            assert!(
+                !metadata
+                    .windows(secret.len())
+                    .any(|w| w == secret.as_slice())
+            );
         }
     }
 }

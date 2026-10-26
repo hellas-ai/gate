@@ -25,6 +25,9 @@ pub struct Installation {
     pub owner: PrincipalId,
     pub card: ContactCard,
     pub prepared: PreparedBootstrap,
+    pub credential_id: CredentialId,
+    pub owner_scope: GrantSpec,
+    pub generation: u64,
     pub certificate: Vec<u8>,
 }
 pub struct Identity {
@@ -115,8 +118,11 @@ impl Identity {
             root,
             owner,
             card,
-            prepared,
+            prepared: prepared.clone(),
             certificate: tls.cert.der().to_vec(),
+            credential_id: credential.id(),
+            owner_scope: prepared.administrator.clone(),
+            generation: 1,
         };
         vault::write(&directory.join("installation.json"), &public)?;
         Ok(Self {
@@ -148,7 +154,7 @@ impl Identity {
         );
         let credential = decode_credential(&vault.required("application-credential").await?)?;
         ensure!(
-            credential.id() == public.prepared.credential.id(),
+            credential.id() == public.credential_id,
             "prepared credential ID differs from vault"
         );
         Ok(Some(Self {
@@ -165,6 +171,10 @@ impl Identity {
         let store = if path.join("authority").try_exists()? {
             NodeStore::open(&path, network, None, now).await?
         } else {
+            ensure!(
+                self.public.generation == 1,
+                "initialized authority is missing; owner recovery is required"
+            );
             NodeStore::bootstrap_prepared(
                 &path,
                 network,
@@ -184,7 +194,7 @@ impl Identity {
             .credential(self.credential.id())
             .context("prepared credential is absent; owner recovery required")?;
         ensure!(
-            issued == &self.public.prepared.credential,
+            self.public.generation != 1 || issued == &self.public.prepared.credential,
             "prepared credential differs from committed verifier"
         );
         Ok(store)
@@ -231,6 +241,80 @@ fn admin_scope(
             max_delegation_depth: MAX_DELEGATION_DEPTH,
         }),
     })
+}
+
+impl Identity {
+    /// Explicit offline owner approval; a lost recovery reply requires another approval.
+    pub async fn recover_software(directory: &Path, vault: &Vault) -> anyhow::Result<Self> {
+        let mut public = vault::read::<Installation>(&directory.join("installation.json"))?
+            .context("installation metadata is missing")?;
+        let bytes = vault.required("owner-software-passkey").await?;
+        let passkey = SoftPasskey::from_secret_scalar(bytes.as_slice().try_into()?)
+            .map_err(|_| anyhow::anyhow!("invalid software owner passkey"))?;
+        ensure!(
+            passkey.party_key().to_bytes() == *public.owner.as_bytes(),
+            "selected passkey differs from this owner"
+        );
+        let node_bytes = vault.required("node-keys").await?;
+        ensure!(node_bytes.len() == 64, "invalid stored node keys");
+        let node = NodeIdentity::from_secret_bytes(
+            node_bytes[..32].try_into()?,
+            node_bytes[32..].try_into()?,
+        )?;
+        let network = hellas_sdk::work::model::grant::grant_network();
+        let inspection = NodeStore::inspect_offline(
+            &directory.join("node"),
+            network,
+            &InspectionQuery::Grant { id: public.root },
+        )
+        .await?;
+        let now = UnixMillis::now()?;
+        let administrator = admin_scope(public.authority, public.owner, now)?;
+        let holder = NodeKey::from_public_key(node.node_key().public_key())?;
+        let assertion = passkey
+            .assert(ownership_digest(
+                Ownership::Recover {
+                    expected: inspection.revision,
+                },
+                &administrator,
+                &administrator,
+                holder,
+            ))
+            .await?;
+        let (record, credential) = NodeStore::recover_offline(
+            &directory.join("node"),
+            network,
+            inspection.revision,
+            OwnerApproval {
+                administrator: administrator.clone(),
+                credential: administrator.clone(),
+                holder,
+                assertion,
+            },
+            now,
+        )
+        .await?;
+        // The SDK commits recovery before returning its new credential. Never retry it silently.
+        save_credential(vault, "application-credential", &credential).await?;
+        public.credential_id = credential.id();
+        public.owner_scope = administrator;
+        public.generation = record.generation;
+        vault::write(&directory.join("installation.json"), &public)?;
+        let anchor = directory.join("gateway-listener-credential.json");
+        if let Some(old) = vault::read::<crate::credentials::PreparedIssue>(&anchor)? {
+            vault
+                .delete(&crate::credentials::PreparedIssue::key(old.credential.id()))
+                .await?;
+            std::fs::remove_file(anchor)?;
+            hellas_private::sync_directory(directory)?;
+        }
+        Ok(Self {
+            public,
+            node,
+            passkey,
+            credential,
+        })
+    }
 }
 
 #[cfg(test)]

@@ -84,7 +84,7 @@ pub fn fixed<const N: usize>(text: &str) -> anyhow::Result<[u8; N]> {
     Ok(bytes)
 }
 pub fn content_id(text: &str) -> anyhow::Result<ContentId> {
-    Ok(ContentId::from_bytes(fixed(text)?))
+    Ok(text.parse()?)
 }
 
 #[cfg(test)]

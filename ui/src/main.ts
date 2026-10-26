@@ -1,35 +1,110 @@
 import "./style.css";
 import { api } from "./api.ts";
-import type { AppStatus } from "./types.ts";
-const element = document.querySelector<HTMLDivElement>("#app");
-if (!element) throw new Error("missing app");
-const root = element;
-let status: AppStatus | null = null;
-const escapeHtml = (value: unknown): string => String(value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c] ?? c));
-function error(value: unknown): void {
-  const message = value && typeof value === "object" && "message" in value ? value.message : value;
-  const output = document.querySelector("#error");
-  if (output) output.textContent = String(message);
+import type * as T from "./types.ts";
+import { escapeHtml as e, field, area, select, text, lines, number, checked, requestId, periodPicker, period, keyInput, targetFields, client, approve, paidFields, paidPool, id } from "./forms.ts";
+const element=document.querySelector<HTMLDivElement>("#app");if(!element)throw new Error("missing app");const root=element;
+root.innerHTML='<main><h1>Hellas Gate</h1><p id="error" role="alert">Connecting to local authority…</p><button data-action="retry">Retry connection</button></main>';
+type View="run"|"serve"|"contacts"|"gateway"|"trust"|"history"|"settings";
+let view:View="settings";
+let status:T.AppStatus|null=null;
+let provider:T.ProviderView={revision:0,upstreams:[],resources:[]};
+let output="";let activeRun="";
+function error(value:unknown):void {const message=value&&typeof value==="object"&&"message" in value?value.message:value;let node=document.querySelector("#error");if(!node){node=document.createElement("p");node.id="error";node.setAttribute("role","alert");root.append(node);}node.textContent=String(message);}
+function message(value:string):void {const node=document.querySelector("#message");if(node)node.textContent=value;}
+function secret(value:string,title:string):void {const dialog=document.createElement("dialog");dialog.innerHTML=`<h2>${e(title)}</h2><p>Copy this handoff through a private channel. It is not saved in browser storage.</p><textarea readonly></textarea><form method="dialog"><button>Close</button></form>`;const node=dialog.querySelector("textarea");if(node)node.value=value;document.body.append(dialog);dialog.addEventListener("close",()=>dialog.remove(),{once:true});dialog.showModal();}
+async function render():Promise<void>{
+  status=await api.status();const initialized=status.identity.initialized;
+  if(!initialized&&view!=="history")view="settings";
+  root.innerHTML=`<div class="shell"><aside><div class="brand"><span class="mark">Η</span><div>Hellas<small>Gate</small></div></div><nav>${(["run","serve","contacts","gateway","trust","history","settings"] as View[]).map(v=>`<button data-view="${v}" ${!initialized&&v!=="settings"&&v!=="history"?"disabled":""}>${v[0]?.toUpperCase()}${v.slice(1)}</button>`).join("")}</nav><p id="rail-status">Serve ${e(status.provider.state)} · Gateway ${e(status.gateway.state)}</p></aside><main><p id="error" role="alert"></p><p id="message" role="status"></p><div id="content"></div></main></div>`;
+  const content=document.querySelector("#content");if(!content)return;
+  switch(view){
+    case "settings":content.innerHTML=settings();break;
+    case "history":content.innerHTML=historyView(await api.history());break;
+    case "trust":content.innerHTML=trustView(await api.trust());break;
+    case "serve":provider=await api.provider();content.innerHTML=serve();break;
+    case "contacts":provider=await api.provider();content.innerHTML=contactsView(await api.contacts(),await api.shares(),await api.accesses());break;
+    case "run":content.innerHTML=run(await api.accesses(),await api.trust());break;
+    case "gateway":content.innerHTML=gateway(await api.accesses(),await api.trust(),await api.gatewayKeys());break;
+  }
+  updateFunding();
 }
-async function render(): Promise<void> {
-  try { status = await api.status(); } catch (e) { error(e); return; }
-  const id = status.identity;
-  root.innerHTML = `<div class="shell"><aside><div class="brand">Hellas Gate</div><nav><button id="settings">Settings</button><button id="history">History</button></nav></aside><main><p id="error" role="alert"></p><div id="content"><h1>Settings</h1>
-    ${id.initialized ? `<p>Person: ${escapeHtml(id.fingerprint)}</p><p>${escapeHtml(id.detail)}</p><dl><dt>Principal</dt><dd>${escapeHtml(id.principal)}</dd><dt>Node key</dt><dd>${escapeHtml(id.nodeKey)}</dd><dt>Transport</dt><dd>${escapeHtml(id.transportId)}</dd><dt>Authority</dt><dd>${escapeHtml(id.authority)} / generation ${id.generation}</dd><dt>Local control</dt><dd>${escapeHtml(status.socketPath)}</dd></dl><label>Signed contact card<textarea readonly>${escapeHtml(id.contactCard)}</textarea></label>` : `<p>${escapeHtml(id.detail)}</p><form id="initialize"><label>Name<input name="name" maxlength="64" required></label><label><input name="software" type="checkbox" required>I choose a software passkey for development (UP only).</label><button>Create identity</button></form>`}
-  </div></main></div>`;
-  document.querySelector("#settings")?.addEventListener("click", () => { void render(); });
-  document.querySelector("#history")?.addEventListener("click", () => { void showHistory().catch(error); });
-  document.querySelector<HTMLFormElement>("#initialize")?.addEventListener("submit", e => {
-    e.preventDefault(); const name = new FormData(e.currentTarget as HTMLFormElement).get("name");
-    void api.initializeSoftware(String(name)).then(render).catch(error);
-  });
+function settings():string{
+  if(!status)return "";const i=status.identity;
+  if(!i.initialized&&i.recoveryAvailable)return `<h1>Owner recovery required</h1><p>${e(i.detail)}</p><p>Recovery uses the existing software owner passkey, advances authority generation and invalidates existing credentials. Reissue device access afterwards.</p><button data-action="recover-software">Approve offline owner recovery</button>`;
+  if(!i.initialized)return `<h1>Set up Gate</h1><p>${e(i.detail)}</p><form id="initialize">${field("name","Your name")}<label><input name="software" type="checkbox" required>I explicitly choose a software passkey for development (UP only).</label><button>Create identity</button></form>`;
+  return `<h1>Settings</h1><p>${e(i.detail)}</p><dl><dt>Person fingerprint</dt><dd>${e(i.fingerprint)}</dd><dt>Principal</dt><dd>${e(i.principal)}</dd><dt>This device's node key</dt><dd>${e(i.nodeKey)}</dd><dt>Transport</dt><dd>${e(i.transportId)}</dd><dt>Authority / generation</dt><dd>${e(i.authority)} / ${i.generation}</dd><dt>Provider assurance</dt><dd>${e(i.attestation)}</dd><dt>Local control</dt><dd>${e(status.socketPath)} (pinned TLS and device credential required)</dd><dt>Version</dt><dd>${e(status.version)}</dd></dl><label>Signed person contact card<textarea readonly>${e(i.contactCard)}</textarea></label><p>Share the card and confirm the device node key separately. The card identifies a person.</p><p>Native passkey integration and signed application checks are still required for desktop release.</p>`;
 }
-async function showHistory(): Promise<void> {
-  const entries = await api.history();
-  const content = document.querySelector("#content");
-  if (!content) return;
-  content.innerHTML = `<h1>History</h1><button id="clear">Clear history</button>${entries.map(entry => `<article><strong>${escapeHtml(entry.status)}</strong><pre>${escapeHtml(entry.request)}</pre><pre>${escapeHtml(entry.result)}</pre><p>${escapeHtml(entry.verification || entry.error)}</p><button data-delete="${escapeHtml(entry.id)}">Delete</button></article>`).join("")}`;
-  document.querySelector("#clear")?.addEventListener("click", () => { void api.clearHistory().then(showHistory).catch(error); });
-  content.querySelectorAll<HTMLButtonElement>("[data-delete]").forEach(button => button.addEventListener("click", () => { void api.deleteHistory(button.dataset.delete ?? "").then(showHistory).catch(error); }));
+function serve():string{
+  const upstreams=provider.upstreams.map(u=>`<article><h3>${e(u.service)} / ${e(u.method)}</h3><p>${e(u.hosts.join(", "))}</p>${u.keys.map(k=>`<p>Key ${e(k.name)} · ${e(k.fingerprint)} · last use ${k.lastUse===null?"unavailable":new Date(k.lastUse).toLocaleString()} <button data-action="remove-key" data-service="${e(u.service)}" data-method="${e(u.method)}" data-key="${e(k.name)}">Remove key</button></p>`).join("")}<button data-action="remove-endpoint" data-service="${e(u.service)}" data-method="${e(u.method)}">Remove endpoint</button></article>`).join("");
+  return `<h1>Serve</h1><p>${e(status?.provider.state)} · ${e(status?.provider.detail)}</p><button data-action="bind-apple">Bind Apple App Attest provider</button><button data-action="bind-software">Bind software provider (development, non-private)</button><button data-action="provider-start">Start</button><button data-action="provider-stop">Stop and drain</button><p>Configuration revision ${provider.revision}</p>${upstreams}
+  <details><summary>Add or change upstream endpoint</summary><form id="endpoint">${field("service","Service")}${field("method","Method")}${area("hosts","Exact allowed DNS hosts") }<label><input name="private" type="checkbox">Explicitly permit private network addresses</label><button>Approve endpoint</button></form></details>
+  <details><summary>Add or replace an upstream key</summary><p>Keys are write-only. Stored keys display a label and fingerprint.</p><form id="upstream-key">${select("mode","Operation",[["add","Add key to existing endpoint"],["replace","Replace key (owner approval)"]])}${field("service","Existing service")}${field("method","Existing method")}${field("key","Key label")}${area("origins","Exact allowed HTTPS origins")}${area("paths","Exact allowed paths")}${field("methods","Allowed methods","POST")}${field("header","Credential header","authorization")}${field("prefix","Header prefix","Bearer ","text",false)}${field("secret","New secret","","password")}<button>Save key</button></form></details>
+  <details open><summary>Configure resource</summary><form id="resource">${field("name","Resource name")}${field("service","Configured service")}${field("method","Configured method")}${select("kind","Provider settings",[["https","HTTPS"],["openAi","OpenAI Responses"]])}${field("credential","Key label (optional for HTTPS)","","text",false)}${field("model","OpenAI model","","text",false)}${field("tokens","Maximum output tokens","1024","number")}${field("origin","HTTPS origin","","text",false)}${area("paths","HTTPS paths","/",false)}${field("methods","HTTPS methods","GET")}${field("bytes","Maximum response bytes","1048576","number")}<button>Activate resource</button></form></details>
+  <h2>Resources</h2>${provider.resources.map(r=>`<p>${e(r.name)} · ${e(r.service)}/${e(r.method)} · ${e(r.resource.kind)}</p>`).join("")}`;
 }
-void render();
+function contactsView(contacts:T.ContactView[],shares:T.ShareView[],access:T.AccessView[]):string{
+  return `<h1>Contacts and access</h1><form id="contact">${area("card","Signed ContactCard")}${field("holder","Recipient device node key")}${field("label","Local label","","text",false)}<label><input name="confirm" type="checkbox" required>I confirmed this device key with the person whose fingerprint I checked.</label><button>Add verified contact/device</button></form>
+  ${contacts.map(c=>`<p>${e(c.label||c.name)} · ${e(c.fingerprint)} · ${c.devices.length} confirmed device(s)</p>`).join("")}
+  <h2>Share selected upstreams</h2><form id="share">${requestId()}${select("contact","Verified person",contacts.map(c=>[c.id,`${c.label||c.name} · ${c.fingerprint}`]))}${select("holder","Confirmed recipient device",contacts.flatMap(c=>c.devices.map(d=>[d,`${c.label||c.name}: ${d}`] as [string,string])))}${field("label","Share label")}${periodPicker()}${provider.resources.map(r=>`<label><input name="resources" type="checkbox" value="${e(r.name)}">${e(r.name)} (${e(r.service)}/${e(r.method)})</label>`).join("")}${field("quota","Requests per day, per selected upstream","100","number")}${field("concurrency","Concurrent requests per upstream","1","number")}<button>Approve device credential and sharing grant</button></form>
+  <h2>Issued shares</h2>${shares.map(s=>`<article><p>${e(s.label)} · ${e(s.contact)} · device ${e(s.holder)}</p><p>Expires ${new Date(s.expires).toLocaleString()} · credential ${e(s.credential)}</p><button data-action="export-access" data-id="${e(s.id)}">Reconcile and export bundle</button><button data-action="revoke-share" data-id="${e(s.id)}">Revoke grant and credential</button>${s.allowances.map(a=>`<p>${e(a)} <button data-action="pause" data-id="${e(a)}">Pause</button><button data-action="resume" data-id="${e(a)}">Resume</button></p>`).join("")}</article>`).join("")}
+  <h2>Import access</h2><form id="access">${area("bundle","AccessBundle v2") }<p>Import checks this person and device. Approve provider trust separately.</p><button>Import into vault</button></form>${access.map(a=>`<p>${e(a.label||a.id)} · expires ${new Date(a.expires).toLocaleString()} · allowances ${e(a.allowances.join(", "))}</p>`).join("")}`;
+}
+function run(access:T.AccessView[],policies:T.TrustRecord[]):string {return `<h1>Run Fetch</h1><form id="run">${targetFields(access,policies)}${area("input","Request JSON (actual Fetch content)",'{"model":"your-model","input":"Hello","max_output_tokens":64,"store":false}')}<button>Run</button><button type="button" data-action="cancel">Cancel</button></form><pre id="output">${e(output)}</pre>${paidFields()}`;}
+function gateway(access:T.AccessView[],policies:T.TrustRecord[],keys:T.GatewayKeyView[]):string{return `<h1>Gateway</h1><p>${e(status?.gateway.state)} · ${e(status?.gateway.detail)}</p><button data-action="gateway-address">Show listener address</button><button data-action="gateway-stop">Stop and drain</button><form id="gateway">${targetFields(access,policies)}${select("mode","Presentation",[["responses","Responses"],["http","HTTP (paid)"]])}${field("port","Loopback port (0 selects a free port)","0","number")}<label><input name="zdr" type="checkbox" checked>Zero data retention (no request archive)</label><fieldset><legend>HTTP route</legend>${field("path","Local path","/proxy","text",false)}${field("httpMethod","Method","POST","text",false)}${field("url","Upstream HTTPS URL","","text",false)}${field("credential","Provider key alias","","text",false)}${field("bytes","Response byte ceiling","1048576","number")}</fieldset><button>Apply and start gateway</button></form><h2>Named gateway keys</h2><form id="gateway-key">${requestId()}${field("label","Key name")}${periodPicker()}<button>Issue gateway.invoke-only key</button></form>${keys.map(k=>`<article><p>${e(k.label)} · ${e(k.id)} · expires ${new Date(k.expires).toLocaleString()} · ${k.revoked?"revoked":"active"}</p>${k.revoked?"":`<button data-action="revoke-key" data-id="${e(k.id)}">Revoke</button><button data-action="rotate-key" data-id="${e(k.id)}" data-label="${e(k.label)}">Rotate (new 1 week key; revoke old)</button>`}</article>`).join("")}${paidFields()}`;}
+function trustView(records:T.TrustRecord[]):string{return `<h1>Provider trust</h1><p>Approve pins from an independent source. Importing access grants no trust.</p>${records.map(p=>`<article><strong>${e(p.id)} · revision ${p.revision}</strong><p>${e(p.genesis)} · ${e(p.assurance)}</p><p>${e(p.environments.join(", "))}</p><p>Approval source: ${e(p.source)}</p></article>`).join("")}<form id="trust">${field("id","Policy ID")}${field("revision","Expected revision (0 for new)","0","number")}${field("genesis","Independent provider genesis digest")}${area("environments","Independent execution environment digests")}<label><input name="apple" type="checkbox">Require Apple App Attest</label>${field("appId","Approved Apple app ID","","text",false)}${area("cdHashes","Approved CDHash pins","",false)}${field("reason","Source of approval")}<label><input name="confirm" type="checkbox" required>I checked these pins independently.</label><button>Approve policy</button></form>`;}
+function historyView(entries:T.HistoryEntry[]):string{return `<h1>History</h1><button data-action="clear-history">Clear history</button>${entries.map(h=>`<article><strong>${e(h.status)}</strong><pre>${e(h.request)}</pre><pre>${e(h.result)}</pre><p>${e(h.verification||h.error)}</p><button data-action="delete-history" data-id="${e(h.id)}">Delete</button></article>`).join("")}`;}
+function updateFunding():void {
+  root.querySelectorAll<HTMLFormElement>("#run,#gateway").forEach(form=>{const funding=form.querySelector<HTMLSelectElement>('[name="funding"]')?.value;for(const name of ["accessId","allowance","resource"]){const input=form.querySelector<HTMLInputElement>(`[name="${name}"]`);if(input){input.disabled=funding==="paid";input.required=funding!=="paid";}}for(const name of ["poolId","provider","service","method"]){const input=form.querySelector<HTMLInputElement>(`[name="${name}"]`);if(input){input.disabled=funding!=="paid";input.required=funding==="paid";}}});
+}
+root.addEventListener("change",updateFunding);
+root.addEventListener("click",event=>{const button=(event.target as Element).closest<HTMLButtonElement>("button");if(!button)return;if(button.dataset.view){view=button.dataset.view as View;void render().catch(error);return;}if(button.dataset.action)void action(button).catch(error);});
+async function action(button:HTMLButtonElement):Promise<void>{
+  const action=button.dataset.action;const record=button.dataset.id??"";
+  if(action==="retry"){await render();return;}
+  else if(action==="recover-software"){if(!await approve("Recover this node using its software owner passkey. Advance authority generation, invalidate old credentials and create new local administration/listener credentials. Existing contact devices need explicit reissue."))return;await api.recoverSoftware();}
+  else if(action==="cancel"){if(activeRun)await api.cancel(activeRun);return;}
+  if(action==="bind-apple"||action==="bind-software"){const software=action==="bind-software";if(!await approve(`Bind this node as ${software?"an explicitly non-private software provider":"an Apple App Attest provider"}. The owner passkey approves the binding.`))return;await api.bindProvider(software);}
+  else if(action==="provider-start")await api.setProvider(true);
+  else if(action==="provider-stop")await api.setProvider(false);
+  else if(action==="remove-endpoint"){if(!await approve(`Remove endpoint ${button.dataset.service}/${button.dataset.method} and its upstream credentials.`))return;await api.configureProvider(provider.revision,{kind:"removeEndpoint",service:button.dataset.service??"",method:button.dataset.method??""});}
+  else if(action==="remove-key"){if(!await approve(`Remove upstream key ${button.dataset.key} from ${button.dataset.service}/${button.dataset.method}.`))return;await api.configureProvider(provider.revision,{kind:"removeKey",service:button.dataset.service??"",method:button.dataset.method??"",key:button.dataset.key??""});}
+  else if(action==="export-access"){if(!await approve(`Reconcile the exact prepared credential for share ${record} and export its device-bound access bundle.`))return;secret(await api.exportAccess(record),"Device access bundle");return;}
+  else if(action==="revoke-share"){if(!await approve(`Revoke share ${record}, including its grant and device credential. Running work will observe revocation.`))return;await api.revokeShare(record);}
+  else if(action==="pause"||action==="resume")await api.pauseAllowance(record,action==="pause");
+  else if(action==="gateway-stop")await api.setGateway(false);
+  else if(action==="gateway-address"){message(await api.gatewayAddress());return;}
+  else if(action==="revoke-key"){if(!await approve(`Revoke gateway key ${record}. New HTTP requests using it will be refused.`))return;await api.revokeGatewayKey(record);}
+  else if(action==="rotate-key"){if(!await approve(`Issue a new 1 week gateway.invoke key named ${button.dataset.label}, then revoke old key ${record}.`))return;const [key,bearer]=await api.issueGatewayKey({requestId:id(),label:button.dataset.label??"Rotated key",period:"week"});try{await api.revokeGatewayKey(record);}catch(e){secret(bearer,`New key ${key.id}; old key revocation failed`);throw e;}secret(bearer,`Rotated gateway key ${key.id}`);}
+  else if(action==="delete-history")await api.deleteHistory(record);
+  else if(action==="clear-history")await api.clearHistory();
+  await render();
+}
+root.addEventListener("submit",event=>{const form=event.target as HTMLFormElement;if(!form.id)return;event.preventDefault();void submit(form).catch(error);});
+async function submit(form:HTMLFormElement):Promise<void>{
+  const data=new FormData(form);const operation=form.id;
+  if(operation==="initialize"){if(!await approve(`Create software owner ${text(data,"name")}, bootstrap this node and issue its application and listener credentials. Software assertions claim user presence only.`))return;await api.initializeSoftware(text(data,"name"));}
+  else if(operation==="endpoint"){if(!await approve(`Add/change endpoint ${text(data,"service")}/${text(data,"method")} with exact hosts ${lines(data,"hosts").join(", ")}.`))return;await api.configureProvider(provider.revision,{kind:"endpoint",service:text(data,"service"),method:text(data,"method"),hosts:lines(data,"hosts"),allowPrivateAddresses:checked(data,"private")});}
+  else if(operation==="upstream-key"){const key=keyInput(data);if(text(data,"mode")==="replace"){if(!await approve(`Replace upstream key ${key.key} for ${key.service}/${key.method}. Stored secrets remain write-only.`))return;await api.configureProvider(provider.revision,{kind:"replaceKey",key});}else await api.configureProvider(provider.revision,{kind:"addKey",key});}
+  else if(operation==="resource"){const resource:T.ResourceKind=text(data,"kind")==="openAi"?{kind:"openAi",model:text(data,"model"),maxOutputTokens:number(data,"tokens"),credential:text(data,"credential")}:{kind:"https",origin:text(data,"origin"),paths:lines(data,"paths"),methods:lines(data,"methods"),credential:text(data,"credential")||null,maxResponseBytes:number(data,"bytes"),tlsRoots:[]};await api.resource(provider.revision,{name:text(data,"name"),service:text(data,"service"),method:text(data,"method"),resource});}
+  else if(operation==="contact")await api.addContact({card:text(data,"card"),holder:text(data,"holder"),label:text(data,"label"),confirmedHolder:checked(data,"confirm")});
+  else if(operation==="share"){const resources=data.getAll("resources").map(String);if(!resources.length)throw new Error("Select at least one upstream");if(!await approve(`Issue one device credential to person ${text(data,"contact")}, holder ${text(data,"holder")}, for ${resources.join(", ")}, ${number(data,"quota")} requests/day per selected upstream, lifetime ${period(data)}.`))return;await api.share({requestId:text(data,"requestId"),contact:text(data,"contact"),holder:text(data,"holder"),allowances:resources.map(resource=>({resource,requestsPerDay:number(data,"quota"),maxInFlight:number(data,"concurrency")})),period:period(data),label:text(data,"label")});}
+  else if(operation==="access")await api.importAccess(text(data,"bundle"));
+  else if(operation==="trust")await api.approveTrust({id:text(data,"id"),expectedRevision:number(data,"revision"),genesis:text(data,"genesis"),apple:checked(data,"apple"),environments:lines(data,"environments"),appId:text(data,"appId"),cdHashes:lines(data,"cdHashes"),reason:text(data,"reason")});
+  else if(operation==="gateway-key"){if(!await approve(`Issue gateway.invoke-only key ${text(data,"label")} for ${period(data)}.`))return;const [key,bearer]=await api.issueGatewayKey({requestId:text(data,"requestId"),label:text(data,"label"),period:period(data)});secret(bearer,`Gateway key ${key.id}, expires ${new Date(key.expires).toLocaleString()}`);}
+  else if(operation==="gateway"){const httpRoutes:T.HttpRouteInput[]=text(data,"mode")==="http"?[{path:text(data,"path"),method:text(data,"httpMethod"),url:text(data,"url"),credential:text(data,"credential")||null,maxResponseBytes:number(data,"bytes"),tlsRoots:[]}]:[];await api.setGateway(true,{client:client(data),httpRoutes,port:number(data,"port"),zdr:checked(data,"zdr")});}
+  else if(operation==="paid-pool")await api.savePaidPool(paidPool(data));
+  else if(operation==="run"){
+    output="";await api.run({kind:"fetch",input:String(data.get("input")??""),client:client(data)},event=>{
+      if(event.type==="started")activeRun=event.data.runId;
+      else if(event.type==="output")output+=event.data.text+"\n";
+      else if(event.type==="verification")output+="Verified: "+event.data.summary+"\n";
+      else if(event.type==="failed")output+="Failed: "+event.data.message+"\n";
+      else if(event.type==="cancelled")output+="Cancelled; accepted work is settled by the SDK.\n";
+      if(event.type==="finished"||event.type==="failed"||event.type==="cancelled")activeRun="";
+      const node=document.querySelector("#output");if(node)node.textContent=output;
+    });return;
+  }
+  await render();message("Saved");
+}
+void render().catch(error);
+setInterval(()=>{void api.status().then(value=>{status=value;const node=document.querySelector("#rail-status");if(node)node.textContent=`Serve ${value.provider.state} · Gateway ${value.gateway.state}`;}).catch(error);},5000);

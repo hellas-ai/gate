@@ -1,241 +1,171 @@
-mod platform {
-    use std::fs;
-    use std::io::{ErrorKind, Write};
-    use std::path::Path;
-    use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
+//! Provider attestation is a fourth key role, independent of the passkey owner.
+use crate::{apple::AppleAppAttestRoot, control::LocalNode, vault};
+use anyhow::ensure;
+use hellas_attestation::{AttestationError, RootProver};
+use hellas_auth::{Digest, ProducerSigningKey, PublicKey};
+use hellas_rpc::{
+    PlatformCredential, PlatformEnrollment, ProviderEnrollmentBundle, ProviderGenesisStatement,
+    RootKind, RootProof, SignedProviderGenesis,
+};
+use std::{path::Path, sync::Arc};
 
-    use anyhow::{Context, bail};
-    use hellas_attestation::{
-        AnchorTime, AppleCredential, ApplePolicy, RegisteredAppleCredential, RootProver,
-        apple_app_attest_root_ca, apple_credential_identity, register_apple,
-        verify_apple_provider_genesis,
-    };
-    use hellas_rpc::{
-        AppleAppAttestEnrollment, DagCborDecoder, DagCborEncoder, Digest, PlatformCredential,
-        PlatformEnrollment, ProviderEnrollmentBundle, ProviderGenesisStatement, PublicKey,
-        RootKind, SignedProviderGenesis,
-    };
-    use hellas_sdk::ClientIdentity;
-
-    use crate::apple::AppleAppAttestRoot;
-
-    const TAG: &str = "hellas.gate.provider-identity.v1";
-    const VERSION: u64 = 1;
-
-    pub struct ProviderIdentity {
-        root: Arc<AppleAppAttestRoot>,
-        enrollment: ProviderEnrollmentBundle,
-    }
-
-    impl ProviderIdentity {
-        pub fn enrollment(&self) -> &ProviderEnrollmentBundle {
-            &self.enrollment
-        }
-
-        pub fn root(&self) -> Arc<AppleAppAttestRoot> {
-            self.root.clone()
+pub enum ProviderRoot {
+    Software(ProducerSigningKey),
+    Apple(Arc<AppleAppAttestRoot>),
+}
+impl RootProver for ProviderRoot {
+    async fn prove_statement(&self, bytes: &[u8]) -> Result<RootProof, AttestationError> {
+        match self {
+            Self::Software(key) => Ok(RootProof::Software(
+                key.sign_digest(Digest::hash(bytes))
+                    .map_err(|e| AttestationError::Platform(e.to_string()))?,
+            )),
+            Self::Apple(root) => root.prove_statement(bytes).await,
         }
     }
-
-    pub async fn load_or_create(
-        path: &Path,
-        client: &ClientIdentity,
-    ) -> anyhow::Result<ProviderIdentity> {
-        match fs::read(path) {
-            Ok(bytes) => materialize(&bytes, client),
-            Err(error) if error.kind() == ErrorKind::NotFound => create(path, client).await,
-            Err(error) => Err(error).with_context(|| format!("reading {} failed", path.display())),
-        }
-    }
-
-    async fn create(path: &Path, client: &ClientIdentity) -> anyhow::Result<ProviderIdentity> {
-        let installation_nonce = installation_nonce(client);
-        let enrollment_statement = enrollment_statement(installation_nonce);
-        let (root, credential) =
-            tokio::task::spawn_blocking(move || AppleAppAttestRoot::create(&enrollment_statement))
-                .await
-                .context("Apple App Attest enrollment task failed")??;
-        let validation_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .context("system clock is before the Unix epoch")?
-            .as_secs();
-        let credential_identity = apple_credential_identity(&credential.attestation)
-            .context("reading Apple credential identity")?;
-        let registered = register_apple(
-            &credential,
-            credential_identity.rp_id_hash,
-            apple_app_attest_root_ca(),
-            AnchorTime(validation_time),
-        )
-        .context("registering Apple App Attest credential")?;
-        let statement = provider_statement(client, installation_nonce, &credential, &registered);
-        let genesis = SignedProviderGenesis {
-            root_proof: root.prove_statement(&statement.canonical_bytes()).await?,
-            statement,
-        };
-        let enrollment = ProviderEnrollmentBundle {
-            genesis,
-            platform: PlatformEnrollment::AppleAppAttest(AppleAppAttestEnrollment {
-                attestation_object: credential.attestation,
-                client_data_hash: credential.client_data_hash,
-                validation_time,
-            }),
-        };
-        validate(&enrollment, client)?;
-        let stored = encode(root.key(), &enrollment);
-        persist(path, &stored)?;
-        Ok(ProviderIdentity {
-            root: Arc::new(root),
-            enrollment,
-        })
-    }
-
-    fn materialize(bytes: &[u8], client: &ClientIdentity) -> anyhow::Result<ProviderIdentity> {
-        let (key, enrollment) = decode(bytes)?;
-        validate(&enrollment, client)?;
-        let PlatformEnrollment::AppleAppAttest(platform) = &enrollment.platform else {
-            bail!("Gate provider identity does not contain Apple enrollment");
-        };
-        let credential = AppleCredential {
-            attestation: platform.attestation_object.clone(),
-            client_data_hash: platform.client_data_hash,
-        };
-        Ok(ProviderIdentity {
-            root: Arc::new(AppleAppAttestRoot::load(key, credential.content_id())),
-            enrollment,
-        })
-    }
-
-    fn validate(
-        enrollment: &ProviderEnrollmentBundle,
-        client: &ClientIdentity,
-    ) -> anyhow::Result<()> {
-        let PlatformEnrollment::AppleAppAttest(platform) = &enrollment.platform else {
-            bail!("Gate provider identity requires Apple App Attest enrollment");
-        };
-        let credential = AppleCredential {
-            attestation: platform.attestation_object.clone(),
-            client_data_hash: platform.client_data_hash,
-        };
-        let credential_identity = apple_credential_identity(&credential.attestation)
-            .context("reading persisted Apple credential identity")?;
-        let registered = register_apple(
-            &credential,
-            credential_identity.rp_id_hash,
-            apple_app_attest_root_ca(),
-            AnchorTime(platform.validation_time),
-        )
-        .context("registering persisted Apple App Attest credential")?;
-        let statement = &enrollment.genesis.statement;
-        anyhow::ensure!(
-            statement.producer_public_key == client.caller_key().public_key()
-                && statement.transport_public_key
-                    == PublicKey::Ed25519(*client.node_id().as_bytes()),
-            "persisted Apple provider identity does not match this Gate installation"
-        );
-        verify_apple_provider_genesis(
-            &enrollment.genesis,
-            &registered,
-            &ApplePolicy {
-                expected_rp_id_hash: credential_identity.rp_id_hash,
-                allowed_cd_hashes: vec![credential_identity.cd_hash],
-            },
-        )
-        .context("verifying persisted Apple provider genesis")?;
-        Ok(())
-    }
-
-    fn provider_statement(
-        client: &ClientIdentity,
-        installation_nonce: [u8; 32],
-        credential: &AppleCredential,
-        registered: &RegisteredAppleCredential,
-    ) -> ProviderGenesisStatement {
-        ProviderGenesisStatement {
-            root_kind: RootKind::SecureEnclave,
-            root_public_key: PublicKey::P256(registered.public_key),
-            producer_public_key: client.caller_key().public_key(),
-            transport_public_key: PublicKey::Ed25519(*client.node_id().as_bytes()),
-            platform_credential: PlatformCredential::Registered(credential.content_id()),
-            installation_nonce,
-        }
-    }
-
-    fn installation_nonce(client: &ClientIdentity) -> [u8; 32] {
-        let mut encoder = DagCborEncoder::new();
-        encoder.array(3);
-        encoder.str("hellas.gate.installation-nonce.v1");
-        encoder.bytes(&client.transport_secret_bytes());
-        encoder.bytes(&client.caller_secret_bytes());
-        *Digest::hash(&encoder.into_bytes()).as_bytes()
-    }
-
-    fn enrollment_statement(installation_nonce: [u8; 32]) -> Vec<u8> {
-        let mut encoder = DagCborEncoder::new();
-        encoder.array(2);
-        encoder.str("hellas.apple.app-attest.enrollment.v1");
-        encoder.bytes(&installation_nonce);
-        encoder.into_bytes()
-    }
-
-    fn encode(key: &str, enrollment: &ProviderEnrollmentBundle) -> Vec<u8> {
-        let mut encoder = DagCborEncoder::new();
-        encoder.array(4);
-        encoder.str(TAG);
-        encoder.u64(VERSION);
-        encoder.str(key);
-        encoder.bytes(&enrollment.canonical_bytes());
-        encoder.into_bytes()
-    }
-
-    fn decode(bytes: &[u8]) -> anyhow::Result<(String, ProviderEnrollmentBundle)> {
-        let mut decoder = DagCborDecoder::new(bytes);
-        decoder.array(4, "Gate provider identity")?;
-        decoder.tag(TAG)?;
-        anyhow::ensure!(
-            decoder.u64("Gate provider identity version")? == VERSION,
-            "unsupported Gate provider identity version"
-        );
-        let key = decoder.text("Apple App Attest key")?.to_owned();
-        let enrollment =
-            ProviderEnrollmentBundle::from_canonical_bytes(decoder.bytes("provider enrollment")?)?;
-        decoder.finish()?;
-        anyhow::ensure!(
-            encode(&key, &enrollment) == bytes,
-            "Gate provider identity is not canonical"
-        );
-        Ok((key, enrollment))
-    }
-
-    fn persist(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-        let directory = path
-            .parent()
-            .context("provider identity path has no parent")?;
-        let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
-        // On Windows the file inherits the data directory's owner-only DACL
-        // (create_private_directory); there is no mode to set.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            temporary
-                .as_file()
-                .set_permissions(fs::Permissions::from_mode(0o600))?;
-        }
-        temporary.write_all(bytes)?;
-        temporary.flush()?;
-        temporary.as_file().sync_all()?;
-        match temporary.persist_noclobber(path) {
-            Ok(_) => {
-                // Directory fsync has no Windows counterpart.
-                #[cfg(unix)]
-                fs::File::open(directory)?.sync_all()?;
-                Ok(())
-            }
-            Err(_) if path.exists() => Ok(()),
-            Err(error) => Err(error.error).context("persisting provider identity failed"),
+    async fn prove_open_binding(&self, digest: Digest) -> Result<RootProof, AttestationError> {
+        match self {
+            Self::Software(key) => Ok(RootProof::Software(
+                key.sign_digest(digest)
+                    .map_err(|e| AttestationError::Platform(e.to_string()))?,
+            )),
+            Self::Apple(root) => root.prove_open_binding(digest).await,
         }
     }
 }
-
-pub use platform::{ProviderIdentity, load_or_create};
+pub struct ProviderIdentity {
+    pub enrollment: ProviderEnrollmentBundle,
+    pub root: Arc<ProviderRoot>,
+}
+impl ProviderIdentity {
+    pub async fn load_or_create(
+        directory: &Path,
+        local: &LocalNode,
+        software: bool,
+    ) -> anyhow::Result<Self> {
+        if let Some(record) = vault::read::<String>(&directory.join("provider-enrollment.json"))? {
+            use base64::Engine;
+            let enrollment = ProviderEnrollmentBundle::from_canonical_bytes(
+                &base64::engine::general_purpose::STANDARD.decode(record)?,
+            )?;
+            hellas_sdk::work::model::grant::records::verify_provider(&enrollment)?;
+            ensure!(
+                enrollment.genesis.statement.producer_public_key
+                    == local.identity.node.node_key().public_key()
+                    && enrollment.genesis.statement.transport_public_key
+                        == PublicKey::Ed25519(*local.identity.node.node_id().as_bytes()),
+                "provider enrollment differs from node"
+            );
+            let root = match &enrollment.platform {
+                PlatformEnrollment::Absent => {
+                    ensure!(
+                        software,
+                        "software provider enrollment cannot claim Apple assurance"
+                    );
+                    let bytes = local.vault.required("provider-software-root").await?;
+                    ProviderRoot::Software(ProducerSigningKey::from_secret_bytes(
+                        bytes.as_slice().try_into()?,
+                    )?)
+                }
+                PlatformEnrollment::AppleAppAttest(platform) => {
+                    ensure!(!software, "provider is already Apple-attested");
+                    let key = String::from_utf8(
+                        local
+                            .vault
+                            .required("provider-apple-reference")
+                            .await?
+                            .to_vec(),
+                    )?;
+                    let credential = hellas_attestation::AppleCredential {
+                        attestation: platform.attestation_object.clone(),
+                        client_data_hash: platform.client_data_hash,
+                    };
+                    ProviderRoot::Apple(Arc::new(AppleAppAttestRoot::load(
+                        key,
+                        credential.content_id(),
+                    )))
+                }
+            };
+            return Ok(Self {
+                enrollment,
+                root: Arc::new(root),
+            });
+        }
+        let nonce = crate::identity::random()?;
+        let (root, statement, platform) = if software {
+            let root = ProducerSigningKey::generate();
+            local
+                .vault
+                .set("provider-software-root", &root.to_secret_bytes())
+                .await?;
+            let statement = ProviderGenesisStatement {
+                root_kind: RootKind::Software,
+                root_public_key: root.public_key(),
+                producer_public_key: local.identity.node.node_key().public_key(),
+                transport_public_key: PublicKey::Ed25519(*local.identity.node.node_id().as_bytes()),
+                platform_credential: PlatformCredential::Absent,
+                installation_nonce: nonce,
+            };
+            (
+                ProviderRoot::Software(root),
+                statement,
+                PlatformEnrollment::Absent,
+            )
+        } else {
+            let mut encoder = hellas_rpc::DagCborEncoder::new();
+            encoder.array(2);
+            encoder.str("hellas.apple.app-attest.enrollment.v1");
+            encoder.bytes(&nonce);
+            let bytes = encoder.into_bytes();
+            let (root, credential) =
+                tokio::task::spawn_blocking(move || AppleAppAttestRoot::create(&bytes)).await??;
+            let validation_time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs();
+            let identity = hellas_attestation::apple_credential_identity(&credential.attestation)?;
+            let registered = hellas_attestation::register_apple(
+                &credential,
+                identity.rp_id_hash,
+                hellas_attestation::apple_app_attest_root_ca(),
+                hellas_attestation::AnchorTime(validation_time),
+            )?;
+            local
+                .vault
+                .set("provider-apple-reference", root.key().as_bytes())
+                .await?;
+            let statement = ProviderGenesisStatement {
+                root_kind: RootKind::SecureEnclave,
+                root_public_key: PublicKey::P256(registered.public_key),
+                producer_public_key: local.identity.node.node_key().public_key(),
+                transport_public_key: PublicKey::Ed25519(*local.identity.node.node_id().as_bytes()),
+                platform_credential: PlatformCredential::Registered(credential.content_id()),
+                installation_nonce: nonce,
+            };
+            let platform =
+                PlatformEnrollment::AppleAppAttest(hellas_rpc::AppleAppAttestEnrollment {
+                    attestation_object: credential.attestation,
+                    client_data_hash: credential.client_data_hash,
+                    validation_time,
+                });
+            (ProviderRoot::Apple(Arc::new(root)), statement, platform)
+        };
+        let enrollment = ProviderEnrollmentBundle {
+            genesis: SignedProviderGenesis {
+                root_proof: root.prove_statement(&statement.canonical_bytes()).await?,
+                statement,
+            },
+            platform,
+        };
+        hellas_sdk::work::model::grant::records::verify_provider(&enrollment)?;
+        use base64::Engine;
+        vault::write(
+            &directory.join("provider-enrollment.json"),
+            &base64::engine::general_purpose::STANDARD.encode(enrollment.canonical_bytes()),
+        )?;
+        // Binding is performed by the ordinary owner passkey session by the caller.
+        Ok(Self {
+            enrollment,
+            root: Arc::new(root),
+        })
+    }
+}

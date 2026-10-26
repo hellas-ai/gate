@@ -22,6 +22,21 @@ impl Vault {
             SecretStore::headless_files(directory.to_owned(), "gate-test").unwrap(),
         ))
     }
+    pub fn source(&self, key: &str, prefix: &str) -> hellas_providers::HttpSecret {
+        hellas_providers::HttpSecret::Store {
+            store: (*self.0).clone(),
+            key: key.to_owned(),
+            prefix: prefix.to_owned(),
+        }
+    }
+    pub fn blocking_delete(&self, key: &str) -> anyhow::Result<()> {
+        tokio::task::block_in_place(|| self.0.delete(key))?;
+        Ok(())
+    }
+    pub fn blocking_set(&self, key: &str, value: &[u8]) -> anyhow::Result<()> {
+        tokio::task::block_in_place(|| self.0.set(key, value))?;
+        Ok(())
+    }
     pub async fn get(&self, key: &str) -> anyhow::Result<Option<Zeroizing<Vec<u8>>>> {
         let store = self.0.clone();
         let key = key.to_owned();
@@ -48,7 +63,7 @@ impl Vault {
 }
 
 pub fn read<T: DeserializeOwned>(path: &Path) -> anyhow::Result<Option<T>> {
-    match hellas_private::read_bounded_regular_file(path, 4 << 20) {
+    match hellas_private::read_bounded_regular_file(path, 8 << 20) {
         Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.into()),

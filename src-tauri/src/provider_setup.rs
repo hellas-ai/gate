@@ -1,196 +1,823 @@
-//! Provider assembly is typechecked on every host platform.
-use crate::{dto::ProviderConfig, state::decode_record};
-use anyhow::Context as _;
-use hellas_rpc::protocol::work_grant::{
-    budget::{Limit, Meter, Window},
-    records::Principal,
-    resource::HttpsResource,
+//! Typed route composition. HostHandle owns every provider start, stop and drain.
+use crate::{
+    control::LocalNode,
+    dto::*,
+    provider_identity::ProviderIdentity,
+    vault::{self, Vault},
 };
+use anyhow::{Context, ensure};
+use hellas_auth::{
+    Digest,
+    authority::{ResourceId, Revision},
+};
+use hellas_providers::{
+    HttpCredential, HttpEgressPolicy, HttpFetchAdaptorFactory, HttpFetchProvider,
+};
+use hellas_sdk::work::model::{
+    fetch::{FetchPolicyV2, FetchRoutePolicy as WorkRoute, fetch_route_commitment},
+    grant::{
+        pricing::Pricing, records::GrantPolicy, resource::HttpsResource,
+        responses::ResponsesResource,
+    },
+    profile::WorkPolicy,
+};
+use hellas_sdk::{
+    FetchRoute, FetchRouteEntry, FetchRoutePolicy, FetchRouteRegistry,
+    node_control::{NodeControl, configuration::*, host::*},
+};
+use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     num::NonZeroU64,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
-#[derive(serde::Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct HttpsRoute {
+struct Configuration {
+    revision: u64,
+    port: Option<u16>,
+    policy_revisions: BTreeMap<String, u64>,
+    endpoints: BTreeMap<String, Endpoint>,
+    resources: Vec<ResourceInput>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Endpoint {
     service: String,
     method: String,
-    account: hellas_sdk::HttpProviderConfig,
-    resource: Option<Resource>,
+    hosts: Vec<String>,
+    private: bool,
+    keys: BTreeMap<String, Key>,
 }
-
-#[derive(serde::Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Resource {
-    name: String,
-    https: HttpsResource,
+struct Key {
+    origins: Vec<String>,
+    paths: Vec<String>,
+    methods: Vec<String>,
+    header: String,
+    prefix: String,
+    reference: String,
+    fingerprint: String,
+}
+#[derive(Clone)]
+pub struct Composition {
+    directory: PathBuf,
+    vault: Vault,
+    state: Arc<Mutex<Configuration>>,
+}
+fn route_id(service: &str, method: &str) -> String {
+    format!("{service}/{method}")
+}
+fn id(domain: &str, name: &str) -> ResourceId {
+    ResourceId(hellas_auth::hash_tuple(domain, &[name.as_bytes()]))
+}
+impl Composition {
+    pub fn open(directory: &Path, vault: Vault) -> anyhow::Result<Self> {
+        let config =
+            vault::read(&directory.join("provider-configuration.json"))?.unwrap_or_default();
+        Ok(Self {
+            directory: directory.to_owned(),
+            vault,
+            state: Arc::new(Mutex::new(config)),
+        })
+    }
+    fn snapshot(&self) -> anyhow::Result<Configuration> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("provider configuration lock failed"))?
+            .clone())
+    }
+    fn publish(&self, config: Configuration) -> anyhow::Result<()> {
+        let mut held = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("provider configuration lock failed"))?;
+        vault::write(&self.directory.join("provider-configuration.json"), &config)?;
+        *held = config;
+        Ok(())
+    }
+    pub fn policy(&self, name: &str) -> anyhow::Result<GrantPolicy> {
+        self.validate(&self.snapshot()?)?
+            .into_iter()
+            .find(|p| p.name == name)
+            .context("resource is not in the composition catalogue")
+    }
+    pub fn view(&self) -> anyhow::Result<ProviderView> {
+        let config = self.snapshot()?;
+        Ok(ProviderView {
+            revision: config.revision,
+            upstreams: config
+                .endpoints
+                .values()
+                .map(|e| UpstreamView {
+                    service: e.service.clone(),
+                    method: e.method.clone(),
+                    hosts: e.hosts.clone(),
+                    keys: e
+                        .keys
+                        .iter()
+                        .map(|(name, key)| UpstreamKeyView {
+                            name: name.clone(),
+                            fingerprint: key.fingerprint.clone(),
+                            last_use: None,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            resources: config.resources,
+        })
+    }
+    /// A composition catalogue is not authority; WorkControl must still activate it.
+    pub fn catalogue(&self, input: ResourceInput) -> anyhow::Result<()> {
+        let mut config = self.snapshot()?;
+        ensure!(
+            config
+                .endpoints
+                .contains_key(&route_id(&input.service, &input.method)),
+            "configure this endpoint first"
+        );
+        if config.resources.iter().any(|r| r == &input) {
+            return Ok(());
+        }
+        if let Some(old) = config.resources.iter().find(|r| r.name == input.name) {
+            ensure!(
+                old.service == input.service && old.method == input.method,
+                "a resource cannot move to another upstream account; choose a new resource name"
+            );
+        }
+        config.revision = config
+            .revision
+            .checked_add(1)
+            .context("provider revision overflow")?;
+        let revision = config
+            .policy_revisions
+            .entry(input.name.clone())
+            .or_insert(0);
+        *revision = revision
+            .checked_add(1)
+            .context("resource revision overflow")?;
+        config.resources.retain(|r| r.name != input.name);
+        config.resources.push(input);
+        ensure!(
+            config.resources.len() <= 16,
+            "at most 16 resources are supported"
+        );
+        self.validate(&config)?;
+        self.publish(config)
+    }
+    fn metadata(config: &Configuration) -> ProviderMetadata {
+        ProviderMetadata {
+            revision: config.revision,
+            endpoints: config
+                .endpoints
+                .values()
+                .map(|e| EndpointMetadata {
+                    service: e.service.clone(),
+                    method: e.method.clone(),
+                    allowed_hosts: e.hosts.clone(),
+                    keys: e.keys.keys().cloned().collect(),
+                })
+                .collect(),
+        }
+    }
+    fn http(&self, endpoint: &Endpoint) -> anyhow::Result<HttpFetchProvider> {
+        let credentials = endpoint
+            .keys
+            .iter()
+            .map(|(name, key)| {
+                (
+                    name.clone(),
+                    HttpCredential {
+                        allowed_origins: key.origins.clone(),
+                        allowed_paths: key.paths.clone(),
+                        allowed_methods: key.methods.clone(),
+                        trust_roots: hellas_rpc::http_fetch::HttpTrustRoots::WebPki,
+                        header_name: key.header.clone(),
+                        header_value: self.vault.source(&key.reference, &key.prefix),
+                    },
+                )
+            })
+            .collect();
+        Ok(HttpFetchProvider::new(
+            HttpEgressPolicy {
+                allowed_hosts: endpoint.hosts.clone(),
+                allow_private_addresses: endpoint.private,
+            },
+            credentials,
+        )?)
+    }
+    fn validate(&self, config: &Configuration) -> anyhow::Result<Vec<GrantPolicy>> {
+        ensure!(
+            config.endpoints.len() <= 16,
+            "at most 16 endpoints are supported"
+        );
+        for endpoint in config.endpoints.values() {
+            self.http(endpoint)?;
+        }
+        let mut names = std::collections::BTreeSet::new();
+        let mut policies = Vec::new();
+        for resource in &config.resources {
+            ensure!(names.insert(&resource.name), "duplicate resource name");
+            let route = route_id(&resource.service, &resource.method);
+            let endpoint = config
+                .endpoints
+                .get(&route)
+                .context("resource endpoint is missing")?;
+            let account = id("hellas.gate.account.v1", &route);
+            let resource_id = id("hellas.gate.resource.v1", &resource.name);
+            let revision = Revision(*config.policy_revisions.get(&resource.name).unwrap_or(&1));
+            let pricing = Pricing {
+                revision,
+                rates: None,
+            };
+            let mut policy = match &resource.resource {
+                ResourceKind::OpenAi {
+                    model,
+                    max_output_tokens,
+                    credential,
+                } => {
+                    ensure!(
+                        endpoint.hosts == ["api.openai.com"] && !endpoint.private,
+                        "OpenAI requires its explicit public endpoint"
+                    );
+                    let key = endpoint
+                        .keys
+                        .get(credential)
+                        .context("select an upstream key")?;
+                    ensure!(
+                        key.origins == ["https://api.openai.com"]
+                            && key.paths == ["/v1/responses"]
+                            && key.methods == ["POST"]
+                            && key.header.eq_ignore_ascii_case("authorization")
+                            && key.prefix == "Bearer ",
+                        "OpenAI key must be scoped to POST /v1/responses"
+                    );
+                    hellas_reseller::responses_policy(
+                        resource_id,
+                        account,
+                        revision,
+                        &resource.service,
+                        &resource.method,
+                        ResponsesResource {
+                            model: model.clone(),
+                            max_output_tokens: *max_output_tokens,
+                            settings: Default::default(),
+                        },
+                        pricing,
+                    )?
+                }
+                ResourceKind::Https {
+                    origin,
+                    paths,
+                    methods,
+                    credential,
+                    max_response_bytes,
+                    tls_roots,
+                } => {
+                    if let Some(key) = credential {
+                        ensure!(
+                            endpoint.keys.contains_key(key),
+                            "unknown HTTPS credential alias"
+                        );
+                    }
+                    let https = HttpsResource {
+                        origin: origin.clone(),
+                        paths: paths.clone(),
+                        methods: methods.clone(),
+                        credential: credential.clone(),
+                        tls: hellas_rpc::http_fetch::HttpTls {
+                            roots: if tls_roots.is_empty() {
+                                hellas_rpc::http_fetch::HttpTrustRoots::WebPki
+                            } else {
+                                hellas_rpc::http_fetch::HttpTrustRoots::Certificates {
+                                    der_base64: tls_roots.clone(),
+                                }
+                            },
+                            spki_sha256: vec![],
+                        },
+                        accounting: hellas_sdk::work::model::http_usage::AccountingProfile::None,
+                        max_output_tokens: 0,
+                        max_response_bytes: *max_response_bytes,
+                    };
+                    https.validate()?;
+                    let route = WorkRoute::sealed_route(&resource.service, &resource.method)?;
+                    let contract = hellas_rpc::FetchContract::http()?;
+                    GrantPolicy {
+                        resource: resource_id,
+                        account,
+                        revision,
+                        name: resource.name.clone(),
+                        work: WorkPolicy::Fetch {
+                            policy: FetchPolicyV2 {
+                                allowed_environment: contract.manifest_id(),
+                                route_commitment: fetch_route_commitment(
+                                    &route.canonical_body_bytes(),
+                                )?,
+                                max_request_body_bytes: 64 << 10,
+                                max_output_events: 4096,
+                                max_output_bytes: 4 << 20,
+                                max_spool_bytes: 8 << 20,
+                                max_encoded_result_frame: 4 << 20,
+                                max_encoded_prepared_input: 128 << 10,
+                            },
+                            route,
+                            contract,
+                        },
+                        https: Some(https),
+                        responses: None,
+                        pricing,
+                    }
+                }
+            };
+            policy.name = resource.name.clone();
+            policy.validate()?;
+            policies.push(policy);
+        }
+        Ok(policies)
+    }
+    pub fn factory(&self, local: Arc<LocalNode>) -> ProviderFactory {
+        let composition = self.clone();
+        let prepared = self.clone();
+        ProviderFactory {
+            prepare: Some(Arc::new(move |update| {
+                Ok(Box::new(prepared.prepare(update)?) as Box<dyn PreparedProviderConfiguration>)
+            })),
+            start: Arc::new(move |control| {
+                let (composition, local) = (composition.clone(), local.clone());
+                Box::pin(async move {
+                    Ok(composition
+                        .start(local, control.context("host authority is required")?)
+                        .await?)
+                })
+            }),
+        }
+    }
+    fn prepare(&self, update: ProviderUpdate) -> anyhow::Result<Staged> {
+        let old = self.snapshot()?;
+        ensure!(
+            update.expected_revision == old.revision,
+            "provider revision conflict"
+        );
+        let mut next = old.clone();
+        next.revision = next
+            .revision
+            .checked_add(1)
+            .context("provider revision overflow")?;
+        let mut secret = None;
+        let replacing = matches!(&update.change, Some(UpstreamChange::ReplaceKey(_)));
+        match update.change.context("provider change is required")? {
+            UpstreamChange::SetEndpoint(e) => {
+                let route = route_id(&e.service, &e.method);
+                FetchRouteEntry::new(
+                    Arc::new(HttpFetchProvider::new(
+                        HttpEgressPolicy {
+                            allowed_hosts: e.allowed_hosts.clone(),
+                            allow_private_addresses: e.allow_private_addresses,
+                        },
+                        BTreeMap::new(),
+                    )?),
+                    Arc::new(HttpFetchAdaptorFactory::new()?),
+                    FetchRoutePolicy::default(),
+                )?;
+                ensure!(
+                    !e.service.is_empty()
+                        && !e.method.is_empty()
+                        && !e.service.contains('/')
+                        && !e.method.contains('/'),
+                    "invalid route name"
+                );
+                let keys = next
+                    .endpoints
+                    .remove(&route)
+                    .map(|e| e.keys)
+                    .unwrap_or_default();
+                next.endpoints.insert(
+                    route,
+                    Endpoint {
+                        service: e.service,
+                        method: e.method,
+                        hosts: e.allowed_hosts,
+                        private: e.allow_private_addresses,
+                        keys,
+                    },
+                );
+            }
+            UpstreamChange::RemoveEndpoint(e) => {
+                ensure!(
+                    next.endpoints
+                        .remove(&route_id(&e.service, &e.method))
+                        .is_some(),
+                    "endpoint does not exist"
+                );
+                next.resources
+                    .retain(|r| r.service != e.service || r.method != e.method);
+            }
+            UpstreamChange::AddKey(k) | UpstreamChange::ReplaceKey(k) => {
+                let endpoint = next
+                    .endpoints
+                    .get_mut(&route_id(&k.service, &k.method))
+                    .context("endpoint does not exist")?;
+                ensure!(
+                    endpoint.keys.contains_key(&k.key) == replacing,
+                    "key exists or replacement key is missing"
+                );
+                ensure!(
+                    !k.key.is_empty()
+                        && k.key.len() <= 64
+                        && !k.secret.is_empty()
+                        && k.secret.len() <= 2048,
+                    "invalid upstream key"
+                );
+                hellas_rpc::http_fetch::check_headers(
+                    &[(k.header_name.clone(), format!("{}{}", k.prefix, k.secret))],
+                    true,
+                )?;
+                let reference =
+                    format!("upstream-{}", hex::encode(crate::identity::random::<16>()?));
+                endpoint.keys.insert(
+                    k.key,
+                    Key {
+                        origins: k.allowed_origins,
+                        paths: k.allowed_paths,
+                        methods: k.allowed_methods,
+                        header: k.header_name,
+                        prefix: k.prefix,
+                        reference: reference.clone(),
+                        fingerprint: hex::encode(
+                            &Digest::hash(k.secret.as_bytes()).as_bytes()[..6],
+                        ),
+                    },
+                );
+                secret = Some((reference, zeroize::Zeroizing::new(k.secret.into_bytes())));
+            }
+            UpstreamChange::RemoveKey(k) => {
+                ensure!(
+                    next.endpoints
+                        .get_mut(&route_id(&k.service, &k.method))
+                        .context("endpoint does not exist")?
+                        .keys
+                        .remove(&k.key)
+                        .is_some(),
+                    "key does not exist"
+                );
+            }
+        }
+        self.validate(&next)?;
+        if let Some((key, value)) = &secret {
+            self.vault.blocking_set(key, value)?;
+        }
+        Ok(Staged {
+            composition: self.clone(),
+            old,
+            next,
+            secret,
+            committed: false,
+        })
+    }
+    async fn start(
+        &self,
+        local: Arc<LocalNode>,
+        control: NodeControl,
+    ) -> anyhow::Result<hellas_sdk::ProviderHandle> {
+        let config = self.snapshot()?;
+        let policies = self.validate(&config)?;
+        let bound = local
+            .coordinator
+            .provider()
+            .await?
+            .context("bind a provider first")?;
+        let identity = ProviderIdentity::load_or_create(
+            &self.directory,
+            &local,
+            matches!(bound.platform, hellas_rpc::PlatformEnrollment::Absent),
+        )
+        .await?;
+        ensure!(
+            identity.enrollment == bound,
+            "bound provider differs from factory identity"
+        );
+        let mut routes = FetchRouteRegistry::new();
+        for endpoint in config.endpoints.values() {
+            let resource = config
+                .resources
+                .iter()
+                .find(|r| r.service == endpoint.service && r.method == endpoint.method);
+            let entry = if let Some(ResourceInput {
+                resource: ResourceKind::OpenAi { credential, .. },
+                ..
+            }) = resource
+            {
+                ensure!(
+                    config
+                        .resources
+                        .iter()
+                        .filter(|r| r.service == endpoint.service && r.method == endpoint.method)
+                        .all(|r| matches!(r.resource, ResourceKind::OpenAi { .. })),
+                    "one endpoint cannot mix resource drivers"
+                );
+                let key = endpoint
+                    .keys
+                    .get(credential)
+                    .context("upstream key missing")?;
+                let bearer = self.vault.source(&key.reference, "").resolve().await?;
+                FetchRouteEntry::new(
+                    Arc::new(hellas_reseller::OpenAiResponsesFetchProvider::with_bearer(
+                        bearer,
+                    )?),
+                    Arc::new(hellas_reseller::OpenAiResponsesAdaptorFactory::new()?),
+                    FetchRoutePolicy::default(),
+                )?
+            } else {
+                FetchRouteEntry::new(
+                    Arc::new(self.http(endpoint)?),
+                    Arc::new(HttpFetchAdaptorFactory::new()?),
+                    FetchRoutePolicy::default(),
+                )?
+            };
+            routes.register(FetchRoute::new(&endpoint.service, &endpoint.method), entry)?;
+        }
+        let options = hellas_sdk::FetchProviderOptions {
+            port: config.port,
+            identity: local.identity.node.clone(),
+            enrollment: identity.enrollment,
+            root: identity.root,
+            state_directory: self.directory.join("provider"),
+            grants: Some(hellas_sdk::GrantProviderOptions {
+                policies,
+                max_job_millis: NonZeroU64::new(300_000).context("invalid job duration")?,
+            }),
+            routes,
+            fetch_max_in_flight: hellas_rpc::DEFAULT_FETCH_MAX_IN_FLIGHT,
+            fetch_queue_capacity: hellas_rpc::DEFAULT_FETCH_QUEUE_CAPACITY,
+            paid_work: None,
+        }
+        .prepare()
+        .await?
+        .on_host(control)?;
+        Ok(hellas_sdk::start_fetch_provider(options)
+            .await?
+            .with_configuration(Self::metadata(&config)))
+    }
+}
+struct Staged {
+    composition: Composition,
+    old: Configuration,
+    next: Configuration,
+    secret: Option<(String, zeroize::Zeroizing<Vec<u8>>)>,
+    committed: bool,
+}
+impl PreparedProviderConfiguration for Staged {
+    fn commit(&mut self) -> Result<ProviderMetadata, ProviderErrorBox> {
+        self.composition.publish(self.next.clone())?;
+        self.committed = true;
+        Ok(Composition::metadata(&self.next))
+    }
+    fn rollback(&mut self) -> Result<(), ProviderErrorBox> {
+        self.composition.publish(self.old.clone())?;
+        self.committed = false;
+        Ok(())
+    }
 }
 
-pub async fn start<R: hellas_sdk::RootProver + Send + Sync + 'static>(
-    config: ProviderConfig,
-    identity: hellas_sdk::ClientIdentity,
-    enrollment: hellas_rpc::ProviderEnrollmentBundle,
-    root: Arc<R>,
-    state_directory: PathBuf,
-    chain: &crate::chain::ChainNode,
-) -> anyhow::Result<hellas_sdk::ProviderHandle> {
-    anyhow::ensure!(
-        config.contacts.len() <= 256,
-        "at most 256 contacts are allowed"
-    );
-    let grantees = config
-        .contacts
-        .iter()
-        .map(|record| Ok(Principal::decode(&decode_record(record, 32 * 1024)?)?))
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    let paid_work = config
-        .work_config_path
-        .as_deref()
-        .map(|path| hellas_sdk::work_config::load_work_config(Path::new(path)))
-        .transpose()?;
-    let paid_work = match paid_work {
-        Some(config) => {
-            let node = chain.get(&config).await?;
-            Some(hellas_sdk::PaidProviderOptions::new(config, node)?)
-        }
-        None => None,
+pub fn update(expected_revision: u64, change: ProviderChange) -> ProviderUpdate {
+    let key = |k: UpstreamKeyInput| UpstreamKey {
+        service: k.service,
+        method: k.method,
+        key: k.key,
+        allowed_origins: k.origins,
+        allowed_paths: k.paths,
+        allowed_methods: k.methods,
+        header_name: k.header,
+        prefix: k.prefix,
+        secret: k.secret,
     };
-    let mut routes = hellas_sdk::FetchRouteRegistry::new();
-    let mut policies = vec![];
-    if !config.openai_api_key.trim().is_empty() {
-        policies.push(hellas_sdk::responses_policy(
-            &config.service,
-            &config.method,
-        )?);
-        routes.register(
-            hellas_sdk::FetchRoute::new(&config.service, &config.method),
-            hellas_sdk::FetchRouteEntry::new(
-                Arc::new(hellas_sdk::OpenAiResponsesFetchProvider::with_bearer(
-                    config.openai_api_key,
-                )?),
-                Arc::new(hellas_sdk::ResponsesFetchAdaptorFactory::new(
-                    hellas_rpc::FetchEnvironment::OpenAiResponses,
-                )),
-                hellas_sdk::FetchRoutePolicy::default(),
-            )?,
-        )?;
-    }
-    if let Some(json) = config.https_config {
-        anyhow::ensure!(
-            json.len() <= 1 << 20,
-            "HTTPS configuration exceeds its byte limit"
-        );
-        let entries: Vec<HttpsRoute> =
-            serde_json::from_str(&json).context("invalid HTTPS routes configuration")?;
-        for entry in entries {
-            if let Some(resource) = entry.resource {
-                let mut policy = hellas_sdk::responses_policy(&entry.service, &entry.method)?;
-                policy.name = resource.name;
-                policy.https = Some(resource.https);
-                if let hellas_rpc::protocol::work_profile::WorkPolicy::Fetch { policy, .. } =
-                    &mut policy.work
-                {
-                    policy.allowed_environment = hellas_rpc::FetchEnvironment::Http.manifest_id();
-                }
-                policies.push(policy);
+    ProviderUpdate {
+        expected_revision,
+        change: Some(match change {
+            ProviderChange::Endpoint {
+                service,
+                method,
+                hosts,
+                allow_private_addresses,
+            } => UpstreamChange::SetEndpoint(UpstreamEndpoint {
+                service,
+                method,
+                allowed_hosts: hosts,
+                allow_private_addresses,
+            }),
+            ProviderChange::RemoveEndpoint { service, method } => {
+                UpstreamChange::RemoveEndpoint(UpstreamRoute { service, method })
             }
-            routes.register(
-                hellas_sdk::FetchRoute::new(entry.service, entry.method),
-                entry
-                    .account
-                    .into_entry(hellas_sdk::FetchRoutePolicy::default())?,
-            )?;
+            ProviderChange::AddKey { key: k } => UpstreamChange::AddKey(key(k)),
+            ProviderChange::ReplaceKey { key: k } => UpstreamChange::ReplaceKey(key(k)),
+            ProviderChange::RemoveKey {
+                service,
+                method,
+                key,
+            } => UpstreamChange::RemoveKey(UpstreamKeyId {
+                service,
+                method,
+                key,
+            }),
+        }),
+    }
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        let mut obsolete = std::collections::BTreeSet::new();
+        if self.committed {
+            let retained: std::collections::BTreeSet<_> = self
+                .next
+                .endpoints
+                .values()
+                .flat_map(|e| e.keys.values().map(|k| k.reference.as_str()))
+                .collect();
+            for key in self.old.endpoints.values().flat_map(|e| e.keys.values()) {
+                if !retained.contains(key.reference.as_str()) {
+                    obsolete.insert(key.reference.clone());
+                }
+            }
+        } else if let Some((reference, _)) = &self.secret {
+            obsolete.insert(reference.clone());
+        }
+        for reference in obsolete {
+            if self.composition.vault.blocking_delete(&reference).is_err() {
+                tracing::warn!("retired upstream vault entry could not be removed");
+            }
         }
     }
-    // Keep the grant store mounted even with an empty contact list so removals
-    // revoke existing grants before the paid listener is opened.
-    hellas_sdk::start_fetch_provider(hellas_sdk::FetchProviderOptions {
-        port: config.port,
-        identity,
-        enrollment,
-        root,
-        state_directory,
-        routes,
-        grants: Some(hellas_sdk::GrantProviderOptions {
-            grantees,
-            policies,
-            limits: vec![Limit {
-                meter: Meter::Requests,
-                window: Window::Day,
-                amount: config.requests_per_day.into(),
-            }],
-            max_job_millis: NonZeroU64::new(300_000).unwrap(),
-        }),
-        paid_work,
-        fetch_max_in_flight: hellas_rpc::DEFAULT_FETCH_MAX_IN_FLIGHT,
-        fetch_queue_capacity: hellas_rpc::DEFAULT_FETCH_QUEUE_CAPACITY,
-    })
-    .await
-    .map_err(Into::into)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-    struct SoftwareRoot;
-    impl hellas_sdk::RootProver for SoftwareRoot {
-        async fn prove_statement(
-            &self,
-            _: &[u8],
-        ) -> Result<hellas_rpc::RootProof, hellas_attestation::AttestationError> {
-            panic!("enrollment already signed")
-        }
-        async fn prove_open_binding(
-            &self,
-            _: hellas_rpc::Digest,
-        ) -> Result<hellas_rpc::RootProof, hellas_attestation::AttestationError> {
-            panic!("software Open uses producer")
-        }
-    }
-
-    #[tokio::test]
-    async fn provider_exports_responses_and_https_resources_from_one_runtime() {
+    use crate::control::work;
+    use crate::state::AppState;
+    use hellas_rpc::pb::host::*;
+    use hellas_sdk::work::model::grant::admin::{WorkControlCommand, WorkControlReply};
+    #[tokio::test(flavor = "multi_thread")]
+    async fn one_host_mounts_openai_and_https_and_refuses_updates_before_stopping() {
         let directory = tempfile::tempdir().unwrap();
-        let identity = hellas_sdk::ClientIdentity::generate();
-        let enrollment = identity
-            .contact_enrollment(&hellas_rpc::ProducerSigningKey::generate())
+        let secrets = tempfile::tempdir().unwrap();
+        let vault = Vault::fixture(secrets.path());
+        let app = AppState::with_vault(directory.path(), vault.clone())
+            .await
             .unwrap();
-        let template = HttpsResource {
-            origin: "https://example.com".into(),
-            paths: vec!["/v1/chat/completions".into()],
-            methods: vec!["POST".into()],
-            credential: None,
-            tls: hellas_rpc::http_fetch::HttpTls {
-                roots: hellas_rpc::http_fetch::HttpTrustRoots::WebPki,
-                spki_sha256: vec![],
+        app.initialize_software("Alice".into()).await.unwrap();
+        assert!(app.set_provider(true).await.is_err());
+        app.bind_provider(true).await.unwrap();
+        app.bind_provider(true).await.unwrap();
+        app.configure_provider(
+            0,
+            ProviderChange::Endpoint {
+                service: "openai".into(),
+                method: "responses".into(),
+                hosts: vec!["api.openai.com".into()],
+                allow_private_addresses: false,
             },
-            accounting: hellas_rpc::http_usage::AccountingProfile::OpenaiChat,
-            max_output_tokens: 100,
-            max_response_bytes: 4096,
-        };
-        let chain = crate::chain::ChainNode::new(directory.path().join("chain"));
-        let provider = start(ProviderConfig {
-            service: "openai".into(), method: "responses".into(), openai_api_key: "fixture".into(),
-            work_config_path: None,
-            https_config: Some(serde_json::json!([{
-                "service": "lan", "method": "chat", "account": {"allowed_hosts":["example.com"]},
-                "resource": {"name":"chat", "https":template}
-            }]).to_string()),
-            contacts: vec![STANDARD.encode(enrollment.canonical_bytes())], requests_per_day: 100, port: Some(0),
-        }, identity, enrollment, Arc::new(SoftwareRoot), directory.path().join("provider"), &chain).await.unwrap();
-        let offers = provider.offers().unwrap();
-        assert_eq!(offers.len(), 1);
-        let policies = &offers[0].offer().grant.policies;
-        assert_eq!(policies.len(), 2);
-        assert_eq!(policies[0].name, "responses");
-        assert_eq!(policies[1].https.as_ref(), Some(&template));
-        provider.shutdown().await.unwrap();
-        assert!(
-            !directory.path().join("chain").exists(),
-            "authorized-only provider starts no chain node"
+        )
+        .await
+        .unwrap();
+        let local = app.local().await.unwrap();
+        let daily = local.client(false).await.unwrap();
+        let endpoint_change = update(
+            1,
+            ProviderChange::Endpoint {
+                service: "lan".into(),
+                method: "http".into(),
+                hosts: vec!["example.com".into()],
+                allow_private_addresses: false,
+            },
         );
+        assert_eq!(
+            daily
+                .configure_provider(ConfigureProviderRequest {
+                    authorization: local.authorization(),
+                    update: Some(endpoint_change)
+                })
+                .await
+                .unwrap_err()
+                .code(),
+            hellas_wire::WireCode::PermissionDenied
+        );
+        app.configure_provider(
+            1,
+            ProviderChange::AddKey {
+                key: UpstreamKeyInput {
+                    service: "openai".into(),
+                    method: "responses".into(),
+                    key: "account".into(),
+                    origins: vec!["https://api.openai.com".into()],
+                    paths: vec!["/v1/responses".into()],
+                    methods: vec!["POST".into()],
+                    header: "authorization".into(),
+                    prefix: "Bearer ".into(),
+                    secret: "fixture-upstream-secret".into(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+        app.configure_provider(
+            2,
+            ProviderChange::Endpoint {
+                service: "lan".into(),
+                method: "http".into(),
+                hosts: vec!["example.com".into()],
+                allow_private_addresses: false,
+            },
+        )
+        .await
+        .unwrap();
+        app.set_provider(true).await.unwrap();
+        app.configure_resource(
+            3,
+            ResourceInput {
+                name: "responses".into(),
+                service: "openai".into(),
+                method: "responses".into(),
+                resource: ResourceKind::OpenAi {
+                    model: "fixture-model".into(),
+                    max_output_tokens: 64,
+                    credential: "account".into(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+        app.configure_resource(
+            4,
+            ResourceInput {
+                name: "pages".into(),
+                service: "lan".into(),
+                method: "http".into(),
+                resource: ResourceKind::Https {
+                    tls_roots: vec![],
+                    origin: "https://example.com".into(),
+                    paths: vec!["/".into()],
+                    methods: vec!["GET".into()],
+                    credential: None,
+                    max_response_bytes: 4096,
+                },
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(app.status().await.unwrap().provider.state, "running");
+        // The server and factory reject both step-up and revision failures while running.
+        let bad = update(
+            5,
+            ProviderChange::RemoveEndpoint {
+                service: "lan".into(),
+                method: "http".into(),
+            },
+        );
+        assert!(
+            daily
+                .configure_provider(ConfigureProviderRequest {
+                    authorization: local.authorization(),
+                    update: Some(bad)
+                })
+                .await
+                .is_err()
+        );
+        assert!(
+            app.configure_provider(
+                0,
+                ProviderChange::RemoveEndpoint {
+                    service: "lan".into(),
+                    method: "http".into()
+                }
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(app.status().await.unwrap().provider.state, "running");
+        let WorkControlReply::Catalogue(policies) =
+            work(&daily, local.authorization(), WorkControlCommand::Catalogue)
+                .await
+                .unwrap()
+        else {
+            panic!("catalogue");
+        };
+        assert_eq!(policies.len(), 2);
+        assert!(policies.iter().any(|p| p.responses.is_some()));
+        assert!(policies.iter().any(|p| p.https.is_some()));
+        let metadata =
+            std::fs::read_to_string(directory.path().join("provider-configuration.json")).unwrap();
+        assert!(!metadata.contains("fixture-upstream-secret"));
+        app.shutdown().await.unwrap();
+        drop(daily);
+        drop(local);
+        drop(app);
+        let app = AppState::with_vault(directory.path(), vault).await.unwrap();
+        assert_eq!(app.provider_view().await.unwrap().revision, 5);
+        app.set_provider(true).await.unwrap();
+        app.shutdown().await.unwrap();
     }
 }
