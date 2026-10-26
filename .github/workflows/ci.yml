@@ -74,6 +74,9 @@ jobs:
           persist-credentials: false
       - uses: ./gate/.github/actions/setup
 
+      - name: Test software identities and local services
+        run: nix develop --no-update-lock-file --command cargo test --locked --no-default-features --lib -- --test-threads=4
+
       - name: Build app
         env:
           APPLE_SIGNING_IDENTITY: '-'

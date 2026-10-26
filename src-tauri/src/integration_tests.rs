@@ -939,18 +939,13 @@ async fn gateway_admits_only_current_named_credentials_and_zdr_does_not_archive(
             .status(),
         401
     );
-    assert!(
-        b.path()
-            .join("gateway-keys")
-            .join(format!("{}.json", rotated.id))
-            .exists()
-    );
-    assert!(
-        !b.path()
-            .join("gateway-keys")
-            .join(format!("{}.json", rotated.id.to_uppercase()))
-            .exists()
-    );
+    // Inspect stored names: APFS/NTFS may resolve paths with either casing.
+    let names = std::fs::read_dir(b.path().join("gateway-keys"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(names.contains(&format!("{}.json", rotated.id)));
+    assert!(!names.contains(&format!("{}.json", rotated.id.to_uppercase())));
     bob.set_gateway(false, None).await.unwrap();
     assert!(http.post(&url).send().await.is_err());
     assert!(!b.path().join("gateway-archive").exists());
