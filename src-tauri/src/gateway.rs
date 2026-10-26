@@ -182,7 +182,7 @@ pub async fn issue_session(
                     .join("prepared-gateway-keys")
                     .join(format!("{id}.json")),
                 &local.vault,
-                id,
+                (id, intent),
                 scope,
                 CredentialHolder::Bearer,
                 generation,

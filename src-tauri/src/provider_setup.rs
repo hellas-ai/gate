@@ -217,6 +217,28 @@ impl Composition {
         );
         for endpoint in config.endpoints.values() {
             self.http(endpoint)?;
+            let mut resources = config.resources.iter().filter(|resource| {
+                resource.service == endpoint.service && resource.method == endpoint.method
+            });
+            if let Some(first) = resources.next() {
+                for resource in resources {
+                    match (&first.resource, &resource.resource) {
+                        (ResourceKind::Https { .. }, ResourceKind::Https { .. }) => {}
+                        (
+                            ResourceKind::OpenAi {
+                                credential: first, ..
+                            },
+                            ResourceKind::OpenAi { credential, .. },
+                        ) => {
+                            ensure!(
+                                first == credential,
+                                "all resources on one OpenAI endpoint must use the same credential alias"
+                            );
+                        }
+                        _ => anyhow::bail!("one endpoint cannot mix resource drivers"),
+                    }
+                }
+            }
         }
         let mut names = std::collections::BTreeSet::new();
         let mut policies = Vec::new();
@@ -511,14 +533,6 @@ impl Composition {
                 ..
             }) = resource
             {
-                ensure!(
-                    config
-                        .resources
-                        .iter()
-                        .filter(|r| r.service == endpoint.service && r.method == endpoint.method)
-                        .all(|r| matches!(r.resource, ResourceKind::OpenAi { .. })),
-                    "one endpoint cannot mix resource drivers"
-                );
                 let key = endpoint
                     .keys
                     .get(credential)

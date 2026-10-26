@@ -363,7 +363,7 @@ pub async fn share_session(
     let issue = PreparedIssue::prepare(
         &prepared_path,
         &local.vault,
-        id,
+        (id, intent),
         scope,
         CredentialHolder::Node(holder),
         status.generation,

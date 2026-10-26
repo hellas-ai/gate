@@ -70,8 +70,38 @@ pub fn read<T: DeserializeOwned>(path: &Path) -> anyhow::Result<Option<T>> {
     }
 }
 pub fn write<T: Serialize>(path: &Path, value: &T) -> anyhow::Result<()> {
+    #[cfg(test)]
+    publication_fault::check(path)?;
     let parent = path.parent().context("metadata path needs a parent")?;
     hellas_private::create_dir_all_durable(parent)?;
     hellas_private::write_atomically(path, ".writing", &serde_json::to_vec(value)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) mod publication_fault {
+    use std::{
+        collections::BTreeSet,
+        path::{Path, PathBuf},
+        sync::{Mutex, OnceLock},
+    };
+    static FAILURES: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
+    pub fn fail_next_write(path: PathBuf) {
+        FAILURES
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .insert(path);
+    }
+    pub(super) fn check(path: &Path) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !FAILURES
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap()
+                .remove(path),
+            "injected metadata publication failure"
+        );
+        Ok(())
+    }
 }

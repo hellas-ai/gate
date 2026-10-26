@@ -14,6 +14,7 @@ use std::path::Path;
 #[serde(deny_unknown_fields)]
 pub struct PreparedIssue {
     pub id: GrantId,
+    pub intent: hellas_auth::Digest,
     pub credential: Credential,
     pub label: String,
     pub generation: u64,
@@ -22,18 +23,25 @@ impl PreparedIssue {
     pub async fn prepare(
         path: &Path,
         vault: &Vault,
-        id: GrantId,
+        request: (GrantId, hellas_auth::Digest),
         scope: GrantSpec,
         holder: CredentialHolder,
         generation: u64,
         label: String,
     ) -> anyhow::Result<Self> {
+        let (id, intent) = request;
+        // Intent and the original timestamped verifier share one durable publication.
+        // An outer index may fail later; retries recover this exact scope and secret.
         if let Some(held) = vault::read::<Self>(path)? {
             ensure!(
                 held.id == id
-                    && held.credential.scope() == &scope
+                    && held.intent == intent
+                    && held.generation == generation
+                    && held.credential.scope().authority == scope.authority
+                    && held.credential.scope().subject == scope.subject
+                    && held.credential.scope().permissions == scope.permissions
                     && held.credential.holder() == holder,
-                "prepared issuance conflicts with desired scope"
+                "prepared issuance conflicts with desired intent or generation"
             );
             vault.required(&Self::key(held.credential.id())).await?;
             return Ok(held);
@@ -42,6 +50,7 @@ impl PreparedIssue {
         identity::save_credential(vault, &Self::key(secret.id()), &secret).await?;
         let held = Self {
             id,
+            intent,
             credential,
             label,
             generation,
@@ -184,7 +193,10 @@ pub async fn gateway_anchor(
             PreparedIssue::prepare(
                 &path,
                 vault,
-                GrantId(identity::random()?),
+                (
+                    GrantId(identity::random()?),
+                    hellas_auth::Digest::hash(b"hellas.gate.gateway-listener.v1"),
+                ),
                 scope,
                 CredentialHolder::Bearer,
                 generation,

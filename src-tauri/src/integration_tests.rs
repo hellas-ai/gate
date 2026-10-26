@@ -104,8 +104,7 @@ async fn execute(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn real_authorized_fetch_checks_trust_preserves_quota_across_restart_and_drains_inflight_work()
- {
+async fn real_authorized_fetch_recovers_issuance_preserves_live_composition_quota_and_drain() {
     let upstream = Upstream::start().await;
     let a = tempfile::tempdir().unwrap();
     let b = tempfile::tempdir().unwrap();
@@ -151,6 +150,55 @@ async fn real_authorized_fetch_checks_trust_preserves_quota_across_restart_and_d
         )
         .await
         .unwrap();
+    alice
+        .configure_provider(
+            2,
+            ProviderChange::Endpoint {
+                service: "openai".into(),
+                method: "responses".into(),
+                hosts: vec!["api.openai.com".into()],
+                allow_private_addresses: false,
+            },
+        )
+        .await
+        .unwrap();
+    for (revision, alias) in [(3, "first"), (4, "second")] {
+        alice
+            .configure_provider(
+                revision,
+                ProviderChange::AddKey {
+                    key: UpstreamKeyInput {
+                        service: "openai".into(),
+                        method: "responses".into(),
+                        key: alias.into(),
+                        origins: vec!["https://api.openai.com".into()],
+                        paths: vec!["/v1/responses".into()],
+                        methods: vec!["POST".into()],
+                        header: "authorization".into(),
+                        prefix: "Bearer ".into(),
+                        secret: format!("fixture-{alias}"),
+                    },
+                },
+            )
+            .await
+            .unwrap();
+    }
+    alice
+        .configure_resource(
+            5,
+            ResourceInput {
+                name: "responses".into(),
+                service: "openai".into(),
+                method: "responses".into(),
+                resource: ResourceKind::OpenAi {
+                    model: "fixture-model".into(),
+                    max_output_tokens: 64,
+                    credential: "first".into(),
+                },
+            },
+        )
+        .await
+        .unwrap();
     let contact = contacts::add(
         a.path(),
         ContactInput {
@@ -163,24 +211,108 @@ async fn real_authorized_fetch_checks_trust_preserves_quota_across_restart_and_d
     .unwrap();
     let local = alice.local().await.unwrap();
     let recipient = bob.local().await.unwrap();
-    let shared = contacts::share(
-        a.path(),
-        &local,
-        ShareInput {
-            request_id: hex::encode([45; 16]),
-            contact: contact.id,
-            holder: bs.identity.node_key,
-            allowances: vec![AllowanceInput {
-                resource: "page".into(),
-                requests_per_day: 2,
-                max_in_flight: 1,
-            }],
-            period: crate::period::Period::Week,
-            label: "page".into(),
-        },
+    let share_input = ShareInput {
+        request_id: hex::encode([45; 16]),
+        contact: contact.id,
+        holder: bs.identity.node_key,
+        allowances: vec![AllowanceInput {
+            resource: "page".into(),
+            requests_per_day: 2,
+            max_in_flight: 1,
+        }],
+        period: crate::period::Period::Week,
+        label: "page".into(),
+    };
+    let key_input = GatewayKeyInput {
+        request_id: hex::encode([46; 16]),
+        label: "crash retry".into(),
+        period: crate::period::Period::Week,
+    };
+    crate::vault::publication_fault::fail_next_write(
+        a.path()
+            .join("shares")
+            .join(format!("{}.json", share_input.request_id)),
+    );
+    let error = contacts::share(a.path(), &local, share_input.clone())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("injected metadata publication failure")
+    );
+    let share_prepared: crate::credentials::PreparedIssue = crate::vault::read(
+        &a.path()
+            .join("prepared-issues")
+            .join(format!("{}.json", share_input.request_id)),
     )
-    .await
+    .unwrap()
     .unwrap();
+    let share_secret = share_prepared.secret(&av).await.unwrap();
+    crate::vault::publication_fault::fail_next_write(
+        a.path()
+            .join("gateway-keys")
+            .join(format!("{}.json", key_input.request_id)),
+    );
+    let error = alice
+        .issue_gateway_key(key_input.clone())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("injected metadata publication failure")
+    );
+    let key_prepared: crate::credentials::PreparedIssue = crate::vault::read(
+        &a.path()
+            .join("prepared-gateway-keys")
+            .join(format!("{}.json", key_input.request_id)),
+    )
+    .unwrap()
+    .unwrap();
+    let key_secret = key_prepared.secret(&av).await.unwrap();
+    assert!(local.coordinator.authenticate(&key_secret).await.is_err());
+    assert!(local.coordinator.authenticate(&share_secret).await.is_err());
+    alice.shutdown().await.unwrap();
+    drop(local);
+    drop(alice);
+    let alice = Arc::new(AppState::with_vault(a.path(), av.clone()).await.unwrap());
+    alice.set_provider(true).await.unwrap();
+    let local = alice.local().await.unwrap();
+    // Reopen and retry under the same stable intent, after now/not_before have changed.
+    let shared = contacts::share(a.path(), &local, share_input.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        shared.credential,
+        share_prepared.credential.id().to_string()
+    );
+    let saved: contacts::Shared = crate::vault::read(
+        &a.path()
+            .join("shares")
+            .join(format!("{}.json", share_input.request_id)),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(saved.issue.credential, share_prepared.credential);
+    assert_eq!(
+        saved.issue.secret(&av).await.unwrap().expose_secret(),
+        share_secret.expose_secret()
+    );
+    let (_, bearer) = alice.issue_gateway_key(key_input).await.unwrap();
+    assert_eq!(
+        bearer,
+        format!(
+            "{}{}",
+            key_secret.id(),
+            hex::encode(key_secret.expose_secret())
+        )
+    );
+    local.coordinator.authenticate(&key_secret).await.unwrap();
+    // Changed intent under the exact same ID must still be refused.
+    let mut changed = share_input;
+    changed.label = "different intent".into();
+    assert!(contacts::share(a.path(), &local, changed).await.is_err());
     let bundle = contacts::export(a.path(), &local, &shared.id)
         .await
         .unwrap();
@@ -276,6 +408,71 @@ async fn real_authorized_fetch_checks_trust_preserves_quota_across_restart_and_d
     )
     .await
     .unwrap();
+    let before = std::fs::read(a.path().join("provider-configuration.json")).unwrap();
+    let authority_before = local
+        .session(false)
+        .await
+        .unwrap()
+        .status()
+        .await
+        .unwrap()
+        .authority_revision;
+    for resource in [
+        ResourceKind::Https {
+            origin: "https://api.openai.com".into(),
+            paths: vec!["/v1/responses".into()],
+            methods: vec!["POST".into()],
+            credential: Some("first".into()),
+            max_response_bytes: 4096,
+            tls_roots: vec![],
+        },
+        ResourceKind::OpenAi {
+            model: "other-model".into(),
+            max_output_tokens: 64,
+            credential: "second".into(),
+        },
+    ] {
+        // A late start-time validation would block while draining this held request.
+        let failure = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            alice.configure_resource(
+                6,
+                ResourceInput {
+                    name: "incompatible".into(),
+                    service: "openai".into(),
+                    method: "responses".into(),
+                    resource,
+                },
+            ),
+        )
+        .await
+        .expect("invalid catalogue must be refused without stopping/draining")
+        .unwrap_err();
+        assert!(
+            failure
+                .to_string()
+                .contains("one endpoint cannot mix resource drivers")
+                || failure.to_string().contains("same credential alias")
+        );
+        assert_eq!(
+            std::fs::read(a.path().join("provider-configuration.json")).unwrap(),
+            before
+        );
+        assert_eq!(alice.provider_view().await.unwrap().revision, 6);
+        assert_eq!(alice.status().await.unwrap().provider.state, "running");
+        assert!(!inflight.is_finished());
+        assert_eq!(
+            local
+                .session(false)
+                .await
+                .unwrap()
+                .status()
+                .await
+                .unwrap()
+                .authority_revision,
+            authority_before
+        );
+    }
     assert!(
         alice
             .configure_provider(
