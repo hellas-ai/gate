@@ -61,6 +61,7 @@ struct Key {
     prefix: String,
     reference: String,
     fingerprint: String,
+    last_use: Option<u64>,
 }
 #[derive(Clone)]
 pub struct Composition {
@@ -97,7 +98,7 @@ impl Composition {
             .map_err(|_| anyhow::anyhow!("provider configuration lock failed"))?
             .clone())
     }
-    fn publish(&self, expected: u64, config: Configuration) -> anyhow::Result<()> {
+    fn publish(&self, expected: u64, mut config: Configuration) -> anyhow::Result<()> {
         let mut held = self
             .state
             .lock()
@@ -108,6 +109,21 @@ impl Composition {
             expected,
             held.revision
         );
+        for endpoint in config.endpoints.values_mut() {
+            for key in endpoint.keys.values_mut() {
+                for previous in held
+                    .endpoints
+                    .values()
+                    .flat_map(|e| e.keys.values())
+                    .filter(|previous| {
+                        previous.reference == key.reference
+                            && previous.fingerprint == key.fingerprint
+                    })
+                {
+                    key.last_use = key.last_use.max(previous.last_use);
+                }
+            }
+        }
         vault::write(&self.directory.join("provider-configuration.json"), &config)?;
         *held = config;
         Ok(())
@@ -136,7 +152,7 @@ impl Composition {
                             name: name.clone(),
                             secret_reference: key.reference.clone(),
                             fingerprint: key.fingerprint.clone(),
-                            last_use: None,
+                            last_use: key.last_use,
                         })
                         .collect(),
                 })
@@ -301,6 +317,29 @@ impl Composition {
             session.provider_state(true).await?;
         }
         self.view()
+    }
+    pub(crate) fn used(&self, reference: &str, fingerprint: &str) -> anyhow::Result<()> {
+        let now = hellas_auth::authority::UnixMillis::now()?.0;
+        let mut held = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("provider configuration lock failed"))?;
+        let mut next = held.clone();
+        let mut changed = false;
+        for key in next
+            .endpoints
+            .values_mut()
+            .flat_map(|e| e.keys.values_mut())
+            .filter(|key| key.reference == reference && key.fingerprint == fingerprint)
+        {
+            key.last_use = key.last_use.max(Some(now));
+            changed = true;
+        }
+        if changed {
+            vault::write(&self.directory.join("provider-configuration.json"), &next)?;
+            *held = next;
+        }
+        Ok(())
     }
     fn metadata(config: &Configuration) -> ProviderMetadata {
         ProviderMetadata {
@@ -639,6 +678,7 @@ impl Composition {
                         header: k.header_name,
                         prefix: k.prefix,
                         reference: reference.clone(),
+                        last_use: None,
                         fingerprint: hex::encode(
                             &Digest::hash(k.secret.as_bytes()).as_bytes()[..6],
                         ),
@@ -710,31 +750,44 @@ impl Composition {
                     .get(credential)
                     .context("upstream key missing")?;
                 let bearer = self.vault.source(&key.reference, "").resolve().await?;
+                let driver: Arc<dyn hellas_executor::FetchProvider> = Arc::new(
+                    hellas_reseller::OpenAiResponsesFetchProvider::with_bearer(bearer)?,
+                );
+                #[cfg(test)]
+                let driver = match self.responses_origin.lock().unwrap().as_ref() {
+                    Some(origin) => crate::responses_fixture::provider(origin),
+                    None => driver,
+                };
                 FetchRouteEntry::new(
-                    Arc::new(hellas_reseller::OpenAiResponsesFetchProvider::with_bearer(
-                        bearer,
-                    )?),
+                    crate::usage::track(
+                        driver,
+                        self.clone(),
+                        crate::usage::Key::Fixed(key.reference.clone(), key.fingerprint.clone()),
+                    ),
                     Arc::new(hellas_reseller::OpenAiResponsesAdaptorFactory::new()?),
                     FetchRoutePolicy::default(),
                 )?
             } else {
                 FetchRouteEntry::new(
-                    Arc::new(self.http(endpoint)?),
+                    crate::usage::track(
+                        Arc::new(self.http(endpoint)?),
+                        self.clone(),
+                        crate::usage::Key::Http(
+                            endpoint
+                                .keys
+                                .iter()
+                                .map(|(alias, key)| {
+                                    (
+                                        alias.clone(),
+                                        (key.reference.clone(), key.fingerprint.clone()),
+                                    )
+                                })
+                                .collect(),
+                        ),
+                    ),
                     Arc::new(HttpFetchAdaptorFactory::new()?),
                     FetchRoutePolicy::default(),
                 )?
-            };
-            #[cfg(test)]
-            let entry = if matches!(
-                resource.map(|r| &r.resource),
-                Some(ResourceKind::OpenAi { .. })
-            ) {
-                match self.responses_origin.lock().unwrap().as_ref() {
-                    Some(origin) => crate::responses_fixture::entry(origin),
-                    None => entry,
-                }
-            } else {
-                entry
             };
             routes.register(FetchRoute::new(&endpoint.service, &endpoint.method), entry)?;
         }
@@ -1135,6 +1188,7 @@ impl Composition {
                     prefix: key.prefix.clone(),
                     reference: key.secret_reference.clone(),
                     fingerprint: hex::encode(&Digest::hash(value.as_bytes()).as_bytes()[..6]),
+                    last_use: None,
                 };
                 let previous = current.and_then(|e| e.keys.get(&key.name));
                 let same = previous.is_some_and(|k| {

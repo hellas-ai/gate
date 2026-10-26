@@ -327,9 +327,12 @@ async fn delegate(
     output
 }
 
+static CHAIN_TEST: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn funded_gateway(responses: bool) {
+    let _network_slot = CHAIN_TEST.lock().await;
     let _ = tracing_subscriber::fmt()
-        .with_env_filter("hellas_sdk=info,hellas_work=info,hellas_chain=warn")
+        .with_env_filter("hellas_sdk=info,hellas_gateway=debug,hellas_work=info,hellas_chain=warn")
         .with_ansi(false)
         .try_init();
     let directory_path = tempfile::tempdir().unwrap().keep();
@@ -476,6 +479,31 @@ async fn funded_gateway(responses: bool) {
     eprintln!("real-chain fixture: offer durably provisioned");
     assert_eq!(offered.bond, preview.bond);
     assert!(offered.signed_offer.is_some());
+    let signed = hellas_sdk::work::model::offer::SignedPaidOffer::decode(
+        &STANDARD
+            .decode(offered.signed_offer.as_ref().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let terms = signed.offer().proposal.bond_terms();
+    let maker = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
+        al.identity.node.node_secret_bytes(),
+    )
+    .unwrap()
+    .party_key();
+    let owner = Key::from_bytes(*al.coordinator.owner().await.unwrap().as_bytes());
+    assert_eq!(terms.parties.maker().owner(), owner);
+    assert_eq!(terms.parties.maker().signer(), maker);
+    assert_eq!(terms.parties.maker().payout_delegate(), Some(maker));
+    assert_eq!(
+        terms.parties.taker().owner(),
+        Key::from_bytes(*bl.coordinator.owner().await.unwrap().as_bytes())
+    );
+    let payout = terms.timeout_outputs.iter().next().copied().unwrap();
+    assert_eq!(payout.owner(), owner);
+    assert_eq!(payout.delegate(), Some(maker));
+    assert_eq!(payout.value(), input.timeout_payout);
+
     alice
         .configure_paid_serve(
             revision + 1,

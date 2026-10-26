@@ -27,4 +27,5 @@ pub mod run;
 pub mod settings;
 pub mod state;
 pub mod trust;
+mod usage;
 pub mod vault;

@@ -31,16 +31,11 @@ impl FetchProvider for Driver {
         })
     }
 }
-pub fn entry(origin: &str) -> hellas_sdk::FetchRouteEntry {
-    hellas_sdk::FetchRouteEntry::new(
-        Arc::new(Driver {
-            endpoint: format!("{origin}/v1/responses").parse().unwrap(),
-            client: hellas_providers::responses_http_client(Default::default()).unwrap(),
-        }),
-        Arc::new(hellas_reseller::OpenAiResponsesAdaptorFactory::new().unwrap()),
-        hellas_sdk::FetchRoutePolicy::default(),
-    )
-    .unwrap()
+pub fn provider(origin: &str) -> Arc<dyn FetchProvider> {
+    Arc::new(Driver {
+        endpoint: format!("{origin}/v1/responses").parse().unwrap(),
+        client: hellas_providers::responses_http_client(Default::default()).unwrap(),
+    })
 }
 pub struct Origin {
     pub url: String,

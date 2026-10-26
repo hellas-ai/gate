@@ -3155,6 +3155,18 @@ async fn authorized_responses_gateway_enforces_keys_zdr_archive_revocation_and_s
             .iter()
             .any(|e| matches!(e, ExecutionEvent::Verification { .. }))
     );
+    let observed = alice.provider_view().await.unwrap();
+    assert_eq!(observed.revision, 3);
+    let used = observed
+        .upstreams
+        .iter()
+        .find(|u| u.service == "openai")
+        .unwrap()
+        .keys[0]
+        .last_use;
+    assert!(used.is_some());
+    let metadata = std::fs::read_to_string(a.path().join("provider-configuration.json")).unwrap();
+    assert!(!metadata.contains("fixture-only-secret"));
     let (key, bearer) = bob
         .issue_gateway_key(GatewayKeyInput {
             request_id: hex::encode([236; 16]),
@@ -3254,6 +3266,23 @@ async fn authorized_responses_gateway_enforces_keys_zdr_archive_revocation_and_s
     assert!(quit.await.unwrap().unwrap());
     assert!(http.get(&url).send().await.is_err());
     alice.shutdown().await.unwrap();
+    drop(alice);
+    let reopened = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+        .await
+        .unwrap();
+    let observed = reopened.provider_view().await.unwrap();
+    assert_eq!(observed.revision, 3);
+    assert!(
+        observed
+            .upstreams
+            .iter()
+            .find(|u| u.service == "openai")
+            .unwrap()
+            .keys[0]
+            .last_use
+            >= used
+    );
+    reopened.shutdown().await.unwrap();
 }
 
 #[cfg(all(feature = "chain-tests", target_os = "linux"))]
