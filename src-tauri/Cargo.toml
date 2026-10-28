@@ -21,7 +21,7 @@ required-features = ["desktop"]
 
 [dependencies]
 anyhow = "1"
-base64 = "0.22"
+base64 = "0.23"
 futures = "0.3"
 hellas-attestation = { git = "https://github.com/hellas-ai/hellas", rev = "9c342ba19bbcef6519c8065a19b0af76dc42f77b", features = ["apple-app-attest"] }
 hellas-gateway = { git = "https://github.com/hellas-ai/hellas", rev = "9c342ba19bbcef6519c8065a19b0af76dc42f77b" }
@@ -43,7 +43,7 @@ ts-rs = { version = "12", features = ["serde-compat"], optional = true }
 [target.'cfg(windows)'.dependencies]
 # Windows has no system SQLite: compile the amalgamation in. Elsewhere the
 # FFI in history.rs links the platform's libsqlite3.
-libsqlite3-sys = { version = "0.38", features = ["bundled"] }
+libsqlite3-sys = { version = "0.39", features = ["bundled"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }
