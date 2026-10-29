@@ -129,16 +129,16 @@ impl WorkExecutionBackend for RetirableBackend {
     > {
         self.with_backend(|backend| backend.fetch(request))?
     }
-    fn generate(
+    fn run(
         &self,
-        request: hellas_sdk::client::text::TextJob,
+        request: hellas_sdk::client::model::ComputeJob,
     ) -> Result<
-        hellas_gateway::WorkOutputStream<hellas_gateway::ExecutionEvent>,
+        hellas_gateway::WorkOutputStream<hellas_gateway::ComputeEvent>,
         hellas_gateway::WorkGatewayError,
     > {
-        self.with_backend(|backend| backend.generate(request))?
+        self.with_backend(|backend| backend.run(request))?
     }
-    fn timeout(&self) -> Duration {
+    fn timeout(&self) -> Option<Duration> {
         self.with_backend(|backend| backend.timeout())
             .unwrap_or_default()
     }
@@ -404,7 +404,7 @@ impl Clients {
                             .join("work-channels")
                             .join(access.authority.to_string())
                             .join(allowance),
-                        timeout: Duration::from_secs(300),
+                        control_timeout: Duration::from_secs(300),
                     },
                     transport,
                     Some(resource.clone()),

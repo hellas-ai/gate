@@ -116,7 +116,7 @@ async fn execute(
     clients: &Clients,
     local: &crate::control::LocalNode,
     request: &RunRequest,
-) -> anyhow::Result<Vec<hellas_rpc::output::OutputEvent>> {
+) -> anyhow::Result<Vec<hellas_gateway::WorkEvent<hellas_rpc::output::OutputEvent>>> {
     Ok(clients.fetch(local, request).await?.try_collect().await?)
 }
 
@@ -406,11 +406,10 @@ async fn real_authorized_fetch_recovers_issuance_preserves_live_composition_quot
     .await
     .unwrap()
     .unwrap();
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, hellas_rpc::output::OutputEvent::Finished { .. }))
-    );
+    assert!(events.iter().any(|e| matches!(
+        e,
+        hellas_gateway::WorkEvent::Output(hellas_rpc::output::OutputEvent::Finished { .. })
+    )));
     assert_eq!(upstream.calls.load(Ordering::SeqCst), 1);
     // Consume the first request's notification before holding the second.
     upstream.started.notified().await;
@@ -514,11 +513,10 @@ async fn real_authorized_fetch_recovers_issuance_preserves_live_composition_quot
         .unwrap()
         .unwrap()
         .unwrap();
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, hellas_rpc::output::OutputEvent::Finished { .. }))
-    );
+    assert!(events.iter().any(|e| matches!(
+        e,
+        hellas_gateway::WorkEvent::Output(hellas_rpc::output::OutputEvent::Finished { .. })
+    )));
     assert!(shutdown.await.unwrap().unwrap());
     assert!(!local.socket.exists());
     assert!(alice.set_provider(true).await.is_err());
@@ -1085,10 +1083,13 @@ async fn grant_https(
         shared,
     )
 }
-fn finished(events: &[hellas_rpc::output::OutputEvent]) -> bool {
-    events
-        .iter()
-        .any(|event| matches!(event, hellas_rpc::output::OutputEvent::Finished { .. }))
+fn finished(events: &[hellas_gateway::WorkEvent<hellas_rpc::output::OutputEvent>]) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            event,
+            hellas_gateway::WorkEvent::Output(hellas_rpc::output::OutputEvent::Finished { .. })
+        )
+    })
 }
 
 #[tokio::test(flavor = "multi_thread")]

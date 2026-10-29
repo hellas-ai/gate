@@ -17,7 +17,10 @@ pub async fn execute(
         let mut stream=opened?;let mut terminal=false;
         loop {
             let next=tokio::select! {biased;_ = cancelled.wait_for(|value|*value)=>{return Ok(false);},next=stream.next()=>next};
-            let Some(event)=next else {break;};let event=event?;
+            let Some(event)=next else {break;};
+            // Run records authenticated output; gateway presentations carry the
+            // separate acceptance and transcript metadata.
+            let hellas_gateway::WorkEvent::Output(event)=event? else {continue;};
             let text=serde_json::to_string(&event)?;state.history.append_result(&id,&text)?;
             let success=event.terminal();
             let failure=(success==Some(false)).then(||format!("Fetch returned an unsuccessful terminal: {text}"));

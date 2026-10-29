@@ -471,7 +471,7 @@ async fn funded_setup(
         .await
         .unwrap();
     assert!(!Arc::ptr_eq(&target, &replacement));
-    assert_eq!(replacement.backend.timeout(), Duration::from_secs(90));
+    assert_eq!(replacement.backend.timeout(), Some(Duration::from_secs(90)));
     bl.clients.reset().await.unwrap();
     drop(replacement);
     drop(target);

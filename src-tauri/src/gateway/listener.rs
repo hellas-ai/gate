@@ -46,7 +46,7 @@ pub fn factory(local: Arc<LocalNode>) -> GatewayFactory {
                     },
                     work: target.backend.clone(),
                     presentations: hellas_gateway::Presentations {
-                        text: None,
+                        models: vec![],
                         responses,
                         http,
                     },
