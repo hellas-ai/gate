@@ -2,13 +2,11 @@
 use crate::{identity::Identity, vault::Vault};
 use anyhow::ensure;
 use hellas_auth::authority::*;
+use hellas_authority::node::{NodeCoordinator, SessionKey};
 use hellas_rpc::{pb::host::*, services::host_control::HostControlClientImpl};
-use hellas_sdk::{
-    node_control::{
-        self,
-        host::{HostHandle, HostOptions},
-    },
-    work::node::{NodeCoordinator, SessionKey},
+use hellas_sdk::node_control::{
+    self,
+    host::{HostHandle, HostOptions},
 };
 use std::{
     path::{Path, PathBuf},
@@ -147,8 +145,8 @@ impl LocalNode {
 pub async fn work(
     client: &Client,
     authorization: Vec<u8>,
-    command: hellas_sdk::work::model::grant::admin::WorkControlCommand,
-) -> anyhow::Result<hellas_sdk::work::model::grant::admin::WorkControlReply> {
+    command: hellas_authority::model::grant::admin::WorkControlCommand,
+) -> anyhow::Result<hellas_authority::model::grant::admin::WorkControlReply> {
     use hellas_rpc::protocol::value::{canonical_dag_cbor, decode_dag_cbor};
     let reply = client
         .work_control(WorkControlRequest {

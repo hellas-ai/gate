@@ -13,6 +13,7 @@ pub struct IdentityStatus {
     pub fingerprint: String,
     pub node_key: String,
     pub transport_id: String,
+    pub provider_address: String,
     pub authority: String,
     pub generation: u64,
     pub attestation: String,
@@ -129,7 +130,6 @@ pub struct TrustInput {
     pub expected_revision: u64,
     pub genesis: String,
     pub apple: bool,
-    pub environments: Vec<String>,
     pub app_id: String,
     pub cd_hashes: Vec<String>,
     pub reason: String,
@@ -143,7 +143,6 @@ pub struct TrustRecord {
     pub revision: u64,
     pub genesis: String,
     pub assurance: String,
-    pub environments: Vec<String>,
     pub source: String,
 }
 
@@ -360,20 +359,46 @@ pub struct PaidPolicyInput {
     pub service: String,
     pub method: String,
     pub presentation: FetchPresentation,
-    pub policy_salt: String,
     pub compute_credit_limit: u64,
     pub delivery_credit_limit: u64,
     pub fixed_price: u64,
     pub dispatch_blocks: u64,
     pub delivery_blocks: u64,
     pub oracle_blocks: u64,
-    pub value: u64,
-    pub reserve: u64,
-    pub fee_base: u64,
-    pub fee_slot: u64,
-    pub fee_proof: u64,
-    pub fee_lifetime: u64,
+    pub jobs_per_channel: u64,
+    pub omission_bond: u64,
+    pub max_stake_per_client: u64,
+    pub max_open_offers: u32,
+    pub bond_lifetime_blocks: u64,
+    pub redelegate_payout: bool,
+    pub limits: PaidFetchLimitsInput,
     pub min_omit_response_blocks: u64,
+    pub poll_ms: u64,
+    pub max_observation_age_ms: u64,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PaidFetchLimitsInput {
+    pub max_request_body_bytes: u32,
+    pub max_output_events: u32,
+    pub max_output_bytes: u64,
+    pub max_spool_bytes: u64,
+    pub max_encoded_result_frame: u32,
+    pub max_encoded_prepared_input: u32,
+    pub execution_timeout_ms: u64,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "desktop", derive(TS))]
+#[cfg_attr(feature = "desktop", ts(export))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PaidClientPolicyInput {
+    pub chain: ChainInput,
+    pub service: String,
+    pub method: String,
+    pub presentation: FetchPresentation,
+    pub fixed_price: u64,
     pub poll_ms: u64,
     pub max_observation_age_ms: u64,
 }
@@ -385,14 +410,11 @@ pub struct PaidProviderInput {
     pub provider: String,
     pub addresses: Vec<String>,
     pub trust_policy: String,
-    pub bond: String,
-    pub coins: Vec<String>,
-    pub omission_bond: u64,
     pub acceptance_blocks: u64,
     pub terminal_blocks: u64,
     pub payment_blocks: u64,
     pub timeout_seconds: u64,
-    pub policy: PaidPolicyInput,
+    pub policy: PaidClientPolicyInput,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
@@ -586,50 +608,8 @@ pub struct QuotaView {
 #[cfg_attr(feature = "desktop", derive(TS))]
 #[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PaidRouteInput {
-    pub peer: String,
-    pub bond: String,
-    pub client: String,
-}
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PaidServeInput {
     pub policy: PaidPolicyInput,
-    pub routes: Vec<PaidRouteInput>,
-}
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProvisionInput {
-    pub expected_provider_revision: u64,
-    pub contact: String,
-    pub client_node: String,
-    pub client_peer: String,
-    pub addresses: Vec<String>,
-    pub redelegate_payout: bool,
-    pub stake_coins: Vec<String>,
-    pub bond_timeout: u64,
-    pub timeout_payout: u64,
-    pub max_job_price: u64,
-}
-#[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export))]
-#[serde(rename_all = "camelCase")]
-pub struct ProvisionView {
-    pub bond: String,
-    pub owner: String,
-    pub provider_node: String,
-    pub client: String,
-    pub client_node: String,
-    pub payout_delegate: Option<String>,
-    pub timeout_payout: u64,
-    pub bond_timeout: u64,
-    pub stake_coins: Vec<String>,
-    pub signed_offer: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -286,17 +286,6 @@ pub async fn configure_paid_serve(
         .await
         .map_err(ApiError::internal)
 }
-#[tauri::command]
-pub async fn provision_paid(
-    state: State<'_, Arc<AppState>>,
-    input: ProvisionInput,
-    commit: bool,
-) -> ApiResult<ProvisionView> {
-    state
-        .provision_paid(input, commit)
-        .await
-        .map_err(ApiError::internal)
-}
 
 #[tauri::command]
 pub async fn save_listen_port(
@@ -318,15 +307,4 @@ pub async fn restart_gate(app: tauri::AppHandle, state: State<'_, Arc<AppState>>
         app.restart();
     }
     Ok(())
-}
-
-#[tauri::command]
-pub async fn paid_client_peer(
-    state: State<'_, Arc<AppState>>,
-    pool_id: String,
-) -> ApiResult<String> {
-    state
-        .paid_client_peer(&pool_id)
-        .await
-        .map_err(ApiError::internal)
 }

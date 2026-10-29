@@ -1,13 +1,11 @@
 //! One SDK gateway factory. Named HTTP keys are ordinary authority credentials.
+mod listener;
 use crate::{control::LocalNode, credentials::PreparedIssue, dto::*, vault};
 use anyhow::{Context, ensure};
 use hellas_auth::{Digest, authority::*};
-use hellas_sdk::node_control::host::GatewayFactory;
+pub use listener::factory;
 use serde::{Deserialize, Serialize};
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::path::{Path, PathBuf};
 use tokio::sync::Mutex;
 
 pub struct Configuration {
@@ -54,8 +52,8 @@ fn http_config(
         anyhow::bail!("HTTP gateway requires a paid HTTP pool");
     };
     let http = hellas_gateway::HttpGatewayConfig {
-        service: service.clone(),
-        method: method.clone(),
+        service: Some(service.clone()),
+        method: Some(method.clone()),
         routes: config
             .http_routes
             .iter()
@@ -97,67 +95,6 @@ fn validate_presentation(http: bool, presentation: FetchPresentation) -> anyhow:
         );
     }
     Ok(())
-}
-pub fn factory(local: Arc<LocalNode>) -> GatewayFactory {
-    Arc::new(move |access| {
-        let local = local.clone();
-        Box::pin(async move {
-            let result: anyhow::Result<hellas_gateway::GatewayHandle> = async {
-                let config = local
-                    .gateway
-                    .get()
-                    .await
-                    .context("configure a gateway target first")?;
-                let http = validate(&local, &config)?;
-                let required = if http.is_some() {
-                    FetchPresentation::Http
-                } else {
-                    FetchPresentation::Responses
-                };
-                let target = local
-                    .clients
-                    .target_for(&local, &config.client, Some(required))
-                    .await?;
-                let archive = hellas_gateway::ArchiveOptions {
-                    directory: local.directory.join("gateway-archive"),
-                    zdr: config.zdr,
-                };
-                let handle = if let Some(http) = http {
-                    hellas_gateway::start_http(hellas_gateway::HttpGatewayOptions {
-                        config: http,
-                        paid: target.backend.clone(),
-                        archive,
-                        host: "127.0.0.1".into(),
-                        port: config.port,
-                        access,
-                        allow_remote: false,
-                        wrap: None,
-                        wrap_args: vec![],
-                    })
-                    .await?
-                } else {
-                    hellas_gateway::start_fetch(hellas_gateway::FetchGatewayOptions {
-                        access,
-                        archive,
-                        allow_remote: false,
-                        wrap: None,
-                        wrap_args: vec![],
-                        host: "127.0.0.1".into(),
-                        port: config.port,
-                        provider: target.provider,
-                        service: target.service.clone(),
-                        method: target.method.clone(),
-                        request_overrides: Default::default(),
-                        work: target.backend.clone(),
-                    })
-                    .await?
-                };
-                Ok(handle)
-            }
-            .await;
-            result.map_err(anyhow::Error::into_boxed_dyn_error)
-        })
-    })
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -207,8 +144,8 @@ pub async fn issue_session(
             let scope = GrantSpec {
                 authority: local.identity.public.authority,
                 subject: local.identity.public.owner,
-                permissions: [hellas_sdk::work::operations::Operation::named(
-                    hellas_sdk::work::node::GATEWAY_INVOKE,
+                permissions: [hellas_authority::operations::Operation::named(
+                    hellas_authority::node::GATEWAY_INVOKE,
                 )?
                 .permission(local.identity.public.authority, None)?]
                 .into(),

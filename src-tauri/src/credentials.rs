@@ -6,7 +6,7 @@ use crate::{
 };
 use anyhow::{Context, ensure};
 use hellas_auth::authority::*;
-use hellas_sdk::work::node::{NodeCoordinator, SessionKey};
+use hellas_authority::node::{NodeCoordinator, SessionKey};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -100,7 +100,7 @@ impl PreparedIssue {
                     "issued grant differs from prepared intent"
                 );
             }
-            Err(hellas_sdk::work::work_store::grant::NodeStoreError::Authority(
+            Err(hellas_authority::work_store::grant::NodeStoreError::Authority(
                 AuthorityError::Denied,
             )) => {
                 node.grant(
@@ -138,7 +138,7 @@ impl PreparedIssue {
                     "issued credential differs from prepared intent"
                 );
             }
-            Err(hellas_sdk::work::work_store::grant::NodeStoreError::Authority(
+            Err(hellas_authority::work_store::grant::NodeStoreError::Authority(
                 AuthorityError::Denied,
             )) => {
                 node.issue_credential(caller, root, self.credential.clone())
@@ -174,8 +174,8 @@ pub async fn gateway_anchor(
             let scope = GrantSpec {
                 authority: identity.public.authority,
                 subject: identity.public.owner,
-                permissions: [hellas_sdk::work::operations::Operation::named(
-                    hellas_sdk::work::node::GATEWAY_INVOKE,
+                permissions: [hellas_authority::operations::Operation::named(
+                    hellas_authority::node::GATEWAY_INVOKE,
                 )?
                 .permission(identity.public.authority, None)?]
                 .into(),
@@ -333,7 +333,7 @@ pub async fn issue_admin(
             let status = session.status().await?;
             let bound = local.coordinator.provider().await?.is_some();
             let available = |name: &str| {
-                use hellas_sdk::work::operations::{Mount, OPERATIONS};
+                use hellas_authority::operations::{Mount, OPERATIONS};
                 OPERATIONS
                     .iter()
                     .find(|operation| operation.name == name)

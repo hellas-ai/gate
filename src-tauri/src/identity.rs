@@ -5,15 +5,12 @@ use crate::{
 };
 use anyhow::{Context, ensure};
 use hellas_auth::{Digest, authority::*};
-use hellas_sdk::{
-    NodeIdentity,
-    kernel::SoftPasskey,
-    work::{
-        authenticator::Authenticator,
-        operations::{OPERATIONS, Scope},
-        work_store::grant::{NodeStore, OwnerApproval, PreparedBootstrap},
-    },
+use hellas_authority::{
+    authenticator::Authenticator,
+    operations::{OPERATIONS, Scope},
+    work_store::grant::{NodeStore, OwnerApproval, PreparedBootstrap},
 };
+use hellas_sdk::{NodeIdentity, kernel::SoftPasskey};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Arc};
 
@@ -182,7 +179,7 @@ impl Identity {
     }
     pub async fn open_store(&self, directory: &Path) -> anyhow::Result<NodeStore> {
         let path = directory.join("node");
-        let network = hellas_sdk::work::model::grant::grant_network();
+        let network = hellas_authority::model::grant::grant_network();
         let now = UnixMillis::now()?;
         let store = if path.join("authority").try_exists()? {
             NodeStore::open(&path, network, None, now).await?
@@ -277,7 +274,7 @@ impl Identity {
             node_bytes[..32].try_into()?,
             node_bytes[32..].try_into()?,
         )?;
-        let network = hellas_sdk::work::model::grant::grant_network();
+        let network = hellas_authority::model::grant::grant_network();
         let inspection = NodeStore::inspect_offline(
             &directory.join("node"),
             network,

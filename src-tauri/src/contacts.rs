@@ -8,10 +8,8 @@ use crate::{
 use anyhow::{Context, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use hellas_auth::{Digest, authority::*};
-use hellas_sdk::{
-    access_bundle::AccessBundle,
-    work::model::grant::{admin::*, budget::*},
-};
+use hellas_authority::model::grant::{admin::*, budget::*};
+use hellas_sdk::access_bundle::AccessBundle;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
@@ -95,7 +93,7 @@ pub fn validate(input: &ContactInput) -> anyhow::Result<()> {
     );
     ensure!(input.label.len() <= 64, "contact label is too long");
     ensure!(input.card.len() <= 8192, "contact card is too large");
-    let _card = hellas_sdk::work::model::grant::records::decode_contact_card(
+    let _card = hellas_authority::model::grant::records::decode_contact_card(
         &STANDARD.decode(&input.card)?,
     )?;
     let _holder = NodeKey::from_public_key(hellas_auth::PublicKey::Secp256k1(
@@ -110,7 +108,7 @@ pub fn add(directory: &Path, input: ContactInput) -> anyhow::Result<ContactView>
     );
     ensure!(input.label.len() <= 64, "contact label is too long");
     ensure!(input.card.len() <= 8192, "contact card is too large");
-    let card = hellas_sdk::work::model::grant::records::decode_contact_card(
+    let card = hellas_authority::model::grant::records::decode_contact_card(
         &STANDARD.decode(&input.card)?,
     )?;
     let holder = NodeKey::from_public_key(hellas_auth::PublicKey::Secp256k1(crate::trust::fixed(
@@ -152,26 +150,6 @@ pub fn contacts(directory: &Path) -> anyhow::Result<Vec<ContactView>> {
         .map(view)
         .collect())
 }
-pub fn confirmed_device(
-    directory: &Path,
-    person: &str,
-    holder: &str,
-) -> anyhow::Result<(ContactCard, hellas_sdk::kernel::Key)> {
-    let principal: PrincipalId = person.parse()?;
-    let contact: Contact = vault::read(&named(directory, "contacts", &principal.to_string())?)?
-        .context("select a verified contact")?;
-    let key = NodeKey::from_public_key(hellas_auth::PublicKey::Secp256k1(crate::trust::fixed(
-        holder,
-    )?))?;
-    ensure!(
-        contact.devices.contains(&key),
-        "explicitly confirm this device with the contact first"
-    );
-    Ok((
-        contact.card,
-        hellas_sdk::kernel::Key::from_bytes(*key.as_bytes()),
-    ))
-}
 pub fn shares(directory: &Path) -> anyhow::Result<Vec<ShareView>> {
     Ok(list::<Shared>(directory, "shares")?
         .into_iter()
@@ -198,7 +176,7 @@ pub fn accesses(directory: &Path) -> anyhow::Result<Vec<AccessView>> {
                 .iter()
                 .filter_map(|s| STANDARD.decode(s).ok())
                 .filter_map(|b| {
-                    hellas_sdk::work::model::grant::records::SignedOffer::decode(&b, UnixMillis(0))
+                    hellas_authority::model::grant::records::SignedOffer::decode(&b, UnixMillis(0))
                         .ok()
                 })
                 .map(|o| o.offer().grant.id.to_string())
@@ -384,8 +362,8 @@ pub async fn share_session(
         permissions: allowances
             .iter()
             .map(|id| {
-                hellas_sdk::work::operations::Operation::named(
-                    hellas_sdk::work::grant_service::WORK_EXECUTE,
+                hellas_authority::operations::Operation::named(
+                    hellas_authority::grant_service::WORK_EXECUTE,
                 )?
                 .permission(local.identity.public.authority, Some(*id))
             })
@@ -696,7 +674,7 @@ pub async fn set_quota(
 mod tests {
     use super::*;
     use crate::{state::AppState, vault::Vault};
-    use hellas_sdk::work::node::SessionKey;
+    use hellas_authority::node::SessionKey;
     #[tokio::test(flavor = "multi_thread")]
     async fn per_upstream_bundles_use_exact_prepared_ids_and_refuse_wrong_person_holder_and_revocation()
      {

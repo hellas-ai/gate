@@ -10,16 +10,16 @@ use hellas_auth::{
     Digest,
     authority::{ResourceId, Revision},
 };
+use hellas_authority::model::grant::admin::WorkControlCommand;
+use hellas_authority::model::grant::{
+    pricing::Pricing, records::GrantPolicy, resource::HttpsResource, responses::ResponsesResource,
+};
 use hellas_providers::{
     HttpCredential, HttpEgressPolicy, HttpFetchAdaptorFactory, HttpFetchProvider,
 };
-use hellas_sdk::work::model::{
-    fetch::{FetchPolicyV2, FetchRoutePolicy as WorkRoute, fetch_route_commitment},
-    grant::{
-        pricing::Pricing, records::GrantPolicy, resource::HttpsResource,
-        responses::ResponsesResource,
-    },
-    profile::WorkPolicy,
+use hellas_rpc::protocol::invocation::{
+    Admission, InvocationPolicy, Limits,
+    fetch::{FetchAdmission, FetchLimits, FetchRoutePolicy as WorkRoute},
 };
 use hellas_sdk::{
     FetchRoute, FetchRouteEntry, FetchRoutePolicy, FetchRouteRegistry,
@@ -263,57 +263,46 @@ impl Composition {
         let input = input
             .map(|input| crate::paid::canonical_serve(&self.directory, input))
             .transpose()?;
-        if serde_json::to_vec(&next.paid)? == serde_json::to_vec(&input)? {
-            return self.view();
-        }
         next.paid = input;
         self.validate(&next)?;
-        if let Some(input) = &next.paid {
-            let mut config = crate::paid::serve_config(&self.directory, input)?;
-            hellas_sdk::paid_provider::WorkRunnerConfig {
-                network: config.chain.network,
-                journal_root: config.journal_root.clone(),
-                routes: config.routes.clone(),
-                poll: config.poll,
-                max_observation_age: config.max_observation_age,
-                settlement_key: hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
-                    local.identity.node.node_secret_bytes(),
-                )
-                .map_err(|_| anyhow::anyhow!("invalid provider settlement key"))?,
-                policy: config.provider_policy(),
-            }
-            .validate()?;
-            // Live setup journals have one exclusive owner. Unchanged bond/client
-            // bindings were checked at startup; validate only newly selected ones.
-            let previous = self.snapshot()?.paid;
-            config.routes = hellas_sdk::work_config::WorkRoutes::try_from_iter(
-                config
-                    .routes
-                    .iter()
-                    .filter(|route| {
-                        !previous.as_ref().is_some_and(|old| {
-                            old.routes.iter().any(|r| {
-                                r.bond == hex::encode(route.bond.to_bytes())
-                                    && r.client == hex::encode(route.client.to_bytes())
-                            })
-                        })
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            )?;
-            hellas_sdk::work_config::validate_work_routes(&config).await?;
-            local.chain.get(&config).await?;
-        }
         let status = session.status().await?;
         let running = status.provider.is_some_and(|p| p.state == 2);
+        let changed =
+            serde_json::to_vec(&self.snapshot()?.paid)? != serde_json::to_vec(&next.paid)?;
+        if let Some(input) = &next.paid {
+            ensure!(
+                running,
+                "start the provider before approving a standing paid policy"
+            );
+            let policy = crate::paid::standing_policy(&input.policy)?;
+            let current = local.coordinator.paid_policy().await?;
+            let config = crate::paid::serve_config(&self.directory, input)?;
+            local.chain.get(&config).await?;
+            if current
+                .as_ref()
+                .is_none_or(|current| current.policy != policy)
+            {
+                session
+                    .work(WorkControlCommand::SetPaidPolicy {
+                        expected_revision: current.map_or(Revision(0), |current| current.revision),
+                        policy: Box::new(policy),
+                    })
+                    .await?;
+            }
+        }
+        if !changed {
+            return self.view();
+        }
         next.revision = expected
             .checked_add(1)
             .context("provider revision overflow")?;
-        session.track_local("Publish typed paid Serve settings".into(), || {
+        if running {
+            session.provider_state(false).await?;
+        }
+        session.track_local("Publish standing paid Serve settings".into(), || {
             self.publish(expected, next)
         })?;
         if running {
-            session.provider_state(false).await?;
             session.provider_state(true).await?;
         }
         self.view()
@@ -478,6 +467,7 @@ impl Composition {
                             settings: Default::default(),
                         },
                         pricing,
+                        NonZeroU64::new(300_000).context("invalid job duration")?,
                     )?
                 }
                 ResourceKind::Https {
@@ -509,7 +499,7 @@ impl Composition {
                             },
                             spki_sha256: vec![],
                         },
-                        accounting: hellas_sdk::work::model::http_usage::AccountingProfile::None,
+                        accounting: hellas_authority::model::http_usage::AccountingProfile::None,
                         max_output_tokens: 0,
                         max_response_bytes: *max_response_bytes,
                     };
@@ -521,21 +511,26 @@ impl Composition {
                         account,
                         revision,
                         name: resource.name.clone(),
-                        work: WorkPolicy::Fetch {
-                            policy: FetchPolicyV2 {
-                                allowed_environment: contract.manifest_id(),
-                                route_commitment: fetch_route_commitment(
-                                    &route.canonical_body_bytes(),
-                                )?,
-                                max_request_body_bytes: 64 << 10,
-                                max_output_events: 4096,
+                        invocation_policy: InvocationPolicy {
+                            admissions: vec![Admission::Fetch {
+                                admission: FetchAdmission {
+                                    route,
+                                    contract,
+                                    limits: FetchLimits {
+                                        max_request_body_bytes: 64 << 10,
+                                        max_output_events: 4096,
+                                        max_spool_bytes: 8 << 20,
+                                        max_encoded_result_frame: 4 << 20,
+                                        max_encoded_prepared_input: 128 << 10,
+                                    },
+                                },
+                            }],
+                            limits: Limits {
+                                max_upload_bytes: 128 << 10,
                                 max_output_bytes: 4 << 20,
-                                max_spool_bytes: 8 << 20,
-                                max_encoded_result_frame: 4 << 20,
-                                max_encoded_prepared_input: 128 << 10,
+                                max_steps: 1,
+                                execution_timeout_ms: 300_000,
                             },
-                            route,
-                            contract,
                         },
                         https: Some(https),
                         responses: None,
@@ -805,6 +800,15 @@ impl Composition {
             fetch_max_in_flight: hellas_rpc::DEFAULT_FETCH_MAX_IN_FLIGHT,
             fetch_queue_capacity: hellas_rpc::DEFAULT_FETCH_QUEUE_CAPACITY,
             paid_work: if let Some(input) = &config.paid {
+                let policy = local
+                    .coordinator
+                    .paid_policy()
+                    .await?
+                    .context("approve the standing paid policy before starting paid Serve")?;
+                ensure!(
+                    policy.policy == crate::paid::standing_policy(&input.policy)?,
+                    "standing paid settings differ from the owner-approved policy"
+                );
                 let paid = crate::paid::serve_config(&self.directory, input)?;
                 let node = local.chain.get(&paid).await?;
                 Some(hellas_sdk::PaidProviderOptions::new(paid, node)?)
@@ -944,10 +948,10 @@ pub async fn configure_resources(
         "start the provider before administering resources"
     );
     let active = match session
-        .work(hellas_sdk::work::model::grant::admin::WorkControlCommand::Catalogue)
+        .work(hellas_authority::model::grant::admin::WorkControlCommand::Catalogue)
         .await?
     {
-        hellas_sdk::work::model::grant::admin::WorkControlReply::Catalogue(policies) => policies,
+        hellas_authority::model::grant::admin::WorkControlReply::Catalogue(policies) => policies,
         _ => anyhow::bail!("invalid authority resource catalogue"),
     };
     let names = inputs
@@ -973,7 +977,7 @@ pub async fn configure_resources(
                     expected_revision: status.machine.map_or(0, |m| m.revision),
                     max_in_flight: 128,
                     limits: hellas_rpc::protocol::value::canonical_dag_cbor(&Vec::<
-                        hellas_sdk::work::model::grant::budget::Limit,
+                        hellas_authority::model::grant::budget::Limit,
                     >::new(
                     ))?,
                 }),
@@ -982,7 +986,7 @@ pub async fn configure_resources(
     }
     for name in names {
         let policy = local.composition.policy(&name)?;
-        use hellas_sdk::work::model::grant::{admin::*, budget::*};
+        use hellas_authority::model::grant::{admin::*, budget::*};
         let account = BudgetNode::Account(policy.account);
         if session
             .work(WorkControlCommand::InspectBudget { node: account })
@@ -1318,8 +1322,8 @@ mod tests {
     use super::*;
     use crate::control::work;
     use crate::state::AppState;
+    use hellas_authority::model::grant::admin::{WorkControlCommand, WorkControlReply};
     use hellas_rpc::pb::host::*;
-    use hellas_sdk::work::model::grant::admin::{WorkControlCommand, WorkControlReply};
     #[tokio::test(flavor = "multi_thread")]
     async fn one_host_mounts_openai_and_https_and_refuses_updates_before_stopping() {
         let directory = tempfile::tempdir().unwrap();

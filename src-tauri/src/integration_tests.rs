@@ -10,6 +10,14 @@ use tokio::{
     sync::Notify,
 };
 
+fn paid_address(enrollment: u8, node: u8) -> String {
+    hellas_sdk::client::ProviderAddress {
+        enrollment: hellas_rpc::ContentId::from_bytes([enrollment; 32]),
+        node: hellas_sdk::iroh::SecretKey::from_bytes(&[node; 32]).public(),
+    }
+    .to_string()
+}
+
 struct Upstream {
     url: String,
     root: String,
@@ -328,7 +336,6 @@ async fn real_authorized_fetch_recovers_issuance_preserves_live_composition_quot
     let imported = contacts::import(b.path(), &recipient, &bundle)
         .await
         .unwrap();
-    let policy = local.composition.policy("page").unwrap();
     let request = RunRequest {
         kind: RunKind::Fetch,
         input: serde_json::to_string(&hellas_rpc::http_fetch::HttpFetchRequest {
@@ -366,7 +373,6 @@ async fn real_authorized_fetch_recovers_issuance_preserves_live_composition_quot
         expected_revision: revision,
         genesis,
         apple: false,
-        environments: vec![policy.work.allowed_environment().to_string()],
         app_id: String::new(),
         cd_hashes: vec![],
         reason: "Independent local fixture pin".into(),
@@ -636,7 +642,6 @@ async fn gateway_admits_only_current_named_credentials_and_zdr_does_not_archive(
         .await
         .unwrap();
     drop(recipient);
-    let policy = local.composition.policy("responses").unwrap();
     trust::approve(
         b.path(),
         TrustInput {
@@ -651,7 +656,6 @@ async fn gateway_admits_only_current_named_credentials_and_zdr_does_not_archive(
                 .content_id()
                 .to_string(),
             apple: false,
-            environments: vec![policy.work.allowed_environment().to_string()],
             app_id: String::new(),
             cd_hashes: vec![],
             reason: "Independent local fixture pin".into(),
@@ -699,7 +703,7 @@ async fn gateway_admits_only_current_named_credentials_and_zdr_does_not_archive(
     };
     let prepared = {
         let local = bob.local().await.unwrap();
-        let limited = restricted_session(&local, &[hellas_sdk::work::node::HOST_STATUS]).await;
+        let limited = restricted_session(&local, &[hellas_authority::node::HOST_STATUS]).await;
         assert!(
             crate::gateway::issue_session(&local, pending_input.clone(), &limited)
                 .await
@@ -794,7 +798,7 @@ async fn gateway_admits_only_current_named_credentials_and_zdr_does_not_archive(
     let cancelled_id = hex::encode([0xed; 16]);
     let cancelled = {
         let local = bob.local().await.unwrap();
-        let limited = restricted_session(&local, &[hellas_sdk::work::node::HOST_STATUS]).await;
+        let limited = restricted_session(&local, &[hellas_authority::node::HOST_STATUS]).await;
         assert!(
             crate::gateway::issue_session(
                 &local,
@@ -1045,15 +1049,6 @@ async fn grant_https(
                 .content_id()
                 .to_string(),
             apple: false,
-            environments: vec![
-                local
-                    .composition
-                    .policy("page")
-                    .unwrap()
-                    .work
-                    .allowed_environment()
-                    .to_string(),
-            ],
             app_id: String::new(),
             cd_hashes: vec![],
             reason: "Independent fixture provider pin".into(),
@@ -1144,7 +1139,6 @@ async fn real_authorized_trust_revision_and_policy_switch_reuse_one_journal_and_
         expected_revision: revision,
         genesis: approval.genesis.clone(),
         apple: false,
-        environments: approval.environments.clone(),
         app_id: String::new(),
         cd_hashes: vec![],
         reason: "Independently rechecked same pins".into(),
@@ -1329,6 +1323,28 @@ async fn independent_authorities_with_the_same_credential_id_remain_usable_after
     carol.shutdown().await.unwrap();
 }
 
+fn paid_limits() -> PaidFetchLimitsInput {
+    PaidFetchLimitsInput {
+        max_request_body_bytes: 64 << 10,
+        max_output_events: 4096,
+        max_output_bytes: 4 << 20,
+        max_spool_bytes: 8 << 20,
+        max_encoded_result_frame: 4 << 20,
+        max_encoded_prepared_input: 128 << 10,
+        execution_timeout_ms: 300_000,
+    }
+}
+fn client_policy(policy: &PaidPolicyInput) -> PaidClientPolicyInput {
+    PaidClientPolicyInput {
+        chain: policy.chain.clone(),
+        service: policy.service.clone(),
+        method: policy.method.clone(),
+        presentation: policy.presentation,
+        fixed_price: policy.fixed_price,
+        poll_ms: policy.poll_ms,
+        max_observation_age_ms: policy.max_observation_age_ms,
+    }
+}
 async fn paid_policy_fixture(directory: &std::path::Path) -> PaidPolicyInput {
     use commonware_codec::DecodeExt as _;
     use commonware_cryptography::Digestible as _;
@@ -1373,12 +1389,118 @@ async fn paid_policy_fixture(directory: &std::path::Path) -> PaidPolicyInput {
     .unwrap();
     PaidPolicyInput {
         chain:ChainInput {network:genesis.network_id,genesis_digest:hellas_auth::Digest::from(digest.0).to_string(),threshold_identity:"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb".into(),validators:(1..=6).map(|port|format!("ws://127.0.0.1:{}",10000+port)).collect(),committee:genesis.validators.into_iter().map(|v|GenesisValidatorInput {public_key:v.public_key,label:v.label}).collect(),allocations:vec![]},
-        service:"openai".into(),method:"responses".into(),presentation:FetchPresentation::Responses,policy_salt:hex::encode([9;32]),compute_credit_limit:40,delivery_credit_limit:40,fixed_price:10,dispatch_blocks:1,delivery_blocks:1,oracle_blocks:1,value:1000,reserve:200,fee_base:0,fee_slot:0,fee_proof:0,fee_lifetime:0,min_omit_response_blocks:hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS,poll_ms:25,max_observation_age_ms:5000,
+        service:"openai".into(),method:"responses".into(),presentation:FetchPresentation::Responses,compute_credit_limit:40,delivery_credit_limit:40,fixed_price:10,dispatch_blocks:1,delivery_blocks:1,oracle_blocks:1,jobs_per_channel:10,omission_bond:101,max_stake_per_client:10000,max_open_offers:16,bond_lifetime_blocks:2000,redelegate_payout:true,limits:paid_limits(),min_omit_response_blocks:hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS,poll_ms:25,max_observation_age_ms:5000,
     }
 }
+#[tokio::test]
+async fn standing_paid_policy_checks_capacity_limits_and_chain_bounds() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = paid_policy_fixture(directory.path()).await;
+    let policy = crate::paid::standing_policy(&input).unwrap();
+    assert_eq!(
+        policy.expected_payment_values.value(),
+        input.fixed_price * input.jobs_per_channel + input.omission_bond
+    );
+    assert_eq!(
+        policy.expected_payment_values.close_fees(),
+        hellas_chain::domain::KERNEL_FEES
+    );
+    assert_eq!(policy.expected_payment_values.reserve(), 0);
+    let mut collateral = input.clone();
+    collateral.omission_bond = input.jobs_per_channel * input.fixed_price;
+    let mut offers = input.clone();
+    offers.max_open_offers = 0;
+    let mut limits = input.clone();
+    limits.limits.max_output_events = 0;
+    let mut lifetime = input.clone();
+    lifetime.bond_lifetime_blocks = hellas_chain::domain::MAX_EDGE_LIFETIME_BLOCKS + 1;
+    let mut overflow = input.clone();
+    overflow.jobs_per_channel = u64::MAX;
+    for invalid in [collateral, offers, limits, lifetime, overflow] {
+        assert!(crate::paid::standing_policy(&invalid).is_err());
+    }
+    assert!(!directory.path().join("paid-provider").exists());
+}
+
+#[tokio::test]
+async fn paid_apple_approvals_bind_the_address_and_keep_node_journals_across_enrollments() {
+    let directory = tempfile::tempdir().unwrap();
+    let policy = paid_policy_fixture(directory.path()).await;
+    let approve = |revision, enrollment| {
+        trust::approve(
+            directory.path(),
+            TrustInput {
+                id: "apple".into(),
+                expected_revision: revision,
+                genesis: hex::encode([enrollment; 32]),
+                apple: true,
+                app_id: "TEAM.test.gate".into(),
+                cd_hashes: vec![hex::encode([7; 32])],
+                reason: "Independent Apple enrollment and software pins".into(),
+            },
+        )
+        .unwrap()
+    };
+    approve(0, 4);
+    let mut pool = PaidPoolInput {
+        id: "apple".into(),
+        providers: vec![PaidProviderInput {
+            provider: paid_address(4, 3),
+            addresses: vec![],
+            trust_policy: "apple".into(),
+            acceptance_blocks: 16,
+            terminal_blocks: 64,
+            payment_blocks: 32,
+            timeout_seconds: 1,
+            policy: client_policy(&policy),
+        }],
+        max_pending_requests: 4,
+    };
+    let original = crate::paid::pool_options(directory.path(), &pool)
+        .unwrap()
+        .providers
+        .remove(0);
+    let anchor = original.trust().unwrap();
+    assert_eq!(original.assurance, hellas_rpc::Assurance::AppleAppAttest);
+    assert_eq!(anchor.expected_genesis, original.provider.enrollment);
+    assert_eq!(
+        anchor.apple_app_attest.as_ref().unwrap().allowed_cd_hashes,
+        vec![[7; 32]]
+    );
+    anchor
+        .apple_app_attest
+        .as_ref()
+        .unwrap()
+        .counter_store
+        .advance(&[9; 33], 10)
+        .unwrap();
+    approve(1, 5);
+    assert!(crate::paid::pool_options(directory.path(), &pool).is_err());
+    pool.providers[0].provider = paid_address(5, 3);
+    let replacement = crate::paid::pool_options(directory.path(), &pool)
+        .unwrap()
+        .providers
+        .remove(0);
+    assert_eq!(original.journal_root, replacement.journal_root);
+    assert_ne!(
+        original.provider.enrollment,
+        replacement.provider.enrollment
+    );
+    assert_eq!(
+        replacement
+            .trust()
+            .unwrap()
+            .apple_app_attest
+            .unwrap()
+            .counter_store
+            .advance(&[9; 33], 10),
+        Err(hellas_attestation::AttestationError::Counter)
+    );
+    assert!(!directory.path().join("paid-channels").exists());
+}
+
 #[tokio::test(flavor = "multi_thread")]
-async fn saving_paid_pool_rebuilds_real_sdk_backend_with_current_settings() {
-    use hellas_gateway::WorkExecutionBackend as _;
+async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channels() {
     let directory = tempfile::tempdir().unwrap();
     let secrets = tempfile::tempdir().unwrap();
     let app = AppState::with_vault(directory.path(), Vault::fixture(secrets.path()))
@@ -1393,152 +1515,154 @@ async fn saving_paid_pool_rebuilds_real_sdk_backend_with_current_settings() {
             expected_revision: 0,
             genesis: hex::encode([4; 32]),
             apple: false,
-            environments: vec![
-                crate::paid::work_policy(policy.presentation, &policy.service, &policy.method)
-                    .unwrap()
-                    .allowed_environment()
-                    .to_string(),
-            ],
             app_id: String::new(),
             cd_hashes: vec![],
             reason: "Independent fixture pin".into(),
         },
     )
     .unwrap();
-    let provider = hellas_sdk::iroh::SecretKey::from_bytes(&[3; 32])
-        .public()
-        .to_string();
+    let provider = paid_address(4, 3);
     let mut pool = PaidPoolInput {
         id: "same-pool".into(),
         providers: vec![PaidProviderInput {
             provider: provider.clone(),
             addresses: vec![],
             trust_policy: "paid-provider".into(),
-            bond: hex::encode([12; 32]),
-            coins: vec![hex::encode([1; 32])],
-            omission_bond: 601,
             acceptance_blocks: 16,
             terminal_blocks: 64,
             payment_blocks: 32,
             timeout_seconds: 1,
-            policy,
+            policy: client_policy(&policy),
         }],
         max_pending_requests: 4,
     };
-    app.save_paid_pool(pool.clone()).await.unwrap();
-    let local = app.local().await.unwrap();
-    let input = WorkClientConfig {
-        target: WorkTarget::Paid {
-            pool_id: pool.id.clone(),
-            provider,
-            service: "openai".into(),
-            method: "responses".into(),
-        },
-        trust_policy: "paid-provider".into(),
-    };
-    let original = local.clients.target(&local, &input).await.unwrap();
-    assert_eq!(
-        original.backend.timeout(),
-        std::time::Duration::from_secs(1)
+    let mut desired = desired_https(app.provider_view().await.unwrap());
+    desired.upstreams.clear();
+    desired.paid_pools = vec![pool.clone()];
+    let preview = app.preview_apply(desired.clone()).await.unwrap();
+    assert_eq!(preview.steps, vec!["Save typed paid pool same-pool"]);
+    assert!(
+        !crate::paid::pool_path(directory.path(), &pool.id)
+            .unwrap()
+            .exists()
     );
+    let mut duplicate_node = pool.clone();
+    duplicate_node.id = "other".into();
+    duplicate_node.providers[0].provider = paid_address(5, 3);
+    desired.paid_pools.push(duplicate_node);
+    assert!(
+        app.preview_apply(desired)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("each paid provider must belong to one pool")
+    );
+    let applied = app.apply_document(&preview.id).await.unwrap();
+    assert!(applied.error.is_none(), "{:?}", applied.error);
+    let local = app.local().await.unwrap();
     let bytes = std::fs::read(crate::paid::pool_path(directory.path(), &pool.id).unwrap()).unwrap();
     let mut zero = pool.clone();
     zero.max_pending_requests = 0;
     let mut duplicate = pool.clone();
-    let mut other = pool.providers[0].clone();
-    other.bond = hex::encode([13; 32]);
-    other.coins = vec![hex::encode([2; 32])];
-    duplicate.providers.push(other.clone());
-    let mut shared = pool.clone();
-    other.provider = hellas_sdk::iroh::SecretKey::from_bytes(&[4; 32])
-        .public()
+    duplicate.providers.push(pool.providers[0].clone());
+    let mut node_only = pool.clone();
+    node_only.providers[0].provider = pool.providers[0]
+        .provider
+        .parse::<hellas_sdk::client::ProviderAddress>()
+        .unwrap()
+        .node
         .to_string();
-    other.coins = pool.providers[0].coins.clone();
-    shared.providers.push(other);
-    for invalid in [zero, duplicate, shared] {
+    let mut wrong_enrollment = pool.clone();
+    wrong_enrollment.providers[0].provider = paid_address(5, 3);
+    assert!(
+        crate::paid::pool_options(directory.path(), &wrong_enrollment)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("approved enrollment")
+    );
+    let options = crate::paid::pool_options(directory.path(), &pool).unwrap();
+    assert_eq!(
+        options.providers[0].trust().unwrap().expected_genesis,
+        hellas_rpc::ContentId::from_bytes([4; 32])
+    );
+    assert!(options.providers[0].apple_trust.is_none());
+    for invalid in [zero, duplicate, node_only, wrong_enrollment] {
         assert!(app.save_paid_pool(invalid).await.is_err());
         assert_eq!(
             std::fs::read(crate::paid::pool_path(directory.path(), &pool.id).unwrap()).unwrap(),
             bytes
         );
-        let retained = local.clients.target(&local, &input).await.unwrap();
-        assert!(Arc::ptr_eq(&original, &retained));
-        assert_eq!(
-            retained.backend.timeout(),
-            std::time::Duration::from_secs(1)
-        );
-        drop(
-            retained
-                .backend
-                .fetch(hellas_gateway::WorkFetchRequest {
-                    provider: retained.provider,
-                    service: retained.service.clone(),
-                    method: retained.method.clone(),
-                    body: br#"{"model":"fixture","input":"hello","max_output_tokens":8}"#.to_vec(),
-                })
-                .expect("a rejected pool edit must leave the original SDK backend usable"),
-        );
-        assert!(!directory.path().join("paid-channels/same-pool").exists());
     }
-    let approved = trust::list(directory.path()).unwrap().pop().unwrap();
-    trust::approve(
-        directory.path(),
-        TrustInput {
-            id: "alternate".into(),
-            expected_revision: 0,
-            genesis: approved.genesis,
-            apple: false,
-            environments: approved.environments,
-            app_id: String::new(),
-            cd_hashes: vec![],
-            reason: "Independent alternate policy".into(),
+    let mut changed_enrollment = pool.clone();
+    changed_enrollment.id = "other".into();
+    changed_enrollment.providers[0].provider = paid_address(5, 3);
+    assert!(
+        app.save_paid_pool(changed_enrollment)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("already assigned")
+    );
+    let mut overlapping = pool.clone();
+    overlapping.id = "other".into();
+    assert!(
+        app.save_paid_pool(overlapping.clone())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("already assigned")
+    );
+    assert!(!directory.path().join("paid-channels").exists());
+    let first = local.clients.funding_owner(&local).await.unwrap();
+    let second = local.clients.funding_owner(&local).await.unwrap();
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "one funding owner serializes all pools"
+    );
+    let resolved = Arc::new(Notify::new());
+    let resume = Arc::new(Notify::new());
+    *local.clients.after_paid_resolution.lock().unwrap() = Some((resolved.clone(), resume.clone()));
+    let input = WorkClientConfig {
+        target: WorkTarget::Paid {
+            pool_id: pool.id.clone(),
+            provider: pool.providers[0].provider.clone(),
+            service: policy.service.clone(),
+            method: policy.method.clone(),
         },
-    )
-    .unwrap();
-    let mut invalid = input.clone();
-    invalid.trust_policy = "alternate".into();
-    let failure = local.clients.target(&local, &invalid).await.err().unwrap();
-    assert!(failure.to_string().contains("trust policy must match"));
-    let retry = local.clients.target(&local, &input).await.unwrap();
-    assert!(
-        Arc::ptr_eq(&original, &retry),
-        "invalid selection must leave the original target cached and usable"
-    );
-    assert_eq!(
-        original.backend.timeout(),
-        std::time::Duration::from_secs(1)
-    );
-    drop(
-        original
-            .backend
-            .fetch(hellas_gateway::WorkFetchRequest {
-                provider: original.provider,
-                service: original.service.clone(),
-                method: original.method.clone(),
-                body: br#"{"model":"fixture","input":"hello","max_output_tokens":8}"#.to_vec(),
-            })
-            .expect("the real paid backend still admits a valid request"),
-    );
+        trust_policy: "paid-provider".into(),
+    };
+    let opening = local.clone();
+    let pending = tokio::spawn(async move { opening.clients.target(&opening, &input).await });
+    tokio::time::timeout(std::time::Duration::from_secs(10), resolved.notified())
+        .await
+        .unwrap();
     pool.providers[0].timeout_seconds = 2;
-    pool.providers[0].coins = vec![hex::encode([2; 32])];
-    pool.providers[0].policy.fixed_price = 11;
-    app.save_paid_pool(pool).await.unwrap();
-    let current = local.clients.target(&local, &input).await.unwrap();
-    assert!(!Arc::ptr_eq(&original, &current));
-    assert_eq!(current.backend.timeout(), std::time::Duration::from_secs(2));
-    assert!(
-        original
-            .backend
-            .fetch(hellas_gateway::WorkFetchRequest {
-                provider: original.provider,
-                service: original.service.clone(),
-                method: original.method.clone(),
-                body: b"{}".to_vec()
-            })
-            .is_err()
+    app.save_paid_pool(pool.clone()).await.unwrap();
+    resume.notify_one();
+    let error = pending.await.unwrap().err().unwrap();
+    assert!(error.to_string().contains("paid pool changed"), "{error:#}");
+    assert!(!directory.path().join("paid-channels").exists());
+    let retained = directory.path().join("paid-channels/same-pool").join(
+        pool.providers[0]
+            .provider
+            .parse::<hellas_sdk::client::ProviderAddress>()
+            .unwrap()
+            .node
+            .to_string(),
     );
-    // Pool startup/reload creates no funded channel and preserves the same journal root.
-    assert!(!directory.path().join("paid-channels/same-pool").exists());
+    std::fs::create_dir_all(&retained).unwrap();
+    pool.providers[0].provider = paid_address(4, 4);
+    app.save_paid_pool(pool).await.unwrap();
+    assert!(
+        app.save_paid_pool(overlapping)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("retained channel")
+    );
+    drop(first);
+    drop(second);
     app.shutdown().await.unwrap();
 }
 
@@ -1873,35 +1997,24 @@ async fn shutdown_closes_opening_for_an_admitted_run_before_lazy_paid_chain_star
             expected_revision: 0,
             genesis: hex::encode([4; 32]),
             apple: false,
-            environments: vec![
-                crate::paid::work_policy(policy.presentation, &policy.service, &policy.method)
-                    .unwrap()
-                    .allowed_environment()
-                    .to_string(),
-            ],
             app_id: String::new(),
             cd_hashes: vec![],
             reason: "Independent fixture pin".into(),
         },
     )
     .unwrap();
-    let provider = hellas_sdk::iroh::SecretKey::from_bytes(&[3; 32])
-        .public()
-        .to_string();
+    let provider = paid_address(4, 3);
     app.save_paid_pool(PaidPoolInput {
         id: "paid".into(),
         providers: vec![PaidProviderInput {
             provider: provider.clone(),
             addresses: vec![],
             trust_policy: "provider".into(),
-            bond: hex::encode([12; 32]),
-            coins: vec![hex::encode([1; 32])],
-            omission_bond: 601,
             acceptance_blocks: 16,
             terminal_blocks: 64,
             payment_blocks: 32,
             timeout_seconds: 1,
-            policy,
+            policy: client_policy(&policy),
         }],
         max_pending_requests: 4,
     })
@@ -2269,7 +2382,7 @@ async fn restricted_session(
         server,
         local.identity.public.authority,
         &secret,
-        hellas_sdk::work::node::SessionKey::Passkey(local.identity.passkey.as_ref()),
+        hellas_authority::node::SessionKey::Passkey(local.identity.passkey.as_ref()),
     )
     .await
     .unwrap();
@@ -2277,7 +2390,7 @@ async fn restricted_session(
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn late_auth_refusal_reports_committed_share_budgets_and_allowance_exactly() {
-    use hellas_sdk::work::model::grant::admin::{WorkControlCommand, WorkControlReply};
+    use hellas_authority::model::grant::admin::{WorkControlCommand, WorkControlReply};
     let upstream = Upstream::start().await;
     let a = tempfile::tempdir().unwrap();
     let b = tempfile::tempdir().unwrap();
@@ -2326,10 +2439,10 @@ async fn late_auth_refusal_reports_committed_share_budgets_and_allowance_exactly
     let limited = restricted_session(
         &local,
         &[
-            hellas_sdk::work::node::HOST_STATUS,
-            hellas_sdk::work::work_store::grant::WORK_ALLOWANCE_READ,
-            hellas_sdk::work::work_store::grant::WORK_BUDGET_CONFIGURE,
-            hellas_sdk::work::work_store::grant::WORK_ALLOWANCE_CONFIGURE,
+            hellas_authority::node::HOST_STATUS,
+            hellas_authority::work_store::grant::WORK_ALLOWANCE_READ,
+            hellas_authority::work_store::grant::WORK_BUDGET_CONFIGURE,
+            hellas_authority::work_store::grant::WORK_ALLOWANCE_CONFIGURE,
             hellas_auth::authority::GRANT_ADMINISTER,
         ],
     )
@@ -2415,7 +2528,7 @@ async fn late_auth_refusal_reports_committed_share_budgets_and_allowance_exactly
 
 #[tokio::test(flavor = "multi_thread")]
 async fn late_resource_refusal_reports_catalogue_and_restart_then_reapply_activates_authority() {
-    use hellas_sdk::work::model::grant::admin::{WorkControlCommand, WorkControlReply};
+    use hellas_authority::model::grant::admin::{WorkControlCommand, WorkControlReply};
     let upstream = Upstream::start().await;
     let a = tempfile::tempdir().unwrap();
     let b = tempfile::tempdir().unwrap();
@@ -2443,9 +2556,9 @@ async fn late_resource_refusal_reports_catalogue_and_restart_then_reapply_activa
     let limited = restricted_session(
         &local,
         &[
-            hellas_sdk::work::node::HOST_STATUS,
-            hellas_sdk::work::node::HOST_PROVIDER_CONFIGURE,
-            hellas_sdk::work::work_store::grant::WORK_ALLOWANCE_READ,
+            hellas_authority::node::HOST_STATUS,
+            hellas_authority::node::HOST_PROVIDER_CONFIGURE,
+            hellas_authority::work_store::grant::WORK_ALLOWANCE_READ,
         ],
     )
     .await;
@@ -2529,7 +2642,7 @@ async fn late_resource_refusal_reports_catalogue_and_restart_then_reapply_activa
 
 #[tokio::test(flavor = "multi_thread")]
 async fn same_route_openai_resources_switch_credential_as_one_validated_group() {
-    use hellas_sdk::work::model::grant::admin::{WorkControlCommand, WorkControlReply};
+    use hellas_authority::model::grant::admin::{WorkControlCommand, WorkControlReply};
     let directory = tempfile::tempdir().unwrap();
     let secrets = tempfile::tempdir().unwrap();
     let vault = Vault::fixture(secrets.path());
@@ -2876,10 +2989,7 @@ async fn openai_https_and_paid_share_one_host_and_invalid_paid_settings_preserve
     policy.service = "web".into();
     policy.method = "get".into();
     policy.presentation = FetchPresentation::Http;
-    let paid = PaidServeInput {
-        policy,
-        routes: vec![],
-    };
+    let paid = PaidServeInput { policy };
     let mut desired = desired_https(alice.provider_view().await.unwrap());
     let key = alice
         .provider_view()
@@ -2910,6 +3020,7 @@ async fn openai_https_and_paid_share_one_host_and_invalid_paid_settings_preserve
         configuration: Some(paid.clone()),
     });
     let preview = alice.preview_apply(desired.clone()).await.unwrap();
+    assert!(preview.requires_passkey);
     let applied = alice.apply_document(&preview.id).await.unwrap();
     assert!(applied.error.is_none(), "{applied:?}");
     desired.expected_provider_revision = 6;
@@ -2923,6 +3034,41 @@ async fn openai_https_and_paid_share_one_host_and_invalid_paid_settings_preserve
         bytes
     );
     let local = alice.local().await.unwrap();
+    let approved = local.coordinator.paid_policy().await.unwrap().unwrap();
+    assert_eq!(
+        approved.policy,
+        crate::paid::standing_policy(&paid.policy).unwrap()
+    );
+    assert_eq!(approved.revision.0, 1);
+    let daily = local.session(false).await.unwrap();
+    let replacement = || hellas_authority::model::grant::admin::WorkControlCommand::SetPaidPolicy {
+        expected_revision: approved.revision,
+        policy: Box::new(approved.policy.clone()),
+    };
+    assert!(
+        crate::control::work(&daily.client, daily.authorization.clone(), replacement())
+            .await
+            .is_err(),
+        "a daily credential cannot approve paid stake spending"
+    );
+    let owner = local.session(true).await.unwrap();
+    assert!(
+        crate::control::work(
+            &owner.client,
+            owner.authorization.clone(),
+            hellas_authority::model::grant::admin::WorkControlCommand::SetPaidPolicy {
+                expected_revision: hellas_auth::authority::Revision(0),
+                policy: Box::new(approved.policy.clone())
+            }
+        )
+        .await
+        .is_err(),
+        "stale paid-policy revisions must refuse"
+    );
+    assert_eq!(
+        local.coordinator.paid_policy().await.unwrap().unwrap(),
+        approved
+    );
     assert!(local.chain.initialized());
     let peer = alice.status().await.unwrap().identity.transport_id;
     assert_eq!(alice.status().await.unwrap().provider.state, "running");
@@ -2935,15 +3081,10 @@ async fn openai_https_and_paid_share_one_host_and_invalid_paid_settings_preserve
     let metadata = std::fs::read(a.path().join("provider-configuration.json")).unwrap();
     let mut invalid = paid.clone();
     invalid.policy.max_observation_age_ms = invalid.policy.poll_ms;
-    let route = PaidRouteInput {
-        peer: bob.status().await.unwrap().identity.transport_id,
-        client: bob.status().await.unwrap().identity.node_key,
-        bond: hex::encode([87; 32]),
-    };
     let mut duplicate = paid.clone();
-    duplicate.routes = vec![route.clone(), route.clone()];
+    duplicate.policy.max_open_offers = 0;
     let mut missing = paid.clone();
-    missing.routes = vec![route];
+    missing.policy.omission_bond = missing.policy.jobs_per_channel * missing.policy.fixed_price;
     let mut wrong = paid.clone();
     wrong.policy.presentation = FetchPresentation::Responses;
     for input in [invalid, duplicate, missing, wrong] {
@@ -2956,6 +3097,10 @@ async fn openai_https_and_paid_share_one_host_and_invalid_paid_settings_preserve
         assert_eq!(alice.status().await.unwrap().identity.transport_id, peer);
         assert!(!inflight.is_finished());
     }
+    assert_eq!(
+        local.coordinator.paid_policy().await.unwrap().unwrap(),
+        approved
+    );
     upstream.release.notify_one();
     assert!(finished(&inflight.await.unwrap().unwrap()));
     bob.shutdown().await.unwrap();
@@ -3081,12 +3226,6 @@ async fn grant_responses(
                 .content_id()
                 .to_string(),
             apple: false,
-            environments: vec![
-                hellas_reseller::responses_contract()
-                    .unwrap()
-                    .manifest_id()
-                    .to_string(),
-            ],
             app_id: String::new(),
             cd_hashes: vec![],
             reason: "Independent Responses fixture provider pin".into(),
@@ -3285,7 +3424,7 @@ async fn authorized_responses_gateway_enforces_keys_zdr_archive_revocation_and_s
 mod chain_acceptance;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn refused_first_paid_route_cannot_select_the_shared_chain() {
+async fn refused_first_paid_policy_cannot_select_the_shared_chain() {
     let upstream = Upstream::start().await;
     let a = tempfile::tempdir().unwrap();
     let b = tempfile::tempdir().unwrap();
@@ -3317,14 +3456,10 @@ async fn refused_first_paid_route_cannot_select_the_shared_chain() {
     // The opposite valid BLS generator is an independently pinned finality
     // identity for a distinct chain definition on this same network.
     chain_b.chain.threshold_identity.replace_range(..2, "b7");
-    let input = PaidServeInput {
+    let mut input = PaidServeInput {
         policy: chain_a.clone(),
-        routes: vec![PaidRouteInput {
-            peer: bob.status().await.unwrap().identity.transport_id,
-            client: bob.status().await.unwrap().identity.node_key,
-            bond: hex::encode([238; 32]),
-        }],
     };
+    input.policy.max_open_offers = 0;
     upstream.hold.store(true, Ordering::SeqCst);
     let recipient = bob.local().await.unwrap();
     let pending =
@@ -3345,21 +3480,10 @@ async fn refused_first_paid_route_cannot_select_the_shared_chain() {
     timing.poll_ms = 0;
     for policy in [http, duplicate, count, threshold, window, timing] {
         let error = alice
-            .configure_paid_serve(
-                2,
-                Some(PaidServeInput {
-                    policy,
-                    routes: vec![],
-                }),
-            )
+            .configure_paid_serve(2, Some(PaidServeInput { policy }))
             .await
             .unwrap_err();
-        assert!(
-            error
-                .downcast_ref::<hellas_sdk::work_config::WorkConfigError>()
-                .is_some(),
-            "{error:#}"
-        );
+        assert!(!error.to_string().is_empty());
         assert!(!local.chain.initialized());
         assert!(!a.path().join("chain").exists());
         assert_eq!(
@@ -3374,10 +3498,7 @@ async fn refused_first_paid_route_cannot_select_the_shared_chain() {
         .await
         .unwrap_err();
     assert!(
-        matches!(
-            refusal.downcast_ref::<hellas_sdk::work_config::WorkConfigError>(),
-            Some(hellas_sdk::work_config::WorkConfigError::MissingRoute { .. })
-        ),
+        refusal.to_string().contains("offer policy bounds"),
         "{refusal:#}"
     );
     assert!(!local.chain.initialized());
@@ -3395,12 +3516,17 @@ async fn refused_first_paid_route_cannot_select_the_shared_chain() {
             2,
             Some(PaidServeInput {
                 policy: chain_b.clone(),
-                routes: vec![],
             }),
         )
         .await
         .unwrap();
-    let config_b = crate::paid::config(&chain_b, a.path().join("unused-b")).unwrap();
+    let config_b = crate::paid::config(
+        &chain_b.chain,
+        chain_b.poll_ms,
+        chain_b.max_observation_age_ms,
+        a.path().join("unused-b"),
+    )
+    .unwrap();
     assert_eq!(
         config_b.validators,
         chain_a
@@ -3414,10 +3540,15 @@ async fn refused_first_paid_route_cannot_select_the_shared_chain() {
     assert_eq!(node.config().validators, config_b.validators);
     config_b.check_node(&node).unwrap();
     assert!(
-        crate::paid::config(&chain_a, a.path().join("unused-a"))
-            .unwrap()
-            .check_node(&node)
-            .is_err()
+        crate::paid::config(
+            &chain_a.chain,
+            chain_a.poll_ms,
+            chain_a.max_observation_age_ms,
+            a.path().join("unused-a")
+        )
+        .unwrap()
+        .check_node(&node)
+        .is_err()
     );
     assert_eq!(
         node.config().threshold_identity,
@@ -3445,7 +3576,7 @@ async fn refused_gateway_presentation_keeps_the_live_listener_and_first_chain_un
     let origin = crate::responses_fixture::Origin::start().await;
     let (request, _) = grant_responses(&alice, &bob, &origin, 239).await;
     let local = bob.local().await.unwrap();
-    let provider = alice.status().await.unwrap().identity.transport_id;
+    let provider = alice.status().await.unwrap().identity.provider_address;
     let mut policy_b = paid_policy_fixture(b.path()).await;
     policy_b.chain.threshold_identity.replace_range(..2, "b7");
     let mut policy_a = policy_b.clone();
@@ -3459,39 +3590,35 @@ async fn refused_gateway_presentation_keeps_the_live_listener_and_first_chain_un
         TrustInput {
             id: "paid".into(),
             expected_revision: 0,
-            genesis: approved.genesis,
+            genesis: approved.genesis.clone(),
             apple: false,
-            environments: vec![
-                crate::paid::work_policy(FetchPresentation::Http, "web", "get")
-                    .unwrap()
-                    .allowed_environment()
-                    .to_string(),
-                crate::paid::work_policy(FetchPresentation::Responses, "openai", "responses")
-                    .unwrap()
-                    .allowed_environment()
-                    .to_string(),
-            ],
             app_id: String::new(),
             cd_hashes: vec![],
             reason: "Independent fixture pins".into(),
         },
     )
     .unwrap();
+    let other_provider = hellas_sdk::client::ProviderAddress {
+        enrollment: approved.genesis.parse().unwrap(),
+        node: hellas_sdk::iroh::SecretKey::from_bytes(&[240; 32]).public(),
+    }
+    .to_string();
     for (id, policy) in [("a", policy_a.clone()), ("b", policy_b.clone())] {
         bob.save_paid_pool(PaidPoolInput {
             id: id.into(),
             providers: vec![PaidProviderInput {
-                provider: provider.clone(),
+                provider: if id == "a" {
+                    provider.clone()
+                } else {
+                    other_provider.clone()
+                },
                 addresses: vec![],
                 trust_policy: "paid".into(),
-                bond: hex::encode([240; 32]),
-                coins: vec![hex::encode([241; 32])],
-                omission_bond: 601,
                 acceptance_blocks: 16,
                 terminal_blocks: 64,
                 payment_blocks: 32,
                 timeout_seconds: 60,
-                policy,
+                policy: client_policy(&policy),
             }],
             max_pending_requests: 8,
         })
@@ -3558,7 +3685,11 @@ async fn refused_gateway_presentation_keeps_the_live_listener_and_first_chain_un
             client: WorkClientConfig {
                 target: WorkTarget::Paid {
                     pool_id: pool.into(),
-                    provider: provider.clone(),
+                    provider: if pool == "a" {
+                        provider.clone()
+                    } else {
+                        other_provider.clone()
+                    },
                     service: policy.service.clone(),
                     method: policy.method.clone(),
                 },
@@ -3607,161 +3738,8 @@ async fn refused_gateway_presentation_keeps_the_live_listener_and_first_chain_un
     }
     origin.release.notify_one();
     assert!(held.await.unwrap().contains("hello"));
-    bob.set_gateway(
-        true,
-        Some(GatewayConfig {
-            client: WorkClientConfig {
-                target: WorkTarget::Paid {
-                    pool_id: "b".into(),
-                    provider,
-                    service: policy_b.service.clone(),
-                    method: policy_b.method.clone(),
-                },
-                trust_policy: "paid".into(),
-            },
-            http_routes: vec![],
-            port: Some(0),
-            zdr: true,
-        }),
-    )
-    .await
-    .unwrap();
-    let config_b = crate::paid::config(&policy_b, b.path().join("unused-b")).unwrap();
-    let node = local.chain.get(&config_b).await.unwrap();
-    config_b.check_node(&node).unwrap();
-    assert!(
-        crate::paid::config(&policy_a, b.path().join("unused-a"))
-            .unwrap()
-            .check_node(&node)
-            .is_err()
-    );
-    assert_eq!(bob.status().await.unwrap().gateway.state, "running");
-    bob.shutdown().await.unwrap();
-    alice.shutdown().await.unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn paid_backend_cache_versions_keep_the_exact_resolved_approval_snapshot() {
-    let upstream = Upstream::start().await;
-    let a = tempfile::tempdir().unwrap();
-    let b = tempfile::tempdir().unwrap();
-    let sa = tempfile::tempdir().unwrap();
-    let sb = tempfile::tempdir().unwrap();
-    let alice = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
-        .await
-        .unwrap();
-    let bob = AppState::with_vault(b.path(), Vault::fixture(sb.path()))
-        .await
-        .unwrap();
-    alice.initialize_software("Alice".into()).await.unwrap();
-    bob.initialize_software("Bob".into()).await.unwrap();
-    let (request, _) = grant_https(&alice, &bob, &upstream, "paid-race", 243).await;
-    let WorkTarget::Authorized { access_id, .. } = &request.client.target else {
-        panic!("authorized fixture");
-    };
-    let access = contacts::imported(b.path(), access_id).unwrap();
-    let signed_offer = STANDARD.decode(&access.offers[0]).unwrap();
-    let mut policy = paid_policy_fixture(b.path()).await;
-    policy.presentation = FetchPresentation::Http;
-    policy.service = "web".into();
-    policy.method = "get".into();
-    let provider = alice.status().await.unwrap().identity.transport_id;
-    bob.save_paid_pool(PaidPoolInput {
-        id: "snapshot".into(),
-        providers: vec![PaidProviderInput {
-            provider: provider.clone(),
-            addresses: vec![],
-            trust_policy: "paid-race".into(),
-            bond: hex::encode([244; 32]),
-            coins: vec![hex::encode([245; 32])],
-            omission_bond: 601,
-            acceptance_blocks: 16,
-            terminal_blocks: 64,
-            payment_blocks: 32,
-            timeout_seconds: 1,
-            policy,
-        }],
-        max_pending_requests: 4,
-    })
-    .await
-    .unwrap();
-    let input = WorkClientConfig {
-        target: WorkTarget::Paid {
-            pool_id: "snapshot".into(),
-            provider,
-            service: "web".into(),
-            method: "get".into(),
-        },
-        trust_policy: "paid-race".into(),
-    };
-    let local = bob.local().await.unwrap();
-    let resolved = Arc::new(Notify::new());
-    let resume = Arc::new(Notify::new());
-    *local.clients.after_paid_resolution.lock().unwrap() = Some((resolved.clone(), resume.clone()));
-    let opening = local.clone();
-    let selected = input.clone();
-    let pending = tokio::spawn(async move { opening.clients.target(&opening, &selected).await });
-    tokio::time::timeout(std::time::Duration::from_secs(10), resolved.notified())
-        .await
-        .unwrap();
-    let old = trust::list(b.path())
-        .unwrap()
-        .into_iter()
-        .find(|record| record.id == "paid-race")
-        .unwrap();
-    let g2 = hellas_rpc::ContentId::from_bytes([246; 32]);
-    assert_ne!(old.genesis, g2.to_string());
-    trust::approve(
-        b.path(),
-        TrustInput {
-            id: old.id,
-            expected_revision: old.revision,
-            genesis: g2.to_string(),
-            apple: false,
-            environments: old.environments,
-            app_id: String::new(),
-            cd_hashes: vec![],
-            reason: "Replace independent enrollment pin during opening".into(),
-        },
-    )
-    .unwrap();
-    resume.notify_one();
-    let first = pending.await.unwrap().unwrap();
-    let first_anchor = local.clients.opened_paid_trust.lock().unwrap()[0][0].clone();
-    assert_eq!(first_anchor.expected_genesis.to_string(), old.genesis);
-    hellas_sdk::grant_client::UnpinnedOffer::decode(
-        &signed_offer,
-        hellas_auth::authority::UnixMillis::now().unwrap(),
-    )
-    .unwrap()
-    .pin(&first_anchor)
-    .unwrap();
-    let second = local.clients.target(&local, &input).await.unwrap();
-    assert!(
-        !Arc::ptr_eq(&first, &second),
-        "a newly admitted request must not reuse G1 as revision 2"
-    );
-    let second_anchor = {
-        let opened = local.clients.opened_paid_trust.lock().unwrap();
-        assert_eq!(opened.len(), 2);
-        opened[1][0].clone()
-    };
-    assert_eq!(second_anchor.expected_genesis, g2);
-    let refusal = hellas_sdk::grant_client::UnpinnedOffer::decode(
-        &signed_offer,
-        hellas_auth::authority::UnixMillis::now().unwrap(),
-    )
-    .unwrap()
-    .pin(&second_anchor)
-    .err()
-    .unwrap();
-    assert!(refusal.to_string().contains("genesis"), "{refusal}");
-    assert_eq!(upstream.calls.load(Ordering::SeqCst), 0);
-    assert!(Arc::ptr_eq(
-        &second,
-        &local.clients.target(&local, &input).await.unwrap()
-    ));
-    assert_eq!(local.clients.opened_paid_trust.lock().unwrap().len(), 2);
+    assert!(!local.chain.initialized());
+    assert_eq!(bob.gateway_address().await.unwrap(), address);
     bob.shutdown().await.unwrap();
     alice.shutdown().await.unwrap();
 }

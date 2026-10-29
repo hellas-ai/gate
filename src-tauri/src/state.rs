@@ -110,7 +110,7 @@ impl AppState {
             detail: String::new(),
         };
         let Some(local) = self.local.lock().await.clone() else {
-            return Ok(AppStatus { version: env!("CARGO_PKG_VERSION").into(), identity: IdentityStatus { initialized: false, recovery_available:self.directory.join("installation.json").try_exists()?, principal: String::new(), fingerprint: String::new(), node_key: String::new(), transport_id: String::new(), authority: String::new(), generation: 0, attestation: "unavailable".into(), detail: self.failure.lock().await.clone().unwrap_or_else(||"Native passkey bridge unavailable. Explicit software identity is for development; user presence only.".into()), contact_card: String::new() }, provider: stopped(), gateway: stopped(), endpoint: String::new(), socket_path: self.directory.join("gate.sock").display().to_string(), listen_port: crate::settings::load(&self.directory)?.listen_port, bound_addresses: vec![], min_omit_response_blocks: hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS });
+            return Ok(AppStatus { version: env!("CARGO_PKG_VERSION").into(), identity: IdentityStatus { initialized: false, recovery_available:self.directory.join("installation.json").try_exists()?, principal: String::new(), fingerprint: String::new(), node_key: String::new(), transport_id: String::new(), provider_address: String::new(), authority: String::new(), generation: 0, attestation: "unavailable".into(), detail: self.failure.lock().await.clone().unwrap_or_else(||"Native passkey bridge unavailable. Explicit software identity is for development; user presence only.".into()), contact_card: String::new() }, provider: stopped(), gateway: stopped(), endpoint: String::new(), socket_path: self.directory.join("gate.sock").display().to_string(), listen_port: crate::settings::load(&self.directory)?.listen_port, bound_addresses: vec![], min_omit_response_blocks: hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS });
         };
         let status = local
             .client(false)
@@ -135,7 +135,14 @@ impl AppState {
         };
         use base64::Engine;
         let identity = &local.identity;
-        let attestation = match local.coordinator.provider().await? {
+        let enrollment = local.coordinator.provider().await?;
+        let provider_address = enrollment
+            .as_ref()
+            .map(hellas_sdk::client::ProviderAddress::of)
+            .transpose()?
+            .map(|address| address.to_string())
+            .unwrap_or_default();
+        let attestation = match enrollment {
             Some(enrollment)
                 if matches!(
                     enrollment.platform,
@@ -147,7 +154,7 @@ impl AppState {
             Some(_) => "software (non-private)",
             None => "unbound",
         };
-        Ok(AppStatus { version: status.version, identity: IdentityStatus { initialized: true, recovery_available:false, principal: identity.public.owner.to_string(), fingerprint: identity.public.owner.fingerprint(), node_key: hex::encode(identity.node.node_key().public_key().bytes()), transport_id: identity.node.node_id().to_string(), authority: identity.public.authority.to_string(), generation: status.generation, attestation: attestation.into(), detail: "Software P-256 passkey (UP only); execution is non-private unless independently attested.".into(), contact_card: base64::engine::general_purpose::STANDARD.encode(hellas_rpc::protocol::value::canonical_dag_cbor(&identity.public.card)?) }, provider: service(status.provider), gateway: service(status.gateway), endpoint: status.endpoint, socket_path: local.socket.display().to_string(), listen_port: crate::settings::load(&self.directory)?.listen_port, bound_addresses: local.bound_addresses.get().cloned().unwrap_or_default(), min_omit_response_blocks: hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS })
+        Ok(AppStatus { version: status.version, identity: IdentityStatus { initialized: true, recovery_available:false, principal: identity.public.owner.to_string(), fingerprint: identity.public.owner.fingerprint(), node_key: hex::encode(identity.node.node_key().public_key().bytes()), transport_id: identity.node.node_id().to_string(), provider_address, authority: identity.public.authority.to_string(), generation: status.generation, attestation: attestation.into(), detail: "Software P-256 passkey (UP only); execution is non-private unless independently attested.".into(), contact_card: base64::engine::general_purpose::STANDARD.encode(hellas_rpc::protocol::value::canonical_dag_cbor(&identity.public.card)?) }, provider: service(status.provider), gateway: service(status.gateway), endpoint: status.endpoint, socket_path: local.socket.display().to_string(), listen_port: crate::settings::load(&self.directory)?.listen_port, bound_addresses: local.bound_addresses.get().cloned().unwrap_or_default(), min_omit_response_blocks: hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS })
     }
     pub async fn shutdown(&self) -> anyhow::Result<bool> {
         let _lock = self.operation.lock().await;
@@ -325,8 +332,7 @@ impl AppState {
     }
     pub async fn save_paid_pool(&self, input: PaidPoolInput) -> anyhow::Result<()> {
         let _lock = self.operation.lock().await;
-        self.local().await?;
-        crate::paid::save_pool(&self.directory, input)
+        self.local().await?.clients.save_pool(input).await
     }
 }
 
@@ -402,11 +408,6 @@ impl AppState {
 }
 
 impl AppState {
-    pub async fn paid_client_peer(&self, pool_id: &str) -> anyhow::Result<String> {
-        let _lock = self.operation.lock().await;
-        let local = self.local().await?;
-        local.clients.paid_peer(&local, pool_id).await
-    }
     pub async fn configure_paid_serve(
         &self,
         expected: u64,
@@ -414,19 +415,11 @@ impl AppState {
     ) -> anyhow::Result<ProviderView> {
         let _lock = self.operation.lock().await;
         let local = self.local().await?;
-        let session = local.session(false).await?;
+        let session = local.session(input.is_some()).await?;
         local
             .composition
             .configure_paid(&local, &session, expected, input)
             .await
-    }
-    pub async fn provision_paid(
-        &self,
-        input: ProvisionInput,
-        commit: bool,
-    ) -> anyhow::Result<ProvisionView> {
-        let _lock = self.operation.lock().await;
-        crate::paid::provision(self.local().await?.as_ref(), input, commit).await
     }
 }
 

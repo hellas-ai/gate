@@ -29,8 +29,8 @@ pub struct Target {
 enum Selection {
     Authorized {
         access: contacts::Imported,
-        offer: Box<hellas_sdk::work::model::grant::records::SignedOffer>,
-        policy: Box<hellas_sdk::work::model::grant::records::GrantPolicy>,
+        offer: Box<hellas_authority::model::grant::records::SignedOffer>,
+        policy: Box<hellas_authority::model::grant::records::GrantPolicy>,
         trust: Box<trust::Snapshot>,
     },
     Paid {
@@ -41,30 +41,33 @@ enum Selection {
     },
 }
 fn route(
-    policy: &hellas_sdk::work::model::profile::WorkPolicy,
-) -> anyhow::Result<(String, String, FetchPresentation)> {
-    let hellas_sdk::work::model::profile::WorkPolicy::Fetch {
-        route: hellas_sdk::work::model::fetch::FetchRoutePolicy::SealedRoute { service, method },
-        contract,
-        ..
-    } = policy
-    else {
+    policy: &hellas_rpc::protocol::invocation::InvocationPolicy,
+) -> anyhow::Result<(String, String, FetchPresentation, hellas_rpc::ContentId)> {
+    use hellas_rpc::protocol::invocation::{Admission, fetch::FetchRoutePolicy};
+    let [Admission::Fetch { admission }] = policy.admissions.as_slice() else {
+        anyhow::bail!("select a resource with one named Fetch route");
+    };
+    let FetchRoutePolicy::SealedRoute { service, method } = &admission.route else {
         anyhow::bail!("select a named Fetch resource");
     };
     Ok((
         service.clone(),
         method.clone(),
-        if contract.schema() == hellas_rpc::FetchSchema::StatelessResponsesV1 {
-            FetchPresentation::Responses
-        } else {
-            FetchPresentation::Http
+        match admission.contract.schema() {
+            hellas_rpc::FetchSchema::HttpV1 => FetchPresentation::Http,
+            hellas_rpc::FetchSchema::StatelessResponsesV1 => FetchPresentation::Responses,
+            hellas_rpc::FetchSchema::ResponsesItemsV1 => {
+                anyhow::bail!("this Fetch schema has no supported Gate presentation")
+            }
         },
+        admission.contract.manifest_id(),
     ))
 }
+
 impl Selection {
     fn presentation(&self) -> anyhow::Result<FetchPresentation> {
         match self {
-            Self::Authorized { policy, .. } => Ok(route(&policy.work)?.2),
+            Self::Authorized { policy, .. } => Ok(route(&policy.invocation_policy)?.2),
             Self::Paid { selected, .. } => Ok(selected.policy.presentation),
         }
     }
@@ -113,8 +116,8 @@ impl RetirableBackend {
     }
 }
 impl WorkExecutionBackend for RetirableBackend {
-    fn fetch_providers(&self) -> Vec<hellas_sdk::iroh::EndpointId> {
-        self.with_backend(|backend| backend.fetch_providers())
+    fn fetch_routes(&self) -> Vec<hellas_gateway::FetchRoute> {
+        self.with_backend(|backend| backend.fetch_routes())
             .unwrap_or_default()
     }
     fn fetch(
@@ -126,14 +129,14 @@ impl WorkExecutionBackend for RetirableBackend {
     > {
         self.with_backend(|backend| backend.fetch(request))?
     }
-    fn execute(
+    fn generate(
         &self,
-        request: hellas_gateway::WorkExecutionRequest,
+        request: hellas_sdk::client::text::TextJob,
     ) -> Result<
         hellas_gateway::WorkOutputStream<hellas_gateway::ExecutionEvent>,
         hellas_gateway::WorkGatewayError,
     > {
-        self.with_backend(|backend| backend.execute(request))?
+        self.with_backend(|backend| backend.generate(request))?
     }
     fn timeout(&self) -> Duration {
         self.with_backend(|backend| backend.timeout())
@@ -150,6 +153,7 @@ pub struct Clients {
     chain: Arc<crate::chain::ChainNode>,
     closed: AtomicBool,
     transport_keys: Mutex<()>,
+    owner: Mutex<Option<Arc<hellas_sdk::client_owner::ClientOwner>>>,
     #[cfg(test)]
     pub(crate) drained: tokio::sync::Notify,
     #[cfg(test)]
@@ -168,6 +172,7 @@ impl Clients {
             chain,
             closed: AtomicBool::new(false),
             transport_keys: Mutex::new(()),
+            owner: Mutex::new(None),
             #[cfg(test)]
             drained: tokio::sync::Notify::new(),
             #[cfg(test)]
@@ -177,18 +182,6 @@ impl Clients {
             cache: Mutex::new(BTreeMap::new()),
             paid: Mutex::new(BTreeMap::new()),
         }
-    }
-    pub async fn paid_peer(&self, local: &LocalNode, pool_id: &str) -> anyhow::Result<String> {
-        paid::pool_path(&self.directory, pool_id)?;
-        ensure!(
-            !self.closed.load(Ordering::SeqCst),
-            "client admission is closed because Gate is shutting down"
-        );
-        Ok(self
-            .transport(local, &format!("paid:{pool_id}"))
-            .await?
-            .public()
-            .to_string())
     }
     #[cfg(all(test, feature = "chain-tests", target_os = "linux"))]
     pub(crate) async fn paid_transport(
@@ -223,7 +216,7 @@ impl Clients {
                     .iter()
                     .map(|s| {
                         Ok(
-                            hellas_sdk::work::model::grant::records::SignedOffer::decode(
+                            hellas_authority::model::grant::records::SignedOffer::decode(
                                 &STANDARD.decode(s)?,
                                 UnixMillis::now()?,
                             )?,
@@ -241,12 +234,8 @@ impl Clients {
                     .find(|p| p.name == *resource)
                     .context("selected resource is absent from this allowance")?
                     .clone();
-                route(&selected.work)?;
-                let trust = trust::snapshot(
-                    &self.directory,
-                    &input.trust_policy,
-                    selected.work.allowed_environment(),
-                )?;
+                route(&selected.invocation_policy)?;
+                let trust = trust::snapshot(&self.directory, &input.trust_policy)?;
                 Ok(Selection::Authorized {
                     access,
                     offer: Box::new(offer),
@@ -278,7 +267,7 @@ impl Clients {
                     *service == selected.policy.service && *method == selected.policy.method,
                     "paid route differs from selected policy"
                 );
-                let _: hellas_sdk::iroh::EndpointId = provider.parse()?;
+                let _: hellas_sdk::client::ProviderAddress = provider.parse()?;
                 Ok(Selection::Paid {
                     pool,
                     selected: Box::new(selected),
@@ -352,6 +341,14 @@ impl Clients {
             !self.closed.load(Ordering::SeqCst),
             "client admission is closed because Gate is shutting down"
         );
+        if let Selection::Paid { pool, .. } = &selection {
+            let current: PaidPoolInput = vault::read(&paid::pool_path(&self.directory, &pool.id)?)?
+                .context("paid pool disappeared; retry the request")?;
+            ensure!(
+                serde_json::to_vec(&current)? == serde_json::to_vec(pool)?,
+                "paid pool changed while opening; retry the request"
+            );
+        }
         if let Some(held) = cache.get(&key)
             && held.version == version
             && held.target.backend.is_active()
@@ -373,10 +370,10 @@ impl Clients {
                 else {
                     anyhow::bail!("authorized selection required");
                 };
-                let (service, method, presentation) = route(&selected.work)?;
+                let (service, method, presentation, _) = route(&selected.invocation_policy)?;
                 let approved = trust.anchor;
                 let provider = hellas_sdk::iroh::EndpointId::from_bytes(
-                    &hellas_sdk::work::model::grant::records::grant_transport(
+                    &hellas_authority::model::grant::records::grant_transport(
                         &offer.offer().provider,
                     )?,
                 )?;
@@ -436,13 +433,10 @@ impl Clients {
                 else {
                     anyhow::bail!("paid selection required");
                 };
-                let provider_id: hellas_sdk::iroh::EndpointId = provider.parse()?;
-                let first = options.providers.first().context("paid pool is empty")?;
-                let chain = self.chain.get(&first.config).await?;
-                for provider in &options.providers {
-                    provider.config.check_node(&chain)?;
-                }
-                // Selection, all provider options and chain compatibility are checked
+                let provider_id = provider
+                    .parse::<hellas_sdk::client::ProviderAddress>()?
+                    .node;
+                // Selection and all provider options are checked
                 // before retiring any backend shared by this pool's callers.
                 if let Some(held) = cache.remove(&key) {
                     held.target.backend.retire().await?;
@@ -468,14 +462,13 @@ impl Clients {
                         options
                             .providers
                             .iter()
-                            .map(|provider| provider.provider_trust.clone())
-                            .collect(),
+                            .map(|provider| provider.trust())
+                            .collect::<Result<_, _>>()?,
                     );
                     let backend = hellas_sdk::paid_gateway::PaidGateway::open(
                         options,
                         identity,
-                        chain,
-                        local.coordinator.clone(),
+                        self.funding_owner(local).await?,
                     )
                     .await?;
                     let backend = RetirableBackend::new(backend);
@@ -500,6 +493,48 @@ impl Clients {
             },
         );
         Ok(target)
+    }
+    pub(crate) async fn funding_owner(
+        &self,
+        local: &LocalNode,
+    ) -> anyhow::Result<Arc<hellas_sdk::client_owner::ClientOwner>> {
+        let mut owner = self.owner.lock().await;
+        if let Some(owner) = &*owner {
+            return Ok(owner.clone());
+        }
+        ensure!(
+            !self.closed.load(Ordering::SeqCst),
+            "client admission is closed because Gate is shutting down"
+        );
+        let signer = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
+            local.identity.node.node_secret_bytes(),
+        )
+        .map_err(|_| anyhow::anyhow!("invalid requester settlement key"))?;
+        let opened = Arc::new(hellas_sdk::client_owner::ClientOwner::new(
+            local.identity.passkey.clone(),
+            signer.party_key(),
+            &self.directory.join("paid-funding"),
+        )?);
+        *owner = Some(opened.clone());
+        Ok(opened)
+    }
+    pub async fn save_pool(&self, input: PaidPoolInput) -> anyhow::Result<()> {
+        paid::validate_pool(&self.directory, &input)?;
+        let _cache = self.cache.lock().await;
+        ensure!(
+            !self.closed.load(Ordering::SeqCst),
+            "client admission is closed because Gate is shutting down"
+        );
+        let path = paid::pool_path(&self.directory, &input.id)?;
+        if let Some(current) = vault::read::<PaidPoolInput>(&path)?
+            && serde_json::to_vec(&current)? == serde_json::to_vec(&input)?
+        {
+            return Ok(());
+        }
+        if let Some((_, backend)) = self.paid.lock().await.remove(&input.id) {
+            backend.retire().await?;
+        }
+        paid::save_pool(&self.directory, input)
     }
     pub async fn fetch(
         &self,
@@ -570,6 +605,7 @@ impl Clients {
         // Once closed, an admitted Run holding LocalNode can never open afterward.
         self.closed.store(true, Ordering::SeqCst);
         self.reset().await?;
+        self.owner.lock().await.take();
         let result = self.chain.shutdown().await;
         #[cfg(test)]
         self.drained.notify_one();
@@ -578,5 +614,72 @@ impl Clients {
     #[cfg(test)]
     pub(crate) fn chain_initialized(&self) -> bool {
         self.chain.initialized()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hellas_rpc::protocol::invocation::{
+        Admission, InvocationPolicy, Limits,
+        fetch::{FetchAdmission, FetchLimits, FetchRoutePolicy},
+    };
+
+    fn policy(contract: hellas_rpc::FetchContract) -> InvocationPolicy {
+        InvocationPolicy {
+            admissions: vec![Admission::Fetch {
+                admission: FetchAdmission {
+                    contract,
+                    route: FetchRoutePolicy::sealed_route("service", "method").unwrap(),
+                    limits: FetchLimits {
+                        max_request_body_bytes: 64 << 10,
+                        max_output_events: 4096,
+                        max_spool_bytes: 8 << 20,
+                        max_encoded_result_frame: 4 << 20,
+                        max_encoded_prepared_input: 128 << 10,
+                    },
+                },
+            }],
+            limits: Limits {
+                max_upload_bytes: 128 << 10,
+                max_output_bytes: 4 << 20,
+                max_steps: 1,
+                execution_timeout_ms: 300_000,
+            },
+        }
+    }
+
+    #[test]
+    fn presentation_refuses_unsupported_or_ambiguous_fetch_admissions() {
+        let http = hellas_rpc::FetchContract::http().unwrap();
+        let responses = hellas_reseller::responses_contract().unwrap();
+        for (contract, presentation) in [
+            (http.clone(), FetchPresentation::Http),
+            (responses, FetchPresentation::Responses),
+        ] {
+            let selected = policy(contract.clone());
+            selected.validate().unwrap();
+            let (_, _, actual, environment) = route(&selected).unwrap();
+            assert_eq!(actual, presentation);
+            assert_eq!(environment, contract.manifest_id());
+        }
+        let unsupported = policy(
+            hellas_rpc::FetchContract::new(
+                "responses-items-0.0.1",
+                hellas_rpc::FetchSchema::ResponsesItemsV1,
+                "responses-driver-0.0.1",
+                hellas_rpc::FetchEgress::FixedHttps("https://api.example.com/responses".into()),
+            )
+            .unwrap(),
+        );
+        unsupported.validate().unwrap();
+        assert!(route(&unsupported).is_err());
+
+        let mut ambiguous = policy(http);
+        ambiguous.admissions.push(Admission::Compute {
+            evaluator: hellas_rpc::protocol::invocation::compute::EVALUATOR.into(),
+        });
+        ambiguous.validate().unwrap();
+        assert!(route(&ambiguous).is_err());
     }
 }

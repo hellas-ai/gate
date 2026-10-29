@@ -1,6 +1,6 @@
 //! Acknowledged operations for an apply report, never authority or recovery state.
 use crate::control::Session;
-use hellas_sdk::work::model::grant::admin::{WorkControlCommand, WorkControlReply};
+use hellas_authority::model::grant::admin::{WorkControlCommand, WorkControlReply};
 
 #[derive(Default)]
 pub(crate) struct Progress {

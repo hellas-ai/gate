@@ -74,7 +74,7 @@ confirm the recipient's device node key. Shares select per-upstream allowances
 and retain their budget ancestry. AccessBundle v2 includes all selected offers
 and a device-bound credential; import checks both person and device. Trust is
 approved separately in the SDK TrustPolicyStore with independently obtained
-provider genesis/environment pins and, when required, Apple app-ID/CDHash pins.
+provider enrollment pins and, when required, Apple app-ID/CDHash pins.
 
 All access forms use the same fixed lifetime choices: 1 day, 1 week (the default),
 30 days, 365 days or Unlimited (100 years). Revisions and counters survive normal
@@ -89,16 +89,29 @@ host UDP port takes effect on an explicit drain/restart.
 
 ## Paid setup and gateways
 
-Paid Serve and pools use typed policy, validator, funding and route fields.
-Preview derives the bond from the live authority owner and a verified client
-without signing, spending or writing a journal. Provisioning requires a stopped,
-drained provider because setup journals have one exclusive owner. Stake must be
-owned by that authority owner and delegated to the provider node. Review the
-coin IDs, expiry, returned value and payout delegation before signing the offer.
-The SDK journals reservations before exporting; the client handshake performs
-the on-chain spend. Use the paid pool form’s client transport handoff for its bilateral route (each
-pool keeps a stable transport ID). Add the resulting bond/client route and start
-the provider.
+Start Serve with a configured Fetch resource, then approve one standing paid
+policy with the owner passkey: price, jobs per channel, per-job limits, maximum
+stake per client, maximum open offers, and bond lifetime. The authority retains
+the approved policy and generates its salt. The node offers clients bonds on
+demand using owner-owned coins already delegated to this provider node; each
+stake coin must fit the configured cap. Disabling Paid Serve drains its runtime;
+existing channels retain their signed terms.
+
+A requester selects an `ENROLLMENT_ID@NODE_ID` provider address (shown in Serve),
+independently approved trust, named route and
+price. Quote discovery does not fund a channel. The first accepted request asks
+the owner to approve an exact funding split; the SDK retains funding and channel
+state for recovery. Each provider belongs to one paid pool. Reuse that pool for
+retained work so its transport and journal owner remain stable. The address's
+enrollment must match the approval; the SDK verifies it on quote, funding and
+reconnect, including retained channels. Node IDs alone are rejected.
+
+Run and listeners share the SDK gateway backend. They select a named route and
+HTTP or Responses presentation. The SDK currently prepares the Fetch contract
+from the grant's admitted policy or the paid provider's quoted policy, refusing
+ambiguous admissions. These paths do not independently pin a buyer-named
+contract. There is no separate environment allowlist. The SDK's job API accepts
+an explicit buyer contract, but its gateway API does not yet expose that choice.
 
 The loopback gateway supports Responses with authorized or paid funding, and
 HTTP with paid funding. Named `gateway.invoke` credentials are issued, rotated

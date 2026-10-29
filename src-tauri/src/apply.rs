@@ -7,7 +7,7 @@ use crate::{
     provider_setup::{self, ProviderStep},
 };
 use anyhow::{Context, ensure};
-use hellas_sdk::work::model::grant::admin::{WorkControlCommand, WorkControlReply};
+use hellas_authority::model::grant::admin::{WorkControlCommand, WorkControlReply};
 
 pub struct Plan {
     revision: u64,
@@ -225,8 +225,20 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
         false
     };
     let mut pool_ids = std::collections::BTreeSet::new();
+    let mut paid_providers = std::collections::BTreeSet::new();
     for pool in &document.paid_pools {
         ensure!(pool_ids.insert(&pool.id), "duplicate paid pool name");
+        for provider in &pool.providers {
+            ensure!(
+                paid_providers.insert(
+                    provider
+                        .provider
+                        .parse::<hellas_sdk::client::ProviderAddress>()?
+                        .node
+                ),
+                "each paid provider must belong to one pool"
+            );
+        }
         crate::paid::pool_path(&local.directory, &pool.id)?;
         crate::paid::pool_options(&local.directory, pool)?;
     }
@@ -296,7 +308,8 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
         .filter(|(_, changed, activated)| *changed || !*activated)
         .map(|(resource, changed, _)| (resource, changed))
         .collect::<Vec<_>>();
-    let work_needed = !retired.is_empty()
+    let work_needed = paid_change.as_ref().is_some_and(Option::is_some)
+        || !retired.is_empty()
         || !resources.is_empty()
         || !document.shares.is_empty()
         || !document.quotas.is_empty();
@@ -304,9 +317,10 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
         !work_needed || running || document.provider_enabled == Some(true),
         "Work administration requires a mounted provider; enable it explicitly"
     );
-    let requires_passkey = changes
-        .iter()
-        .any(|s| !matches!(s.change, ProviderChange::AddKey { .. }))
+    let requires_passkey = paid_changed && paid_change.as_ref().is_some_and(Option::is_some)
+        || changes
+            .iter()
+            .any(|s| !matches!(s.change, ProviderChange::AddKey { .. }))
         || !document.contacts.is_empty()
         || !document.shares.is_empty()
         || !document.gateway_keys.is_empty()
@@ -535,9 +549,13 @@ pub async fn execute_session(
                         .await?;
                 }
                 Step::PaidPool(input) => {
-                    session.track_local(format!("Publish paid pool {}", input.id), || {
-                        crate::paid::save_pool(&local.directory, input)
-                    })?;
+                    session
+                        .track(
+                            format!("Publish paid pool {}", input.id),
+                            false,
+                            local.clients.save_pool(input),
+                        )
+                        .await?;
                 }
                 Step::ProviderState(enabled) => {
                     session.provider_state(enabled).await?;
@@ -623,7 +641,7 @@ mod tests {
     use super::*;
     use crate::{identity::Identity, vault::Vault};
     use hellas_auth::{Digest, authority::*};
-    use hellas_sdk::work::{
+    use hellas_authority::{
         authenticator::{Authenticator, PublicKey},
         node::SessionKey,
     };
@@ -790,12 +808,12 @@ mod tests {
         scope.issuance = None;
         scope.delegation_depth = 0;
         scope.permissions = [
-            hellas_sdk::work::node::HOST_STATUS,
-            hellas_sdk::work::node::HOST_PROVIDER_CONFIGURE,
+            hellas_authority::node::HOST_STATUS,
+            hellas_authority::node::HOST_PROVIDER_CONFIGURE,
         ]
         .into_iter()
         .map(|name| {
-            hellas_sdk::work::operations::Operation::named(name)
+            hellas_authority::operations::Operation::named(name)
                 .unwrap()
                 .permission(scope.authority, None)
                 .unwrap()

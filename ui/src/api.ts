@@ -50,8 +50,6 @@ export const api = {
   retryOpen: ():Promise<T.AppStatus> => call("retry_open"),
   restart: ():Promise<void> => call("restart_gate"),
   configurePaidServe: (expected:number,input:T.PaidServeInput|null):Promise<T.ProviderView> => call("configure_paid_serve",{expected,input}),
-  provisionPaid: (input:T.ProvisionInput,commit:boolean):Promise<T.ProvisionView> => call("provision_paid",{input,commit}),
-  paidClientPeer: (poolId:string):Promise<string> => call("paid_client_peer",{poolId}),
   savePaidPool: (input: T.PaidPoolInput): Promise<void> => call("save_paid_pool", { input }),
   run: async (request: T.RunRequest, onEvent: (event: T.ExecutionEvent) => void): Promise<string> => {
     const channel = new Channel<T.ExecutionEvent>(); channel.onmessage = onEvent;

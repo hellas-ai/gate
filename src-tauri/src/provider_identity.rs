@@ -48,7 +48,7 @@ impl ProviderIdentity {
             let enrollment = ProviderEnrollmentBundle::from_canonical_bytes(
                 &base64::engine::general_purpose::STANDARD.decode(record)?,
             )?;
-            hellas_sdk::work::model::grant::records::verify_provider(&enrollment)?;
+            hellas_authority::model::grant::records::verify_provider(&enrollment)?;
             ensure!(
                 enrollment.genesis.statement.producer_public_key
                     == local.identity.node.node_key().public_key()
@@ -156,7 +156,7 @@ impl ProviderIdentity {
             },
             platform,
         };
-        hellas_sdk::work::model::grant::records::verify_provider(&enrollment)?;
+        hellas_authority::model::grant::records::verify_provider(&enrollment)?;
         use base64::Engine;
         vault::write(
             &directory.join("provider-enrollment.json"),

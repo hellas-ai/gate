@@ -16,12 +16,6 @@ fn record(record: ApprovalRecord) -> TrustRecord {
         revision: record.revision,
         genesis: record.policy.provider_genesis.to_string(),
         assurance: format!("{:?}", record.policy.assurance),
-        environments: record
-            .policy
-            .environments
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
         source: record.reason,
     }
 }
@@ -33,11 +27,6 @@ pub fn approve(directory: &Path, input: TrustInput) -> anyhow::Result<TrustRecor
         } else {
             Assurance::ProducerSigned
         },
-        environments: input
-            .environments
-            .iter()
-            .map(|v| content_id(v))
-            .collect::<anyhow::Result<_>>()?,
         apple: if input.apple {
             Some(AppleApproval {
                 app_id: input.app_id,
@@ -65,27 +54,21 @@ pub fn approve(directory: &Path, input: TrustInput) -> anyhow::Result<TrustRecor
 pub fn resolve(
     directory: &Path,
     id: &str,
-    environment: ContentId,
 ) -> anyhow::Result<hellas_sdk::client::ProviderTrustAnchor> {
-    Ok(snapshot(directory, id, environment)?.anchor)
+    Ok(snapshot(directory, id)?.anchor)
 }
 #[derive(Clone)]
 pub(crate) struct Snapshot {
     pub record: ApprovalRecord,
     pub anchor: hellas_sdk::client::ProviderTrustAnchor,
 }
-pub(crate) fn snapshot(
-    directory: &Path,
-    id: &str,
-    environment: ContentId,
-) -> anyhow::Result<Snapshot> {
+pub(crate) fn snapshot(directory: &Path, id: &str) -> anyhow::Result<Snapshot> {
     let store = store(directory);
     let record = store.load(id)?;
     // Counter custody does not vary with policy revisions or replacement.
-    let anchor = store.resolve_environment(
+    let anchor = store.resolve(
         id,
         record.policy.assurance,
-        environment,
         Arc::new(hellas_sdk::FilesystemAssertionCounterStore::new(
             directory.join("apple-assertion-counters"),
         )),
@@ -109,10 +92,9 @@ pub fn content_id(text: &str) -> anyhow::Result<ContentId> {
 mod tests {
     use super::*;
     #[test]
-    fn approval_is_explicit_and_keeps_independent_environment_and_genesis_pins() {
+    fn approval_is_explicit_and_keeps_the_independent_enrollment_pin() {
         let dir = tempfile::tempdir().unwrap();
-        let env = ContentId::from_bytes([2; 32]);
-        assert!(resolve(dir.path(), "provider", env).is_err());
+        assert!(resolve(dir.path(), "provider").is_err());
         let record = approve(
             dir.path(),
             TrustInput {
@@ -120,7 +102,6 @@ mod tests {
                 expected_revision: 0,
                 genesis: hex::encode([1; 32]),
                 apple: false,
-                environments: vec![hex::encode([2; 32])],
                 app_id: String::new(),
                 cd_hashes: vec![],
                 reason: "Fingerprint compared independently".into(),
@@ -128,11 +109,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(record.revision, 1);
-        assert!(resolve(dir.path(), "provider", ContentId::from_bytes([3; 32])).is_err());
         assert_eq!(
-            resolve(dir.path(), "provider", env)
-                .unwrap()
-                .expected_genesis,
+            resolve(dir.path(), "provider").unwrap().expected_genesis,
             ContentId::from_bytes([1; 32])
         );
         assert_eq!(list(dir.path()).unwrap().len(), 1);
@@ -142,26 +120,24 @@ mod tests {
     {
         use hellas_attestation::AttestationError;
         let directory = tempfile::tempdir().unwrap();
-        let environment = ContentId::from_bytes([2; 32]);
         let approval = |revision, hash| TrustInput {
             id: "apple".into(),
             expected_revision: revision,
             genesis: ContentId::from_bytes([1; 32]).to_string(),
             apple: true,
-            environments: vec![environment.to_string()],
             app_id: "TEAM.test.gate".into(),
             cd_hashes: vec![hex::encode([hash; 32])],
             reason: "Independently checked signed application".into(),
         };
         approve(directory.path(), approval(0, 3)).unwrap();
-        let original = resolve(directory.path(), "apple", environment)
+        let original = resolve(directory.path(), "apple")
             .unwrap()
             .apple_app_attest
             .unwrap();
         let key = [7; 33];
         original.counter_store.advance(&key, 7).unwrap();
         approve(directory.path(), approval(1, 4)).unwrap();
-        let replacement = resolve(directory.path(), "apple", environment)
+        let replacement = resolve(directory.path(), "apple")
             .unwrap()
             .apple_app_attest
             .unwrap();
@@ -181,7 +157,7 @@ mod tests {
             .join(format!("{}.counter", hex::encode(key)));
         std::fs::write(path, [0, 1]).unwrap();
         assert_eq!(
-            resolve(directory.path(), "apple", environment)
+            resolve(directory.path(), "apple")
                 .unwrap()
                 .apple_app_attest
                 .unwrap()
@@ -189,6 +165,5 @@ mod tests {
                 .advance(&key, 9),
             Err(AttestationError::State)
         );
-        assert!(resolve(directory.path(), "apple", ContentId::from_bytes([9; 32])).is_err());
     }
 }
