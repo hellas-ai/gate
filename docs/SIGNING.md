@@ -65,6 +65,19 @@ and [associated domains documentation](https://developer.apple.com/documentation
 
 ## Native acceptance
 
+Use a fresh data directory to keep an acceptance identity separate from an
+existing Gate installation. Set `HELLAS_GATE_DATA_DIR` to an absolute path when
+launching the signed app executable, for example:
+
+```sh
+HELLAS_GATE_DATA_DIR="$TMPDIR/gate-native-acceptance" \
+  "/path/to/Hellas Gate.app/Contents/MacOS/hellas-gate"
+```
+
+Keep the same directory for restart and recovery checks. The directory also
+scopes the SDK secret-store namespace; the default app data is not migrated or
+removed. Do not run two Gate processes against the same data directory.
+
 Platform compilation does not prove a provisioned App Attest enrollment or a
 native passkey prompt. On a signed and associated macOS app, register a passkey,
 confirm user verification, restart, and approve an assertion for the same owner;

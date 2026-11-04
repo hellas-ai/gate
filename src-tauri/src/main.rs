@@ -19,7 +19,16 @@ fn main() {
 
     let result = tauri::Builder::default()
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
+            let data_dir = match std::env::var_os("HELLAS_GATE_DATA_DIR") {
+                Some(path) => {
+                    let path = std::path::PathBuf::from(path);
+                    if !path.is_absolute() {
+                        return Err("HELLAS_GATE_DATA_DIR must be an absolute path".into());
+                    }
+                    path
+                }
+                None => app.path().app_data_dir()?,
+            };
             create_private_directory(&data_dir)?;
             let state = Arc::new(AppState::open(&data_dir)?);
             app.manage(state.clone());
