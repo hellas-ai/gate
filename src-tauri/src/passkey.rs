@@ -202,6 +202,17 @@ impl Authenticator for NativePasskey {
             .map_err(|_| AuthorityError::Credential)
     }
 }
+/// Stop pending prompts before shutdown waits for an operation holding a lock.
+/// This is process-wide: Gate restarts by launching a new application process.
+pub fn shutdown() {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        unsafe extern "C" {
+            fn hellas_native_passkey_shutdown();
+        }
+        hellas_native_passkey_shutdown();
+    }
+}
 #[cfg(not(target_os = "macos"))]
 async fn request(_: serde_json::Value) -> anyhow::Result<Reply> {
     anyhow::bail!("Native passkeys currently require the signed macOS Gate app")

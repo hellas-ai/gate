@@ -59,7 +59,11 @@ impl AppState {
     /// can dispatch to the main queue. Failure is shown until an explicit retry.
     pub async fn open_existing(&self) -> anyhow::Result<()> {
         let _lock = self.operation.lock().await;
-        if self.opened.swap(true, Ordering::SeqCst) {
+        anyhow::ensure!(
+            !self.stopping.load(Ordering::SeqCst),
+            "Gate is shutting down"
+        );
+        if self.opened.swap(true, Ordering::SeqCst) || self.local.lock().await.is_some() {
             return Ok(());
         }
         let opened: anyhow::Result<()> = async {
@@ -219,10 +223,11 @@ impl AppState {
         })
     }
     pub async fn shutdown(&self) -> anyhow::Result<bool> {
-        let _lock = self.operation.lock().await;
         if self.stopping.swap(true, Ordering::SeqCst) {
             return Ok(false);
         }
+        crate::passkey::shutdown();
+        let _lock = self.operation.lock().await;
         if let Some(host) = self.host.lock().await.take() {
             host.shutdown().await?;
         }
@@ -521,6 +526,37 @@ impl AppState {
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+    #[tokio::test]
+    async fn shutdown_closes_admission_before_waiting_for_an_approval() {
+        let directory = tempfile::tempdir().unwrap();
+        let secrets = tempfile::tempdir().unwrap();
+        let app = Arc::new(
+            AppState::with_vault(directory.path(), Vault::fixture(secrets.path()))
+                .await
+                .unwrap(),
+        );
+        let approval = app.operation.lock().await;
+        let task = tokio::spawn({
+            let app = app.clone();
+            async move { app.shutdown().await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !app.stopping.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("shutdown must signal before waiting for the approval lock");
+        assert!(!task.is_finished());
+        drop(approval);
+        assert!(task.await.unwrap().unwrap());
+        assert!(
+            app.initialize_software("Late approval".into())
+                .await
+                .is_err()
+        );
+        assert!(app.open_existing().await.is_err());
+    }
     #[tokio::test(flavor = "multi_thread")]
     async fn missing_application_secret_requires_explicit_owner_recovery_and_rotates_generation() {
         let directory = tempfile::tempdir().unwrap();

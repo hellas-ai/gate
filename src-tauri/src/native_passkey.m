@@ -11,6 +11,7 @@ typedef void (*GatePasskeyCallback)(void *context, const char *json);
 // The map and all request/delegate state are accessed on the main queue only.
 static NSMutableDictionary<NSNumber *, id> *gatePasskeyRequests;
 static _Atomic(uint64_t) gatePasskeyNextToken = 1;
+static BOOL gatePasskeyShuttingDown;
 
 static NSString *GateBase64(NSData *data) {
     return data ? [data base64EncodedStringWithOptions:0] : nil;
@@ -122,6 +123,10 @@ uint64_t hellas_native_passkey_start(const char *request_json, GatePasskeyCallba
         operation.context = context;
         if (!gatePasskeyRequests) gatePasskeyRequests = [NSMutableDictionary new];
         gatePasskeyRequests[@(token)] = operation;
+        if (gatePasskeyShuttingDown) {
+            [operation finish:@{@"error": @"Gate is shutting down"}];
+            return;
+        }
         if (@available(macOS 13.0, *)) {
             NSData *data = [request dataUsingEncoding:NSUTF8StringEncoding];
             id parsed = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL] : nil;
@@ -187,5 +192,16 @@ void hellas_native_passkey_cancel(uint64_t token) {
         ASAuthorizationController *controller = operation.controller;
         [operation finish:@{@"error": @"Passkey authorization cancelled"}];
         if (@available(macOS 13.0, *)) [controller cancel];
+    });
+}
+
+void hellas_native_passkey_shutdown(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        gatePasskeyShuttingDown = YES;
+        for (GatePasskeyRequest *operation in [gatePasskeyRequests.allValues copy]) {
+            ASAuthorizationController *controller = operation.controller;
+            [operation finish:@{@"error": @"Gate is shutting down"}];
+            if (@available(macOS 13.0, *)) [controller cancel];
+        }
     });
 }
