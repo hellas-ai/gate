@@ -65,13 +65,18 @@ and [associated domains documentation](https://developer.apple.com/documentation
 
 ## Native acceptance
 
+Install the signed app under `~/Applications` or `/Applications` and launch it
+through LaunchServices before testing passkeys. Directly running a build under
+`/tmp` can leave the app absent from macOS's associated-domain database even
+when its signature and the website association are correct.
+
 Use a fresh data directory to keep an acceptance identity separate from an
-existing Gate installation. Set `HELLAS_GATE_DATA_DIR` to an absolute path when
-launching the signed app executable, for example:
+existing Gate installation. For example:
 
 ```sh
-HELLAS_GATE_DATA_DIR="$TMPDIR/gate-native-acceptance" \
-  "/path/to/Hellas Gate.app/Contents/MacOS/hellas-gate"
+open -n "$HOME/Applications/Hellas Gate Native Acceptance.app" \
+  --env "HELLAS_GATE_DATA_DIR=$TMPDIR/gate-native-acceptance" \
+  --env RUST_LOG=hellas_gate=debug
 ```
 
 Keep the same directory for restart and recovery checks. The directory also
@@ -97,7 +102,7 @@ binding alone.
 
 ## Debugging the setup flow
 
-Launch the app executable with `RUST_LOG=hellas_gate=debug` to log setup button
+Launch the installed app with `RUST_LOG=hellas_gate=debug` to log setup button
 clicks, validation failures, submission, approval-dialog decisions and native
 registration results. Frontend diagnostics contain fixed event labels only,
 without form values, private keys or passkey assertion bytes. Capture stdout and
