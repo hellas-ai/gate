@@ -36,6 +36,9 @@ jobs:
           persist-credentials: false
       - uses: ./gate/.github/actions/setup
 
+      - name: Check Hellas pin consistency
+        run: nix develop --no-update-lock-file --command make check-pin
+
       - name: Check formatting
         run: nix develop --no-update-lock-file --command cargo fmt --all -- --check
 
@@ -71,6 +74,9 @@ jobs:
           persist-credentials: false
       - uses: ./gate/.github/actions/setup
 
+      - name: Test software identities and local services
+        run: nix develop --no-update-lock-file --command cargo test --locked --no-default-features --lib -- --test-threads=4
+
       - name: Build app
         env:
           APPLE_SIGNING_IDENTITY: '-'
@@ -79,10 +85,23 @@ jobs:
       - name: Validate app bundle
         run: bash .github/scripts/verify-macos-app.sh "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/bundle/macos/Hellas Gate.app"
 
+  windows-cross:
+    name: Windows compile (MinGW)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: gate
+          persist-credentials: false
+      - uses: ./gate/.github/actions/setup
+      - name: Compile Windows library and desktop targets
+        run: nix develop --no-update-lock-file .#windows-cross --command cargo check --locked --workspace --all-targets --target x86_64-pc-windows-gnu
+
   ci:
     name: CI
     if: ${{ always() }}
-    needs: [linux, macos]
+    needs: [linux, macos, windows-cross]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -91,6 +110,7 @@ jobs:
         env:
           LINUX_RESULT: ${{ needs.linux.result }}
           MACOS_RESULT: ${{ needs.macos.result }}
+          WINDOWS_RESULT: ${{ needs.windows-cross.result }}
         run: |
-          printf 'Linux: %s\nmacOS: %s\n' "$LINUX_RESULT" "$MACOS_RESULT"
-          [[ "$LINUX_RESULT" == success && "$MACOS_RESULT" == success ]]
+          printf 'Linux: %s\nmacOS: %s\nWindows: %s\n' "$LINUX_RESULT" "$MACOS_RESULT" "$WINDOWS_RESULT"
+          [[ "$LINUX_RESULT" == success && "$MACOS_RESULT" == success && "$WINDOWS_RESULT" == success ]]

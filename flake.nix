@@ -2,6 +2,10 @@
   description = "Hellas Gate local desktop development shell";
 
   inputs = {
+    hellas = {
+      url = "github:hellas-ai/hellas/2a3de65b4c3d88b5db56a664c9fa925ab809587d";
+      flake = false;
+    };
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -10,7 +14,7 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { nixpkgs, rust-overlay, flake-utils, ... }:
+  outputs = { nixpkgs, rust-overlay, flake-utils, hellas, ... }:
     flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (system:
       let
         pkgs = import nixpkgs {
@@ -21,13 +25,15 @@
       in
       {
         formatter = pkgs.nixpkgs-fmt;
-        devShells.default = pkgs.mkShell {
+        devShells = { default = pkgs.mkShell {
+          GATE_HELLAS_REV = hellas.rev;
           nativeBuildInputs = with pkgs; [
             cargo-tauri
             clang
             esbuild
             nodejs
             pkg-config
+            python3
             rust
             typescript
           ];
@@ -56,6 +62,8 @@
             export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/usr/bin/clang
             export CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER=/usr/bin/clang
           '';
+        }; } // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          windows-cross = import ./nix/windows-cross.nix { inherit pkgs rust; };
         };
       });
 }

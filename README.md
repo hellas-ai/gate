@@ -1,189 +1,136 @@
 # Hellas Gate
 
-Gate is the small native desktop host for Hellas. It is one Tauri process and
-one vanilla TypeScript UI. There is no companion daemon, internal HTTP control
-plane, browser-side Rust, or second implementation of the Hellas protocol.
+Gate is a Tauri desktop application for Fetch work. One SDK `HostHandle` owns
+local control, provider and gateway lifecycles. Run and gateway requests share
+SDK clients and their durable channels; paid roles share one lazy chain node.
 
-The native process wires together the reusable pieces in
-[Hellas](https://github.com/hellas-ai/hellas):
+A person has a P-256 passkey principal. Each installation has separate node and
+transport keys; provider attestation has its own key. On macOS, Gate uses AuthenticationServices to create a system passkey and request
+user verification for owner approvals. Gate stores its public key and credential
+identifier, never its private key. The explicit software authenticator remains
+for development: assertions prove user presence, not user verification. Signed
+macOS passkey and provisioned App Attest runtime acceptance remain release checks. Gate never silently substitutes software
+assurance for an Apple policy.
 
-- a verified sealed-Fetch client with a stable caller and transport identity;
-- an Apple App Attest provider for OpenAI Responses and HTTPS resources;
-- a bearer-protected `/v1/responses` gateway bound to loopback;
-- private SQLite execution history; and
-- a same-user Unix control socket carrying the existing Hellas mux and the
-  `HostControl` protobuf service.
+## Develop and verify
 
-The only platform-specific protocol producer is the DeviceCheck bridge in
-`src-tauri/src/apple_app_attest.m`. The generic attestation boundary and the
-portable Apple verifier live in `hellas-attestation`. Provider and gateway
-runtimes live behind `hellas-sdk`; Gate contains only lifecycle and UI policy.
-
-The Rust/TypeScript seam is deliberately local and narrow. Rust DTOs derive
-TypeScript definitions with `ts-rs`, while `ui/src/api.ts` is the sole module
-allowed to invoke Tauri commands. The reusable non-UI seam is the `HostControl`
-protobuf service over any Hellas transport, including the local Unix transport.
-There is no npm package and no package publication in this repository.
-
-## Local development
-
-The flake is the canonical environment. It supplies Rust, Tauri, TypeScript,
-esbuild, and Node directly; there is no npm manifest, `npm install`, or
-`node_modules` directory. Rust 1.96.1 is shared with the pinned Hellas workspace.
-Rust and frontend build output stay under this worktree’s `target/` directory.
-Set `CARGO_TARGET_DIR` to override the Rust output location; the flake, Makefile,
-and CI all respect it.
-
-Cargo fetches Hellas from the Git revision pinned in `src-tauri/Cargo.toml`.
-To update Hellas, change its dependency revisions together, reconcile
-the desktop SDK calls, and regenerate `Cargo.lock`.
-
-From a Gate checkout, run:
+The locked Nix shell supplies Rust, Tauri, TypeScript, esbuild and Node. There is
+no npm installation. Build output stays in `target/` unless
+`CARGO_TARGET_DIR` is set.
 
 ```sh
-nix develop
-make check
-make dev
+nix develop -c make check
+nix develop -c make dev
 ```
 
-`make check` runs binding generation, frontend typechecking and production
-bundling, Rust formatting, warnings-as-errors Clippy, and Rust tests with the
-checked-in lockfile. Shared protocol behavior lives in Hellas.
+`make check` checks the Cargo/Nix Hellas pin, regenerates TypeScript bindings,
+builds and tests the shipped UI bundle, and runs formatting, strict Clippy and
+Rust tests. The optional chain acceptance uses the SDK's six independently
+executing validators. Its fixture orders blocks; signatures, execution,
+replication and funded SDK channels remain real:
 
-## Local data and secrets
-
-Gate stores its stable identity, App Attest enrollment, assertion counters,
-provider quota/transcript state, and history below Tauri's private application
-data directory. Identity files and the Unix socket are owner-only. The OpenAI
-API key crosses the typed Tauri IPC seam once and is retained only in native
-memory for the active provider run. The loopback gateway generates a fresh
-bearer whenever it starts.
-
-## Apple App Attest
-
-The ordinary desktop build carries no restricted entitlement, so it launches
-without an Apple provisioning profile and reports App Attest as unavailable.
-An attested provider requires a separately provisioned and signed build whose
-profile matches the app bundle identifier and grants the App Attest `CDhash`
-entitlement. Gate never substitutes software assurance. See
-`docs/SIGNING.md` for the two build modes and their provisioning boundary.
-
-### Work grants
-
-Authorized work uses Work grants. In Settings, copy the contact
-enrollment to the provider operator. The operator pastes contact enrollments in
-Serve, chooses the per-contact daily Requests allowance, starts the provider, and
-exports one private Offer for each contact. Paste an Offer into Run or Gateway, choose Authorized, and select its resource name (normally `responses`).
-Offers must bootstrap a new session within five minutes; export again if needed.
-An active session refreshes its standing automatically. Removing contacts on the
-next provider start permanently revokes their grants without resetting counters.
-
-In-app runs and the loopback gateway share one Work backend for the selected target. Stop the gateway
-before changing the Offer's channel, addresses, or trust policy. Accepted work is
-drained when the gateway stops. The upstream OpenAI key remains in native memory.
-Gate's SQLite history remains local.
-
-Apple provider trust requires an independently trusted app ID and CDHash allowlist.
-Builds can set `HELLAS_GATE_TRUST_APP_ID` and `HELLAS_GATE_TRUST_CDHASHES` for already
-approved provider releases; otherwise fill both fields from trusted release
-metadata. An Offer cannot choose its own allowed software. A binary cannot embed
-its own final CDHash. Live App Attest provisioning and provider execution require
-a provisioned macOS build; Linux and Windows run authorized and paid clients.
-
-Build artifacts stay under this checkout's `target/` directory, including UI
-assets. Gate's provider configuration owns its contact grants.
-
-### Paid work
-
-Choose Paid in Run or Gateway, provide an absolute pool-file path and select a
-provider endpoint ID from that pool. For an open HTTPS policy, also enter the
-provider's Fetch service and method; a sealed policy supplies them. The pool uses the SDK's `load_pool_options`
-format in [Hellas's paid gateway guide](https://github.com/hellas-ai/hellas/blob/master/docs/paid-gateway.md):
-provider work config, client journal,
-bond, payment coins, omission bond and mandatory `provider_genesis`. Use the
-signed offer object exported by provisioning for `provider_genesis`; Gate derives
-the pin and verifies Open before submitting work. Apple app ID and CDHashes for
-paid targets come from the pool file; Assurance is selected in Gate. Account
-credentials stay at the provider.
-
-The active backend snapshots its configuration. Stop the gateway and switch
-targets, or restart Gate, to reload edited pool/work files. Each provider owns a
-separate funded channel and exclusive client journal. Accepted work drains on
-shutdown; the SDK recovers durable payment obligations on the next start. In-app
-runs and `/v1/responses` use the same sessions. The Responses listener requires
-a resource with the OpenAI Responses manifest; Run also accepts generic HTTPS
-Fetch request JSON.
-
-To serve both fundings, set the paid Work config path alongside the contact
-list. The Work config's paid Fetch policy must name a registered route. Gate
-uses one provider identity, executor and Work listener; WorkSetup is added when
-paid Work is configured. Fetch journals contain accounting metadata, while the
-requesting user's history stores their own requests and results.
-
-To provision a bond, stop the provider and supply a paid offer JSON file:
-
-```json
-{
-  "work_config": "/absolute/path/provider-work.json",
-  "client": "CLIENT_SETTLEMENT_PUBLIC_KEY_HEX",
-  "stake_coins": ["PROVIDER_COIN_ID_HEX"],
-  "bond_timeout": 500,
-  "timeout_payout": 64,
-  "max_job_price": 40,
-  "addresses": ["192.0.2.10:31145"]
-}
+```sh
+nix develop -c make check-chain
 ```
 
-Preview derives the bond ID without reserving coins. Add that bond, the client's
-transport endpoint and settlement key to the Work config's bilateral routes,
-then choose Provision paid offer. Copy the returned `provider`, `bond` and
-`provider_genesis` fields into the client's pool entry and add their payment
-funding. Provisioning uses Gate's attested enrollment and its existing settlement
-identity; it reserves the staked coins in the provider journal before exporting.
+Linux can compile the Windows-specific code with the checked-in MinGW shell:
 
-### HTTP gateway
-
-Gateway offers two protocols. Responses uses the selected authorized or paid
-Work target. HTTP uses a paid pool file and an HTTP routes file in the format
-from [Hellas's paid gateway guide](https://github.com/hellas-ai/hellas/blob/master/docs/paid-gateway.md),
-and forwards the configured HTTP routes
-through that pool. Both listeners bind loopback and require the displayed bearer.
-A missing or invalid pool leaves the listener stopped.
-
-HTTP archives request and response bodies under Gate's private `gateway-archive`
-directory by default. Enable “Do not archive request or response bodies” to use
-ZDR. Gateway configuration is retained when stopped; provider credentials remain
-at upstream egress and never become gateway credentials.
-
-### HTTPS resources
-
-Serve accepts an optional HTTPS routes JSON array beside the OpenAI API key.
-Each route has `service`, `method`, `account` (the SDK `HttpProviderConfig`) and
-an optional authorized `resource` with `name` and `https` (`HttpsResource`). One
-resource per route keeps URL and accounting policy unambiguous. For example:
-
-```json
-[{
-  "service": "lan", "method": "chat",
-  "account": {"allowed_hosts": ["glm.example.com"]},
-  "resource": {
-    "name": "chat",
-    "https": {
-      "origin": "https://glm.example.com",
-      "paths": ["/v1/chat/completions"], "methods": ["POST"],
-      "credential": null,
-      "tls": {"roots": {"mode": "web_pki"}, "spki_sha256": []},
-      "accounting": "openai-chat", "max_output_tokens": 1024,
-      "max_response_bytes": 65536
-    }
-  }
-}]
+```sh
+nix develop .#windows-cross -c cargo check --locked --workspace --all-targets --target x86_64-pc-windows-gnu
 ```
 
-Private addresses and private certificate roots require explicit account
-configuration. Credential aliases bind allowed origins, paths and methods to a
-provider-owned secret file or environment variable. Authorized resources share
-the contact's daily Requests allowance and five-minute deadline. Their envelope
-bounds request bodies to 64 KiB, output to 1 MiB and spooling to 4 MiB. Clients
-apply the selected resource's token ceiling and streaming usage policy before
-signing; providers verify it and quarantine resources with invalid usage.
+This is a compile check, not a Windows desktop runtime test. CI also builds a
+macOS ARM64 app. See [signing and provisioning](docs/SIGNING.md) for the signed
+application pipeline.
+
+## Identity, control and custody
+
+First launch creates a system passkey on a signed, domain-associated macOS app.
+A separate development option explicitly selects a software identity on any
+platform. Native prompt errors never fall back to software. Interrupted setup
+reuses the saved native credential when retried. Restart uses
+the same prepared app credential and pinned TLS certificate. Local Unix sockets
+and Windows pipes require a scoped credential and device proof; filesystem
+ownership does not grant administration. Settings can issue device-bound CLI
+access after fresh owner approval. Offline owner recovery uses the installation's existing native or software
+owner authenticator, is explicit, advances
+the authority generation and invalidates earlier credentials. A failed service
+open can be retried without recovering or replacing the owner.
+
+All private material uses the SDK OS secret store. An unavailable or locked store
+is an error. Private files are used only by isolated headless tests. Public
+configuration, verified cards, offers, trust approvals, replay counters, channel
+journals and history remain in the private application data directory. Upstream
+keys are write-only in the UI: it shows their label, fingerprint, reference and
+last successful use.
+History and browser state never store access or upstream secrets.
+
+## Serve, contacts and Run
+
+Bind the provider with owner approval, add exact upstream hosts and key scopes,
+and configure OpenAI Responses or HTTPS resources. OpenAI keys are restricted to
+its public Responses endpoint. HTTPS private addresses and private TLS roots
+require explicit settings. Compatible resources can share a route; coupled
+changes use one checked catalogue publication. Invalid settings are refused
+before retiring the live provider. One host serves authorized and paid work.
+
+Import a signed ContactCard, compare its fingerprint independently and explicitly
+confirm the recipient's device node key. Shares select per-upstream allowances
+and retain their budget ancestry. AccessBundle v2 includes all selected offers
+and a device-bound credential; import checks both person and device. Trust is
+approved separately in the SDK TrustPolicyStore with independently obtained
+provider enrollment pins and, when required, Apple app-ID/CDHash pins.
+
+All access forms use the same fixed lifetime choices: 1 day, 1 week (the default),
+30 days, 365 days or Unlimited (100 years). Revisions and counters survive normal
+restart and trust changes. Pause, quota editing and revocation use the existing
+Work/Auth authority operations.
+
+Run selects imported access or a named typed paid pool, then accepts the actual
+Fetch request JSON. Successful terminal verification, failure and cancellation
+are reflected in local SQLite history. History entries can be deleted or cleared.
+Closing the window hides it; Quit drains the host, clients and chain. Saving a
+host UDP port takes effect on an explicit drain/restart.
+
+## Paid setup and gateways
+
+Start Serve with a configured Fetch resource, then approve one standing paid
+policy with the owner passkey: price, jobs per channel, per-job limits, maximum
+stake per client, maximum open offers, and bond lifetime. The authority retains
+the approved policy and generates its salt. The node offers clients bonds on
+demand using owner-owned coins already delegated to this provider node; each
+stake coin must fit the configured cap. Disabling Paid Serve drains its runtime;
+existing channels retain their signed terms.
+
+A requester selects an `ENROLLMENT_ID@NODE_ID` provider address (shown in Serve),
+independently approved trust, named route and
+price. Quote discovery does not fund a channel. The first accepted request asks
+the owner to approve an exact funding split; the SDK retains funding and channel
+state for recovery. Each provider belongs to one paid pool. Reuse that pool for
+retained work so its transport and journal owner remain stable. The address's
+enrollment must match the approval; the SDK verifies it on quote, funding and
+reconnect, including retained channels. Node IDs alone are rejected.
+
+Run and listeners share the SDK gateway backend. They select a named route and
+HTTP or Responses presentation. The SDK currently prepares the Fetch contract
+from the grant's admitted policy or the paid provider's quoted policy, refusing
+ambiguous admissions. These paths do not independently pin a buyer-named
+contract. There is no separate environment allowlist. The SDK's job API accepts
+an explicit buyer contract, but its gateway API does not yet expose that choice.
+
+The loopback gateway supports Responses with authorized or paid funding, and
+HTTP with paid funding. Named `gateway.invoke` credentials are issued, rotated
+and revoked through the authority. Interrupted preparation appears as pending;
+an owner can reconcile the exact retained credential or cancel it. Expired or
+revoked credentials cannot invoke work. No gateway key grants node control.
+
+Gateway forms choose archive policy explicitly. ZDR is enabled by default;
+otherwise request/response bodies are archived under the private application
+state. Gateway reconfiguration and shutdown drain accepted work.
+
+Settings can preview and apply a typed desired-state document. It uses existing
+vault references for secrets and the same native operations as interactive
+forms. Preview captures the configuration revision; stale previews refuse.
+Applies are sequential: failures report acknowledged effects, unapplied work
+and any uncertain operation separately. Reapplying converges without resetting
+budgets, credentials or journal history.

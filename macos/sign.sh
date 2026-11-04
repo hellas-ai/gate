@@ -28,9 +28,35 @@ if [ "$profile_bundle_id" != "$app_bundle_id" ]; then
     exit 1
 fi
 
-test "$(/usr/libexec/PlistBuddy \
-    -c 'Print :com.apple.developer.devicecheck.app-attest-opt-in:0' \
-    "$entitlements")" = CDhash
+if /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.devicecheck.app-attest-opt-in' \
+    "$entitlements" >/dev/null 2>&1; then
+    if [ "$(/usr/libexec/PlistBuddy \
+        -c 'Print :com.apple.developer.devicecheck.app-attest-opt-in:0' \
+        "$entitlements")" != CDhash ]; then
+        echo "error: App Attest entitlement must include CDhash" >&2
+        exit 1
+    fi
+fi
+
+# A profile is an entitlement allowlist, not the exact entitlement to sign.
+# Accept only an explicit domain or Apple wildcard grant, then request exactly
+# this app's relying party in the resulting signature.
+python3 - "$entitlements" <<'PYTHON'
+import plistlib
+import sys
+path = sys.argv[1]
+with open(path, "rb") as source:
+    entitlements = plistlib.load(source)
+key = "com.apple.developer.associated-domains"
+allowed = entitlements.get(key)
+if not isinstance(allowed, list) or not any(
+    entry in ("*", "webcredentials:hellas.ai") for entry in allowed
+):
+    raise SystemExit("error: profile does not authorize webcredentials:hellas.ai")
+entitlements[key] = ["webcredentials:hellas.ai"]
+with open(path, "wb") as output:
+    plistlib.dump(entitlements, output)
+PYTHON
 
 for entitlement in \
     com.apple.security.get-task-allow \
@@ -60,3 +86,11 @@ cp "$profile" "$contents/embedded.provisionprofile"
 codesign --force --options runtime --timestamp --entitlements "$entitlements" \
     --sign "$identity" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
+signed_entitlements="$temporary/signed-entitlements.plist"
+codesign --display --entitlements :- "$app" >"$signed_entitlements" 2>/dev/null
+if [ "$(/usr/libexec/PlistBuddy \
+    -c 'Print :com.apple.developer.associated-domains:0' \
+    "$signed_entitlements")" != webcredentials:hellas.ai ]; then
+    echo "error: signed app does not contain the required passkey domain" >&2
+    exit 1
+fi

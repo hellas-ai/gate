@@ -9,6 +9,7 @@ repository.workspace = true
 
 [features]
 default = ["desktop"]
+chain-tests = ["hellas-chain/test-support"]
 desktop = ["dep:tauri", "dep:tauri-build", "dep:ts-rs"]
 
 [lib]
@@ -20,33 +21,55 @@ path = "src/main.rs"
 required-features = ["desktop"]
 
 [dependencies]
+hellas-webauthn = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d", features = ["der"] }
+ciborium = "0.2"
+sha2 = "0.10"
+hellas-chain = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-authority = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-channel = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-executor = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d", default-features = false }
 anyhow = "1"
+async-trait = "0.1"
+getrandom = "0.4"
+hex = "0.4"
+rcgen = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+zeroize = "1"
 base64 = "0.22"
 futures = "0.3"
-hellas-attestation = { git = "https://github.com/hellas-ai/hellas", rev = "9c342ba19bbcef6519c8065a19b0af76dc42f77b", features = ["apple-app-attest"] }
-hellas-gateway = { git = "https://github.com/hellas-ai/hellas", rev = "9c342ba19bbcef6519c8065a19b0af76dc42f77b" }
-hellas-private = { git = "https://github.com/hellas-ai/hellas", rev = "9c342ba19bbcef6519c8065a19b0af76dc42f77b" }
-hellas-rpc = { git = "https://github.com/hellas-ai/hellas", rev = "9c342ba19bbcef6519c8065a19b0af76dc42f77b", features = ["host-control", "execute", "fetch", "work"] }
-hellas-sdk = { git = "https://github.com/hellas-ai/hellas", rev = "9c342ba19bbcef6519c8065a19b0af76dc42f77b", default-features = false, features = ["apple-verifier", "client", "grant-gateway", "local-control", "grant-provider", "paid-gateway", "paid-provider"] }
-hellas-wire = { git = "https://github.com/hellas-ai/hellas", rev = "9c342ba19bbcef6519c8065a19b0af76dc42f77b", features = ["unix"] }
-libc = "0.2"
+hellas-genesis = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-auth = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-reseller = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-providers = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-attestation = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d", features = ["apple-app-attest"] }
+hellas-gateway = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-private = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-rpc = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d", features = ["host-control", "execute", "fetch", "work"] }
+hellas-sdk = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d", default-features = false }
+hellas-wire = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d", features = ["unix"] }
+# The same bundled SQLite that hellas's Work journals compile in; history.rs
+# drives it through the C API.
+libsqlite3-sys = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = ["tray-icon"], optional = true }
-tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "net", "fs", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ts-rs = { version = "12", features = ["serde-compat"], optional = true }
 
-[target.'cfg(windows)'.dependencies]
-# Windows has no system SQLite: compile the amalgamation in. Elsewhere the
-# FFI in history.rs links the platform's libsqlite3.
-libsqlite3-sys = { version = "0.38", features = ["bundled"] }
-
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }
 
 [target.'cfg(target_os = "macos")'.build-dependencies]
 cc = "1"
+
+[dev-dependencies]
+p256 = { version = "0.14", features = ["ecdsa"] }
+tempfile = "3"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+commonware-codec = { git = "https://github.com/georgewhewell/commonware-monorepo", rev = "51a917ec79063b5c9abdeb084243d398ecb23dae", default-features = false }
+commonware-cryptography = { git = "https://github.com/georgewhewell/commonware-monorepo", rev = "51a917ec79063b5c9abdeb084243d398ecb23dae", default-features = false }
+commonware-runtime = { git = "https://github.com/georgewhewell/commonware-monorepo", rev = "51a917ec79063b5c9abdeb084243d398ecb23dae" }

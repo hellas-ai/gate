@@ -1,401 +1,130 @@
 import "./style.css";
 import { api } from "./api.ts";
-import type {
-  AppStatus,
-  ExecutionEvent,
-  GatewayAccess,
-  GatewayConfig,
-  HistoryEntry,
-  ProviderConfig,
-  RunKind,
-  RunRequest,
-} from "./types.ts";
-
-type View = "run" | "serve" | "gateway" | "history" | "settings";
-
-const rootElement = document.querySelector<HTMLDivElement>("#app");
-if (!rootElement) throw new Error("missing #app");
-const root = rootElement;
-
-let view: View = "run";
-let status: AppStatus | null = null;
-let history: HistoryEntry[] = [];
-let output = "";
-let runState = "Ready";
-let gatewayAccess: GatewayAccess | null = null;
-
-root.innerHTML = `
-  <div class="shell">
-    <aside>
-      <div class="brand"><span class="mark">Η</span><div>Hellas<small>Gate</small></div></div>
-      <nav>
-        ${navButton("run", "Run")}
-        ${navButton("serve", "Serve")}
-        ${navButton("gateway", "Gateway")}
-        ${navButton("history", "History")}
-        ${navButton("settings", "Settings")}
-      </nav>
-      <div id="rail-status" class="rail-status">Connecting…</div>
-    </aside>
-    <main id="content"></main>
-  </div>`;
-
-root.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => {
-  button.addEventListener("click", () => {
-    view = button.dataset.view as View;
-    render();
-  });
-});
-
-function navButton(id: View, label: string): string {
-  return `<button data-view="${id}">${label}</button>`;
-}
-
-function render(): void {
-  root.querySelectorAll("[data-view]").forEach((element) => {
-    element.classList.toggle("active", (element as HTMLElement).dataset.view === view);
-  });
-  const content = document.querySelector<HTMLElement>("#content");
-  if (!content) return;
-  if (view === "run") renderRun(content);
-  if (view === "serve") renderService(content, "provider");
-  if (view === "gateway") renderService(content, "gateway");
-  if (view === "history") renderHistory(content);
-  if (view === "settings") renderSettings(content);
-}
-
-function renderRun(content: HTMLElement): void {
-  content.innerHTML = `
-    <header><p class="eyebrow">Verified execution</p><h1>Run on Hellas</h1>
-      <p>Choose paid or authorized work and select its provider trust policy. Gate keeps the complete transcript locally.</p></header>
-    <section class="panel composer">
-      <div class="segmented">
-        <button class="selected" data-kind="fetch">Sealed Fetch</button>
-      </div>
-      ${offerForm("")}
-      <label>Request JSON<textarea id="input" rows="8" placeholder='{"model":"gpt-5","input":"Hello","stream":true}'></textarea></label>
-      <div class="actions"><span id="run-state" class="muted">${escapeHtml(runState)}</span><button id="run" class="primary">Run</button></div>
-    </section>
-    <section class="panel output"><div class="panel-title">Output</div><pre id="output">${escapeHtml(output || "No execution yet.")}</pre></section>`;
-
-  bindFundingForm(content, "");
-  let kind: RunKind = "fetch";
-  content.querySelectorAll<HTMLButtonElement>("[data-kind]").forEach((button) => {
-    button.addEventListener("click", () => {
-      kind = button.dataset.kind as RunKind;
-      content.querySelectorAll("[data-kind]").forEach((item) => item.classList.remove("selected"));
-      button.classList.add("selected");
-    });
-  });
-  content.querySelector<HTMLButtonElement>("#run")?.addEventListener("click", async () => {
-    const input = value("#input");
-    output = "";
-    setRunState("Starting…");
-    try {
-      await api.run({
-        ...offerConfig(""), kind, input,
-      }, receiveEvent);
-    } catch (error) {
-      setRunState(errorMessage(error));
-    }
-  });
-}
-
-function receiveEvent(event: ExecutionEvent): void {
-  if (event.type === "started") setRunState(`Running ${event.data.runId}`);
-  if (event.type === "output") output += event.data.text;
-  if (event.type === "verification") output += `\n\nVerification: ${event.data.summary}`;
-  if (event.type === "finished") setRunState("Verified and complete");
-  if (event.type === "failed") setRunState(event.data.message);
-  const element = document.querySelector("#output");
-  if (element) element.textContent = output || "No output.";
-}
-
-function renderService(content: HTMLElement, service: "provider" | "gateway"): void {
-  const current = status?.[service];
-  const title = service === "provider" ? "Serve sealed Fetch" : "Loopback gateway";
-  const description = service === "provider"
-    ? "Serve paid and authorized Fetch through your attested Hellas identity."
-    : "Expose an authenticated OpenAI-compatible endpoint only on this machine.";
-  content.innerHTML = `
-    <header><p class="eyebrow">${service}</p><h1>${title}</h1><p>${description}</p></header>
-    <section class="panel service-card">
-      <div><div class="panel-title">Runtime</div><h2 id="service-state">${escapeHtml(current?.state ?? "stopped")}</h2>
-      <p id="service-detail">${escapeHtml(current?.detail ?? "Loading…")}</p></div>
-      <button id="toggle" class="primary">${current?.state === "running" ? "Stop" : "Start"}</button>
-    </section>
-    ${service === "provider" ? providerForm() : gatewayForm()}`;
-  if (service === "gateway") bindFundingForm(content, "gateway-");
-  for (const [id, preview] of [["preview-bond", true], ["provision-paid-offer", false]] as const) {
-    content.querySelector(`#${id}`)?.addEventListener("click", async () => {
-      try {
-        const result = await api.provisionPaidOffer(value("#paid-offer-config"), preview);
-        const output = content.querySelector<HTMLTextAreaElement>("#paid-offer-result");
-        if (output) output.value = result;
-      } catch (error) { window.alert(errorMessage(error)); }
-    });
+import type * as T from "./types.ts";
+import { escapeHtml as e, field, area, select, text, lines, number, checked, requestId, periodPicker, period, keyInput, targetFields, client, approve, paidFields, paidPool, paidServeFields, paidServe, id } from "./forms.ts";
+const element=document.querySelector<HTMLDivElement>("#app");if(!element)throw new Error("missing app");const root=element;
+root.innerHTML='<main><h1>Hellas Gate</h1><p id="error" role="alert">Connecting to local authority…</p><button data-action="retry">Retry connection</button></main>';
+type View="run"|"serve"|"contacts"|"gateway"|"trust"|"history"|"settings";
+let view:View="settings";
+let status:T.AppStatus|null=null;
+let provider:T.ProviderView={revision:0,upstreams:[],resources:[],paid:null};
+let output="";let activeRun="";
+function error(value:unknown):void {const message=value&&typeof value==="object"&&"message" in value?value.message:value;let node=document.querySelector("#error");if(!node){node=document.createElement("p");node.id="error";node.setAttribute("role","alert");root.append(node);}node.textContent=String(message);}
+function message(value:string):void {const node=document.querySelector("#message");if(node)node.textContent=value;}
+function secret(value:string,title:string):void {const dialog=document.createElement("dialog");dialog.innerHTML=`<h2>${e(title)}</h2><p>Copy this handoff through a private channel. It is not saved in browser storage.</p><textarea readonly></textarea><form method="dialog"><button>Close</button></form>`;const node=dialog.querySelector("textarea");if(node)node.value=value;document.body.append(dialog);dialog.addEventListener("close",()=>dialog.remove(),{once:true});dialog.showModal();}
+async function render():Promise<void>{
+  status=await api.status();const initialized=status.identity.initialized;
+  if(!initialized&&view!=="history")view="settings";
+  root.innerHTML=`<div class="shell"><aside><div class="brand"><span class="mark">Η</span><div>Hellas<small>Gate</small></div></div><nav>${(["run","serve","contacts","gateway","trust","history","settings"] as View[]).map(v=>`<button data-view="${v}" ${!initialized&&v!=="settings"&&v!=="history"?"disabled":""}>${v[0]?.toUpperCase()}${v.slice(1)}</button>`).join("")}</nav><p id="rail-status">Serve ${e(status.provider.state)} · Gateway ${e(status.gateway.state)}</p></aside><main><p id="error" role="alert"></p><p id="message" role="status"></p><div id="content"></div></main></div>`;
+  const content=document.querySelector("#content");if(!content)return;
+  switch(view){
+    case "settings":content.innerHTML=settings();break;
+    case "history":content.innerHTML=historyView(await api.history());break;
+    case "trust":content.innerHTML=trustView(await api.trust());break;
+    case "serve":provider=await api.provider();content.innerHTML=serve();break;
+    case "contacts":provider=await api.provider();content.innerHTML=contactsView(await api.contacts(),await api.shares(),await api.accesses());break;
+    case "run":content.innerHTML=run(await api.accesses(),await api.trust());break;
+    case "gateway":content.innerHTML=gateway(await api.accesses(),await api.trust(),await api.gatewayKeys());break;
   }
-  content.querySelector<HTMLButtonElement>("#export-offers")?.addEventListener("click", async () => {
-    try {
-      const offers = await api.exportOffers();
-      const target = content.querySelector("#offers");
-      if (target) target.innerHTML = `<p class="muted">Copy each Offer to its contact. Import within five minutes; export again to renew.</p>` + offers.map((item) => `<label>Contact ${escapeHtml(item.contact)}<textarea rows="3" readonly>${escapeHtml(item.offer)}</textarea></label>`).join("");
-    } catch (error) { window.alert(errorMessage(error)); }
-  });
-  const protocol = content.querySelector<HTMLSelectElement>("#gateway-kind");
-  if (protocol) {
-    protocol.value = localStorage.getItem("gate.gateway-kind") ?? "responses";
-    const assurance = content.querySelector<HTMLSelectElement>("#gateway-http-assurance");
-    if (assurance) assurance.value = localStorage.getItem("gate.http-assurance") ?? "appleAppAttest";
-    const refreshProtocol = (): void => {
-      for (const kind of ["responses", "http"]) {
-        const fields = content.querySelector<HTMLElement>(`#gateway-${kind}`);
-        if (fields) fields.hidden = protocol.value !== kind;
-      }
-    };
-    protocol.addEventListener("change", refreshProtocol);
-    refreshProtocol();
+  updateFunding();
+}
+function settings():string{
+  if(!status)return "";const i=status.identity;
+  if(!i.initialized&&i.recoveryAvailable)return `<h1>Gate could not open</h1><p>${e(i.detail)}</p>${transportSettings()}<button data-action="retry-open">Retry existing identity and local control</button><p>Offline owner recovery uses the existing owner passkey, advances authority generation and invalidates existing credentials. Reissue device access afterwards.</p><button data-action="recover-owner">Approve offline owner recovery</button>`;
+  if(!i.initialized)return `<h1>Set up Gate</h1><p>${e(i.detail)}</p><form id="initialize">${field("name","Your name")}<label><input name="software" type="checkbox">Use a software identity for development instead of a system passkey.</label><button>Create identity</button></form>`;
+  return `<h1>Settings</h1><p>${e(i.detail)}</p><dl><dt>Person fingerprint</dt><dd>${e(i.fingerprint)}</dd><dt>Principal</dt><dd>${e(i.principal)}</dd><dt>This device's node key</dt><dd>${e(i.nodeKey)}</dd><dt>Transport</dt><dd>${e(i.transportId)}</dd><dt>Authority / generation</dt><dd>${e(i.authority)} / ${i.generation}</dd><dt>Provider address</dt><dd>${e(i.providerAddress)}</dd><dt>Provider assurance</dt><dd>${e(i.attestation)}</dd><dt>Local control</dt><dd>${e(status.socketPath)} (pinned TLS and device credential required)</dd><dt>Version</dt><dd>${e(status.version)}</dd></dl><label>Signed person contact card<textarea readonly>${e(i.contactCard)}</textarea></label><p>Share the card and confirm the device node key separately. The card identifies a person.</p>${transportSettings()}<h2>CLI device access</h2><form id="admin-access">${requestId()}${field("label","CLI device label")}${field("holder","Confirmed CLI device node key")}${periodPicker()}<button>Approve device-bound administrative credential</button></form><h2>Apply desired settings</h2><p>Import a typed document with vault references for existing upstream secrets. Review every operation before applying. Applied operations remain committed if a later one fails.</p><form id="desired"><label>Desired settings document<input name="document" type="file" accept=".json,application/json" required></label><button>Preview changes</button></form><pre id="apply-report"></pre><p>System passkeys use macOS verification prompts. Provider attestation is configured separately.</p>`;
+}
+function transportSettings():string {return `<h2>Host UDP port</h2><p>Active sockets: ${e(status?.boundAddresses?.join(", ")||"not bound")}. Saving affects the next start; restart drains the host and Run clients first.</p><form id="listen-port">${field("port","Port (0 selects automatically)",String(status?.listenPort??0),"number")}<button>Save for next start</button></form><button data-action="restart">Drain and restart Gate</button>`;}
+function serve():string{
+  const upstreams=provider.upstreams.map(u=>`<article><h3>${e(u.service)} / ${e(u.method)}</h3><p>${e(u.hosts.join(", "))}</p>${u.keys.map(k=>`<p>Key ${e(k.name)} · ${e(k.fingerprint)} · vault reference ${e(k.secretReference)} · last successful use ${k.lastUse===null?"none recorded":new Date(k.lastUse).toLocaleString()} <button data-action="remove-key" data-service="${e(u.service)}" data-method="${e(u.method)}" data-key="${e(k.name)}">Remove key</button></p>`).join("")}<button data-action="remove-endpoint" data-service="${e(u.service)}" data-method="${e(u.method)}">Remove endpoint</button></article>`).join("");
+  return `<h1>Serve</h1><p>${e(status?.provider.state)} · ${e(status?.provider.detail)}</p><button data-action="bind-apple">Bind Apple App Attest provider</button><button data-action="bind-software">Bind software provider (development, non-private)</button><button data-action="provider-start">Start</button><button data-action="provider-stop">Stop and drain</button><p>Provider address: ${e(status?.identity.providerAddress||"bind a provider first")}</p><p>Configuration revision ${provider.revision}</p>${upstreams}
+  <details><summary>Add or change upstream endpoint</summary><form id="endpoint">${field("service","Service")}${field("method","Method")}${area("hosts","Exact allowed DNS hosts") }<label><input name="private" type="checkbox">Explicitly permit private network addresses</label><button>Approve endpoint</button></form></details>
+  <details><summary>Add or replace an upstream key</summary><p>Keys are write-only. Stored keys display a label and fingerprint.</p><form id="upstream-key">${select("mode","Operation",[["add","Add key to existing endpoint"],["replace","Replace key (owner approval)"]])}${field("service","Existing service")}${field("method","Existing method")}${field("key","Key label")}${area("origins","Exact allowed HTTPS origins")}${area("paths","Exact allowed paths")}${field("methods","Allowed methods","POST")}${field("header","Credential header","authorization")}${field("prefix","Header prefix","Bearer ","text",false)}${field("secret","New secret","","password")}<button>Save key</button></form></details>
+  <details open><summary>Configure resource</summary><form id="resource">${field("name","Resource name")}${field("service","Configured service")}${field("method","Configured method")}${select("kind","Provider settings",[["https","HTTPS"],["openAi","OpenAI Responses"]])}${field("credential","Key label (optional for HTTPS)","","text",false)}${field("model","OpenAI model","","text",false)}${field("tokens","Maximum output tokens","1024","number")}${field("origin","HTTPS origin","","text",false)}${area("paths","HTTPS paths","/",false)}${field("methods","HTTPS methods","GET")}${field("bytes","Maximum response bytes","1048576","number")}${area("tlsRoots","Optional HTTPS trust roots (base64 DER, one per line)","",false)}<button>Activate resource</button></form></details>
+  <h2>Resources</h2>${provider.resources.map(r=>`<p>${e(r.name)} · ${e(r.service)}/${e(r.method)} · ${e(r.resource.kind)}</p>`).join("")}${paidServeFields(provider.paid,status?.minOmitResponseBlocks??0)}`;
+}
+function contactsView(contacts:T.ContactView[],shares:T.ShareView[],access:T.AccessView[]):string{
+  return `<h1>Contacts and access</h1><form id="contact">${area("card","Signed ContactCard")}${field("holder","Recipient device node key")}${field("label","Local label","","text",false)}<label><input name="confirm" type="checkbox" required>I confirmed this device key with the person whose fingerprint I checked.</label><button>Add verified contact/device</button></form>
+  ${contacts.map(c=>`<p>${e(c.label||c.name)} · ${e(c.fingerprint)} · ${c.devices.length} confirmed device(s)</p>`).join("")}
+  <h2>Share selected upstreams</h2><form id="share">${requestId()}${select("contact","Verified person",contacts.map(c=>[c.id,`${c.label||c.name} · ${c.fingerprint}`]))}${select("holder","Confirmed recipient device",contacts.flatMap(c=>c.devices.map(d=>[d,`${c.label||c.name}: ${d}`] as [string,string])))}${field("label","Share label")}${periodPicker()}${provider.resources.map(r=>`<label><input name="resources" type="checkbox" value="${e(r.name)}">${e(r.name)} (${e(r.service)}/${e(r.method)})</label>`).join("")}${field("quota","Requests per day, per selected upstream","100","number")}${field("concurrency","Concurrent requests per upstream","1","number")}<button>Approve device credential and sharing grant</button></form>
+  <h2>Issued shares</h2>${shares.map(s=>`<article><p>${e(s.label)} · ${e(s.contact)} · device ${e(s.holder)}</p><p>Expires ${new Date(s.expires).toLocaleString()} · credential ${e(s.credential)}</p><button data-action="export-access" data-id="${e(s.id)}">Reconcile and export bundle</button><button data-action="revoke-share" data-id="${e(s.id)}">Revoke grant and credential</button>${s.allowances.map(a=>`<p>${e(a)} <button data-action="pause" data-id="${e(a)}">Pause</button><button data-action="resume" data-id="${e(a)}">Resume</button><button data-action="quota" data-id="${e(a)}">Edit quota</button></p>`).join("")}</article>`).join("")}
+  <div id="quota-edit"></div><h2>Import access</h2><form id="access">${area("bundle","AccessBundle v2") }<p>Import checks this person and device. Approve provider trust separately.</p><button>Import into vault</button></form>${access.map(a=>`<p>${e(a.label||a.id)} · expires ${new Date(a.expires).toLocaleString()} · allowances ${e(a.allowances.join(", "))}</p>`).join("")}`;
+}
+function run(access:T.AccessView[],policies:T.TrustRecord[]):string {return `<h1>Run Fetch</h1><form id="run">${targetFields(access,policies)}${area("input","Request JSON (actual Fetch content)",'{"model":"your-model","input":"Hello","max_output_tokens":64,"store":false}')}<button>Run</button><button type="button" data-action="cancel">Cancel</button></form><pre id="output">${e(output)}</pre>${paidFields()}`;}
+function gateway(access:T.AccessView[],policies:T.TrustRecord[],keys:T.GatewayKeyView[]):string{return `<h1>Gateway</h1><p>${e(status?.gateway.state)} · ${e(status?.gateway.detail)}</p><button data-action="gateway-address">Show listener address</button><button data-action="gateway-stop">Stop and drain</button><form id="gateway">${targetFields(access,policies)}${select("mode","Presentation",[["responses","Responses"],["http","HTTP (paid)"]])}${field("port","Loopback port (0 selects a free port)","0","number")}<label><input name="zdr" type="checkbox" checked>Zero data retention (no request archive)</label><fieldset><legend>HTTP route</legend>${field("path","Local path","/proxy","text",false)}${field("httpMethod","Method","POST","text",false)}${field("url","Upstream HTTPS URL","","text",false)}${field("credential","Provider key alias","","text",false)}${field("bytes","Response byte ceiling","1048576","number")}</fieldset><button>Apply and start gateway</button></form><h2>Named gateway keys</h2><form id="gateway-key">${requestId()}${field("label","Key name")}${periodPicker()}<button>Issue gateway.invoke-only key</button></form>${keys.map(k=>`<article><p>${e(k.label)} · ${e(k.id)} · expires ${new Date(k.expires).toLocaleString()} · ${e(k.state)}</p>${k.state==="pending"?`<button data-action="reconcile-key" data-id="${e(k.id)}" data-label="${e(k.label)}" data-expires="${k.expires}">Reconcile prepared key</button><button data-action="revoke-key" data-id="${e(k.id)}" data-pending="true">Cancel preparation</button>`:k.state==="active"?`<button data-action="revoke-key" data-id="${e(k.id)}">Revoke</button><button data-action="rotate-key" data-id="${e(k.id)}" data-label="${e(k.label)}">Rotate (new 1 week key; revoke old)</button>`:`<button data-action="revoke-key" data-id="${e(k.id)}">Finish retirement / clear retained secret</button>`}</article>`).join("")}${paidFields()}`;}
+function trustView(records:T.TrustRecord[]):string{return `<h1>Provider trust</h1><p>Approve pins from an independent source. Importing access grants no trust.</p>${records.map(p=>`<article><strong>${e(p.id)} · revision ${p.revision}</strong><p>${e(p.genesis)} · ${e(p.assurance)}</p><p>Approval source: ${e(p.source)}</p></article>`).join("")}<form id="trust">${field("id","Policy ID")}${field("revision","Expected revision (0 for new)","0","number")}${field("genesis","Independent provider enrollment ID")}<label><input name="apple" type="checkbox">Require Apple App Attest</label>${field("appId","Approved Apple app ID","","text",false)}${area("cdHashes","Approved CDHash pins","",false)}${field("reason","Source of approval")}<label><input name="confirm" type="checkbox" required>I checked these pins independently.</label><button>Approve policy</button></form>`;}
+function historyView(entries:T.HistoryEntry[]):string{return `<h1>History</h1><button data-action="clear-history">Clear history</button>${entries.map(h=>`<article><strong>${e(h.status)}</strong><pre>${e(h.request)}</pre><pre>${e(h.result)}</pre><p>${e(h.verification||h.error)}</p><button data-action="delete-history" data-id="${e(h.id)}">Delete</button></article>`).join("")}`;}
+function updateFunding():void {
+  root.querySelectorAll<HTMLFormElement>("#run,#gateway").forEach(form=>{const funding=form.querySelector<HTMLSelectElement>('[name="funding"]')?.value;for(const name of ["accessId","allowance","resource"]){const input=form.querySelector<HTMLInputElement>(`[name="${name}"]`);if(input){input.disabled=funding==="paid";input.required=funding!=="paid";}}for(const name of ["poolId","provider","service","method"]){const input=form.querySelector<HTMLInputElement>(`[name="${name}"]`);if(input){input.disabled=funding!=="paid";input.required=funding==="paid";}}});
+}
+root.addEventListener("change",updateFunding);
+root.addEventListener("click",event=>{const button=(event.target as Element).closest<HTMLButtonElement>("button");if(!button)return;if(button.dataset.view){view=button.dataset.view as View;void render().catch(error);return;}if(button.dataset.action)void action(button).catch(error);});
+async function action(button:HTMLButtonElement):Promise<void>{
+  const action=button.dataset.action;const record=button.dataset.id??"";
+  if(action==="disable-paid-serve"){if(!await approve("Disable paid Serve and drain accepted paid work.",false))return;await api.configurePaidServe(provider.revision,null);}
+  else if(action==="retry-open")await api.retryOpen();
+  else if(action==="restart"){if(!await approve("Drain the host and accepted Run work, then restart Gate with the saved UDP port.",false))return;await api.restart();return;}
+  else if(action==="retry"){await render();return;}
+  else if(action==="recover-owner"){if(!await approve("Recover this node using its owner passkey. Advance authority generation, invalidate old credentials and create new local administration/listener credentials. Existing contact devices need explicit reissue."))return;await api.recoverOwner();}
+  else if(action==="cancel"){if(activeRun)await api.cancel(activeRun);return;}
+  if(action==="bind-apple"||action==="bind-software"){const software=action==="bind-software";if(!await approve(`Bind this node as ${software?"an explicitly non-private software provider":"an Apple App Attest provider"}. The owner passkey approves the binding.`))return;await api.bindProvider(software);}
+  else if(action==="provider-start")await api.setProvider(true);
+  else if(action==="provider-stop")await api.setProvider(false);
+  else if(action==="remove-endpoint"){if(!await approve(`Remove endpoint ${button.dataset.service}/${button.dataset.method} and its upstream credentials.`))return;await api.configureProvider(provider.revision,{kind:"removeEndpoint",service:button.dataset.service??"",method:button.dataset.method??""});}
+  else if(action==="remove-key"){if(!await approve(`Remove upstream key ${button.dataset.key} from ${button.dataset.service}/${button.dataset.method}.`))return;await api.configureProvider(provider.revision,{kind:"removeKey",service:button.dataset.service??"",method:button.dataset.method??"",key:button.dataset.key??""});}
+  else if(action==="export-access"){if(!await approve(`Reconcile the exact prepared credential for share ${record} and export its device-bound access bundle.`))return;secret(await api.exportAccess(record),"Device access bundle");return;}
+  else if(action==="revoke-share"){if(!await approve(`Revoke share ${record}, including its grant and device credential. Running work will observe revocation.`))return;await api.revokeShare(record);}
+  else if(action==="pause"||action==="resume")await api.pauseAllowance(record,action==="pause");
+  else if(action==="quota"){const quota=await api.quota(record);const node=root.querySelector("#quota-edit");if(node){node.innerHTML=`<h2>Edit allowance quota</h2><p>Allowance ${e(record)}, budget revision ${quota.revision}</p><form id="quota"><input type="hidden" name="allowance" value="${e(record)}"><input type="hidden" name="revision" value="${quota.revision}">${field("requests","Requests per day",String(quota.requestsPerDay??""),"number")}${field("concurrency","Concurrent requests",String(quota.maxInFlight),"number")}<button>Save quota</button></form>`;node.scrollIntoView();}return;}
+  else if(action==="gateway-stop")await api.setGateway(false);
+  else if(action==="gateway-address"){message(await api.gatewayAddress());return;}
+  else if(action==="reconcile-key"){if(!await approve(`Complete issuance of prepared gateway key ${button.dataset.label}, ID ${record}, with its original expiry ${new Date(Number(button.dataset.expires)).toLocaleString()}. Reuse its exact credential.`))return;const [key,bearer]=await api.reconcileGatewayKey(record);secret(bearer,`Gateway key ${key.id}, expires ${new Date(key.expires).toLocaleString()}`);}
+  else if(action==="revoke-key"){if(!await approve(button.dataset.pending?`Cancel preparation ${record} without issuing its credential. Revoke any partial access and clear its saved secret.`:`Retire gateway key ${record}. Revoke access for future requests and clear its saved secret.`))return;await api.revokeGatewayKey(record);}
+  else if(action==="rotate-key"){if(!await approve(`Issue a new 1 week gateway.invoke key named ${button.dataset.label}, then revoke old key ${record}.`))return;const [key,bearer]=await api.rotateGatewayKey(record,{requestId:id(),label:button.dataset.label??"Rotated key",period:"week"});secret(bearer,`Rotated gateway key ${key.id}`);}
+  else if(action==="delete-history")await api.deleteHistory(record);
+  else if(action==="clear-history")await api.clearHistory();
+  await render();
+}
+root.addEventListener("submit",event=>{const form=event.target as HTMLFormElement;if(!form.id)return;event.preventDefault();void submit(form).catch(error);});
+async function submit(form:HTMLFormElement):Promise<void>{
+  const data=new FormData(form);const operation=form.id;
+  if(operation==="initialize"){const software=data.has("software");if(!await approve(`Create ${software?"development software":"system passkey"} owner ${text(data,"name")} and initialize this node. ${software?"Software assertions claim user presence only.":"macOS will request passkey creation and owner approvals."}`))return;await (software?api.initializeSoftware:api.initializeNative)(text(data,"name"));}
+  else if(operation==="desired"){
+    const file=data.get("document");if(!(file instanceof File)||file.size>4*1024*1024)throw new Error("Choose a settings document no larger than 4 MiB");
+    const preview=await api.previewApply(JSON.parse(await file.text(),(_key,value:unknown)=>{if(typeof value==="number"&&!Number.isSafeInteger(value))throw new Error("Settings require exact integer values within the supported numeric range");return value;}) as T.DesiredState);
+    if(!await approve(`Apply these operations at provider revision ${preview.providerRevision}:\n${preview.steps.join("\n")}\n${preview.requiresPasskey?"One owner passkey session will authorize sensitive operations.":"These operations use this device's scoped daily credential."}`,preview.requiresPasskey)){await api.discardApply(preview.id);return;}
+    const report=await api.applyDocument(preview.id);await render();const node=root.querySelector("#apply-report");if(node)node.textContent=[`Applied (${report.applied.length})`,...report.applied,`Unapplied (${report.unapplied.length})`,...report.unapplied,`Outcome uncertain (${report.uncertain.length})`,...report.uncertain,report.error??"All listed operations completed",`Provider revision ${report.providerRevision}; authority revision ${report.authorityRevision??"unavailable"}`].join("\n");return;
   }
-  content.querySelector<HTMLButtonElement>("#toggle")?.addEventListener("click", async () => {
-    try {
-      const running = status?.[service].state === "running";
-      status = service === "provider"
-        ? await api.setProvider(
-            !running,
-            running ? undefined : providerConfig(),
-          )
-        : await api.setGateway(
-            !running,
-            running ? undefined : gatewayConfig(),
-          );
-      gatewayAccess = status.gateway.state === "running" ? await api.gatewayAccess() : null;
-      render();
-      updateRail();
-    } catch (error) {
-      window.alert(errorMessage(error));
-    }
-  });
-}
-
-function providerForm(): string {
-  return `<section class="panel"><div class="panel-title">Provider configuration</div>
-    <div class="field-row"><label>Backend<input value="OpenAI Responses" readonly /></label>
-    <label>OpenAI API key<input id="provider-api-key" type="password" autocomplete="off" /></label></div>
-    <div class="field-row"><label>Fetch service<input id="provider-service" value="openai" /></label>
-    <label>Fetch method<input id="provider-method" value="responses" /></label></div>
-    <label>Paid Work config file<input id="provider-work-config" placeholder="/absolute/path/provider-work.json" /></label>
-    <label>HTTPS routes JSON<textarea id="provider-https" rows="4" placeholder="Optional array of routes, accounts and resource policies"></textarea></label>
-    <label>Imported contacts<textarea id="provider-contacts" rows="4" placeholder="one base64 contact enrollment per line">${escapeHtml(localStorage.getItem("gate.contacts") ?? "")}</textarea></label>
-    <label>Requests per contact per day<input id="provider-quota" type="number" min="0" value="${escapeHtml(localStorage.getItem("gate.quota") ?? "100")}" /></label>
-    <p class="muted">Each contact can use the configured accounts within this daily request allowance. Jobs have a five-minute deadline. To remove a contact, stop the provider and restart with the revised list. Removed grants remain revoked.</p>
-    <label>Paid offer config file<input id="paid-offer-config" placeholder="/absolute/path/offer.json" /></label>
-    <div class="actions"><button id="preview-bond">Preview bond</button><button id="provision-paid-offer">Provision paid offer</button></div>
-    <textarea id="paid-offer-result" rows="5" readonly placeholder="Copy the provisioned fields into the client's pool configuration"></textarea>
-    <button id="export-offers">Export Offers for enabled contacts</button><div id="offers"></div>
-    <div class="field-row"><label>Port<input id="provider-port" type="number" min="1" max="65535" placeholder="automatic" /></label></div>
-    <p class="muted">The API key crosses the typed IPC boundary once and remains only in native memory for this provider run.</p></section>`;
-}
-
-function providerConfig(): ProviderConfig {
-  const rawPort = value("#provider-port");
-  localStorage.setItem("gate.contacts", value("#provider-contacts"));
-  localStorage.setItem("gate.quota", value("#provider-quota"));
-  return {
-    service: value("#provider-service"),
-    method: value("#provider-method"),
-    openaiApiKey: value("#provider-api-key"),
-    workConfigPath: value("#provider-work-config") || undefined,
-    httpsConfig: value("#provider-https") || undefined,
-    contacts: value("#provider-contacts").split(/\n/).map((item) => item.trim()).filter(Boolean),
-    requestsPerDay: Number(value("#provider-quota")),
-    port: rawPort ? Number(rawPort) : undefined,
-  };
-}
-
-function gatewayForm(): string {
-  return `<section class="panel"><div class="panel-title">Local access</div>
-    <label>Protocol<select id="gateway-kind"><option value="responses">Responses</option><option value="http">HTTP</option></select></label>
-    <div id="gateway-responses">${offerForm("gateway-")}</div>
-    <div id="gateway-http" hidden>
-      <label>Paid pool file<input id="gateway-http-pool" value="${escapeHtml(localStorage.getItem("gate.http-pool") ?? "")}" /></label>
-      <label>HTTP routes file<input id="gateway-http-routes" value="${escapeHtml(localStorage.getItem("gate.http-routes") ?? "")}" /></label>
-      <label>Provider assurance<select id="gateway-http-assurance"><option value="appleAppAttest">Apple App Attest</option><option value="producerSigned">Producer signed</option></select></label>
-      <label><input id="gateway-zdr" type="checkbox" ${localStorage.getItem("gate.zdr") === "true" ? "checked" : ""} /> Do not archive request or response bodies</label>
-    </div>
-    <div class="field-row"><label>Bind address<input value="127.0.0.1 (ephemeral port)" readonly /></label>
-    </div>
-    <p class="muted">A fresh bearer is generated for each running instance.</p>
-    ${gatewayAccess ? `<div class="definition"><div><span>Base URL</span><code>${escapeHtml(gatewayAccess.address)}</code></div><div><span>Bearer</span><code>${escapeHtml(gatewayAccess.bearer)}</code></div></div>` : ""}</section>`;
-}
-
-function gatewayConfig(): GatewayConfig {
-  localStorage.setItem("gate.gateway-kind", value("#gateway-kind"));
-  if (value("#gateway-kind") === "http") {
-    const paidPoolPath = value("#gateway-http-pool");
-    const httpRoutesPath = value("#gateway-http-routes");
-    const assurance = value("#gateway-http-assurance") === "producerSigned" ? "producerSigned" : "appleAppAttest";
-    const zdr = document.querySelector<HTMLInputElement>("#gateway-zdr")?.checked ?? false;
-    localStorage.setItem("gate.http-pool", paidPoolPath);
-    localStorage.setItem("gate.http-routes", httpRoutesPath);
-    localStorage.setItem("gate.http-assurance", assurance);
-    localStorage.setItem("gate.zdr", String(zdr));
-    return { kind: "http", paidPoolPath, httpRoutesPath, assurance, zdr };
+  else if(operation==="quota")await api.setQuota({allowance:text(data,"allowance"),expectedRevision:number(data,"revision"),requestsPerDay:number(data,"requests"),maxInFlight:number(data,"concurrency")});
+  else if(operation==="admin-access"){if(!await approve(`Issue currently mounted administration capabilities to CLI device ${text(data,"label")}, holder ${text(data,"holder")}, lifetime ${period(data)}. Sensitive operations still require this owner passkey.`))return;secret(JSON.stringify(await api.issueAdminAccess({requestId:text(data,"requestId"),label:text(data,"label"),holder:text(data,"holder"),period:period(data)}),null,2),"CLI credential and independent TLS pin");}
+  else if(operation==="endpoint"){if(!await approve(`Add/change endpoint ${text(data,"service")}/${text(data,"method")} with exact hosts ${lines(data,"hosts").join(", ")}.`))return;await api.configureProvider(provider.revision,{kind:"endpoint",service:text(data,"service"),method:text(data,"method"),hosts:lines(data,"hosts"),allowPrivateAddresses:checked(data,"private")});}
+  else if(operation==="upstream-key"){const key=keyInput(data);if(text(data,"mode")==="replace"){if(!await approve(`Replace upstream key ${key.key} for ${key.service}/${key.method}. Stored secrets remain write-only.`))return;await api.configureProvider(provider.revision,{kind:"replaceKey",key});}else await api.configureProvider(provider.revision,{kind:"addKey",key});}
+  else if(operation==="resource"){const resource:T.ResourceKind=text(data,"kind")==="openAi"?{kind:"openAi",model:text(data,"model"),maxOutputTokens:number(data,"tokens"),credential:text(data,"credential")}:{kind:"https",origin:text(data,"origin"),paths:lines(data,"paths"),methods:lines(data,"methods"),credential:text(data,"credential")||null,maxResponseBytes:number(data,"bytes"),tlsRoots:lines(data,"tlsRoots")};await api.resource(provider.revision,{name:text(data,"name"),service:text(data,"service"),method:text(data,"method"),resource});}
+  else if(operation==="contact")await api.addContact({card:text(data,"card"),holder:text(data,"holder"),label:text(data,"label"),confirmedHolder:checked(data,"confirm")});
+  else if(operation==="share"){const resources=data.getAll("resources").map(String);if(!resources.length)throw new Error("Select at least one upstream");if(!await approve(`Issue one device credential to person ${text(data,"contact")}, holder ${text(data,"holder")}, for ${resources.join(", ")}, ${number(data,"quota")} requests/day per selected upstream, lifetime ${period(data)}.`))return;await api.share({requestId:text(data,"requestId"),contact:text(data,"contact"),holder:text(data,"holder"),allowances:resources.map(resource=>({resource,requestsPerDay:number(data,"quota"),maxInFlight:number(data,"concurrency")})),period:period(data),label:text(data,"label")});}
+  else if(operation==="access")await api.importAccess(text(data,"bundle"));
+  else if(operation==="trust")await api.approveTrust({id:text(data,"id"),expectedRevision:number(data,"revision"),genesis:text(data,"genesis"),apple:checked(data,"apple"),appId:text(data,"appId"),cdHashes:lines(data,"cdHashes"),reason:text(data,"reason")});
+  else if(operation==="gateway-key"){if(!await approve(`Issue gateway.invoke-only key ${text(data,"label")} for ${period(data)}.`))return;const [key,bearer]=await api.issueGatewayKey({requestId:text(data,"requestId"),label:text(data,"label"),period:period(data)});secret(bearer,`Gateway key ${key.id}, expires ${new Date(key.expires).toLocaleString()}`);}
+  else if(operation==="gateway"){const httpRoutes:T.HttpRouteInput[]=text(data,"mode")==="http"?[{path:text(data,"path"),method:text(data,"httpMethod"),url:text(data,"url"),credential:text(data,"credential")||null,maxResponseBytes:number(data,"bytes"),tlsRoots:[]}]:[];await api.setGateway(true,{client:client(data),httpRoutes,port:number(data,"port"),zdr:checked(data,"zdr")});}
+  else if(operation==="listen-port")await api.saveListenPort(number(data,"port")||null);
+  else if(operation==="paid-serve"){
+    const input=paidServe(data),p=input.policy;
+    if(!await approve(`Approve automatic paid offers for ${p.service}/${p.method}: price ${p.fixedPrice}, ${p.jobsPerChannel} jobs per channel, at most ${p.maxStakePerClient} stake per client and ${p.maxOpenOffers} open offers, bond lifetime ${p.bondLifetimeBlocks} blocks. Omission collateral ${p.omissionBond}; returned stake ${p.redelegatePayout?"stays delegated":"returns undelegated"}. Per job: request ${p.limits.maxRequestBodyBytes} bytes, output ${p.limits.maxOutputBytes} bytes / ${p.limits.maxOutputEvents} events, timeout ${p.limits.executionTimeoutMs} ms. Existing channels retain their signed terms.`))return;
+    await api.configurePaidServe(provider.revision,input);
   }
-  return { ...offerConfig("gateway-"), kind: "responses" };
-}
-
-function offerForm(prefix: string): string {
-  const appId = localStorage.getItem("gate.apple-app-id") ?? status?.identity.appleAppId ?? "";
-  const hashes = localStorage.getItem("gate.apple-cdhashes") ?? status?.identity.appleCdHashes.join(", ") ?? "";
-  const assurance = localStorage.getItem("gate.assurance") ?? "appleAppAttest";
-  const funding = localStorage.getItem("gate.funding") ?? "authorized";
-  return `<label>Funding<select id="${prefix}funding"><option value="authorized" ${funding === "authorized" ? "selected" : ""}>Authorized</option><option value="paid" ${funding === "paid" ? "selected" : ""}>Paid</option></select></label>
-    <div id="${prefix}authorized-fields"><label>Resource name<input id="${prefix}resource" value="${escapeHtml(localStorage.getItem("gate.resource") ?? "responses")}" /></label>
-    <label>Imported Offer<textarea id="${prefix}offer" rows="3" placeholder="paste the base64 Offer exported for this contact">${escapeHtml(localStorage.getItem("gate.offer") ?? "")}</textarea></label>
-    </div><div id="${prefix}paid-fields"><label>Paid pool config file<input id="${prefix}pool-config" value="${escapeHtml(localStorage.getItem("gate.pool-config") ?? "")}" placeholder="/absolute/path/pool.json" /></label>
-    <label>Provider endpoint ID<input id="${prefix}paid-provider" value="${escapeHtml(localStorage.getItem("gate.paid-provider") ?? "")}" /></label>
-    <div class="field-row"><label>Fetch service<input id="${prefix}paid-service" value="${escapeHtml(localStorage.getItem("gate.paid-service") ?? "")}" placeholder="For an open HTTPS policy" /></label>
-    <label>Fetch method<input id="${prefix}paid-method" value="${escapeHtml(localStorage.getItem("gate.paid-method") ?? "")}" placeholder="For an open HTTPS policy" /></label></div>
-    <p class="muted">The pool file contains your payment coins and the provider's signed offer. Apple app ID and CDHashes for paid targets come from that file.</p></div>
-    <label>Assurance<select id="${prefix}assurance"><option value="appleAppAttest" ${assurance === "appleAppAttest" ? "selected" : ""}>Apple App Attest</option><option value="producerSigned" ${assurance === "producerSigned" ? "selected" : ""}>Producer signed</option></select></label>
-    <div id="${prefix}authorized-trust" class="field-row"><label>Trusted Apple app ID<input id="${prefix}apple-app-id" value="${escapeHtml(appId)}" placeholder="TEAMID.ai.hellas.gate" /></label>
-    <label>Trusted CDHashes<input id="${prefix}apple-cdhashes" value="${escapeHtml(hashes)}" placeholder="from trusted release metadata, comma separated" /></label></div>`;
-}
-
-function offerConfig(prefix: string): Omit<RunRequest, "kind" | "input"> {
-  for (const field of ["funding", "resource", "pool-config", "paid-provider", "paid-service", "paid-method", "offer", "assurance", "apple-app-id", "apple-cdhashes"]) {
-    localStorage.setItem(`gate.${field}`, value(`#${prefix}${field}`));
+  else if(operation==="paid-pool")await api.savePaidPool(paidPool(data));
+  else if(operation==="run"){
+    output="";await api.run({kind:"fetch",input:String(data.get("input")??""),client:client(data)},event=>{
+      if(event.type==="started")activeRun=event.data.runId;
+      else if(event.type==="output")output+=event.data.text+"\n";
+      else if(event.type==="verification")output+="Verified: "+event.data.summary+"\n";
+      else if(event.type==="failed")output+="Failed: "+event.data.message+"\n";
+      else if(event.type==="cancelled")output+="Cancelled; accepted work is settled by the SDK.\n";
+      if(event.type==="finished"||event.type==="failed"||event.type==="cancelled")activeRun="";
+      const node=document.querySelector("#output");if(node)node.textContent=output;
+    });return;
   }
-  return {
-    target: value(`#${prefix}funding`) === "paid"
-      ? { funding: "paid", poolConfig: value(`#${prefix}pool-config`), provider: value(`#${prefix}paid-provider`),
-          route: value(`#${prefix}paid-service`) || value(`#${prefix}paid-method`)
-            ? { service: value(`#${prefix}paid-service`), method: value(`#${prefix}paid-method`) } : undefined }
-      : { funding: "authorized", offer: value(`#${prefix}offer`), resource: value(`#${prefix}resource`) },
-    assurance: value(`#${prefix}assurance`) === "appleAppAttest" ? "appleAppAttest" : "producerSigned",
-    appleAppId: value(`#${prefix}apple-app-id`),
-    appleCdHashes: value(`#${prefix}apple-cdhashes`).split(",").map((item) => item.trim()).filter(Boolean),
-  };
+  await render();message("Saved");
 }
-
-function bindFundingForm(content: HTMLElement, prefix: string): void {
-  const select = content.querySelector<HTMLSelectElement>(`#${prefix}funding`);
-  const refresh = (): void => {
-    const paid = select?.value === "paid";
-    for (const field of ["authorized-fields", "authorized-trust", "paid-fields"]) {
-      const element = content.querySelector<HTMLElement>(`#${prefix}${field}`);
-      if (element) element.hidden = field === "paid-fields" ? !paid : paid;
-    }
-  };
-  select?.addEventListener("change", refresh);
-  refresh();
-}
-
-function renderHistory(content: HTMLElement): void {
-  content.innerHTML = `<header><p class="eyebrow">Private local data</p><h1>History</h1>
-    <p>Requests, results, verification, and failures stay in Gate unless you explicitly export them.</p></header>
-    <div class="toolbar"><button id="refresh">Refresh</button><button id="clear" class="danger">Clear all</button></div>
-    <section class="history-list">${history.map(historyCard).join("") || '<div class="panel muted">No history.</div>'}</section>`;
-  content.querySelector("#refresh")?.addEventListener("click", loadHistory);
-  content.querySelector("#clear")?.addEventListener("click", async () => {
-    if (!window.confirm("Permanently clear all local Gate history?")) return;
-    await api.clearHistory();
-    await loadHistory();
-  });
-  content.querySelectorAll<HTMLButtonElement>("[data-delete]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      await api.deleteHistory(button.dataset.delete ?? "");
-      await loadHistory();
-    });
-  });
-}
-
-function historyCard(entry: HistoryEntry): string {
-  return `<article class="panel history-card"><div><span class="pill ${escapeHtml(entry.status)}">${escapeHtml(entry.status)}</span>
-    <h3>${escapeHtml(entry.kind)} · ${escapeHtml(entry.target)}</h3><time>${new Date(entry.createdAtMs).toLocaleString()}</time></div>
-    <p>${escapeHtml(entry.request)}</p>${entry.error ? `<p class="error">${escapeHtml(entry.error)}</p>` : ""}
-    <button data-delete="${escapeHtml(entry.id)}">Delete</button></article>`;
-}
-
-function renderSettings(content: HTMLElement): void {
-  const identity = status?.identity;
-  content.innerHTML = `<header><p class="eyebrow">Host</p><h1>Settings & diagnostics</h1></header>
-    <section class="panel definition"><div><span>App Attest</span><strong>${escapeHtml(identity?.attestation ?? "loading")}</strong></div>
-    <p>${escapeHtml(identity?.detail ?? "")}</p><div><span>Local control socket</span><code>${escapeHtml(status?.socketPath ?? "")}</code></div>
-    <div><span>Contact ID</span><code>${escapeHtml(identity?.contactId ?? "")}</code></div>
-    <label>Export contact enrollment<textarea rows="4" readonly>${escapeHtml(identity?.contact ?? "")}</textarea></label>
-    <p>Copy this public contact enrollment to a provider to request a grant.</p>
-    <div><span>Version</span><strong>${escapeHtml(status?.version ?? "")}</strong></div></section>`;
-}
-
-async function refreshStatus(): Promise<void> {
-  try {
-    status = await api.status();
-    if (status.gateway.state === "running" && !gatewayAccess) {
-      gatewayAccess = await api.gatewayAccess();
-    } else if (status.gateway.state !== "running") {
-      gatewayAccess = null;
-    }
-    updateRail();
-    refreshVisibleStatus();
-  } catch (error) {
-    const rail = document.querySelector("#rail-status");
-    if (rail) rail.textContent = errorMessage(error);
-  }
-}
-
-function refreshVisibleStatus(): void {
-  if (!status) return;
-  if (view === "settings") {
-    render();
-    return;
-  }
-  const service = view === "serve" ? "provider" : view === "gateway" ? "gateway" : null;
-  if (!service) return;
-  const current = status[service];
-  const state = document.querySelector("#service-state");
-  const detail = document.querySelector("#service-detail");
-  const toggle = document.querySelector<HTMLButtonElement>("#toggle");
-  if (state) state.textContent = current.state;
-  if (detail) detail.textContent = current.detail;
-  if (toggle) toggle.textContent = current.state === "running" ? "Stop" : "Start";
-}
-
-async function loadHistory(): Promise<void> {
-  history = await api.history();
-  if (view === "history") render();
-}
-
-function updateRail(): void {
-  const rail = document.querySelector("#rail-status");
-  if (!rail || !status) return;
-  rail.innerHTML = `<i class="dot ${status.provider.state}"></i> Provider ${escapeHtml(status.provider.state)}<br>
-    <i class="dot ${status.gateway.state}"></i> Gateway ${escapeHtml(status.gateway.state)}`;
-}
-
-function value(selector: string): string {
-  return document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)?.value.trim() ?? "";
-}
-
-function setRunState(message: string): void {
-  runState = message;
-  const element = document.querySelector("#run-state");
-  if (element) element.textContent = message;
-}
-
-function errorMessage(error: unknown): string {
-  return typeof error === "object" && error !== null && "message" in error
-    ? String((error as { message: unknown }).message)
-    : String(error);
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>'"]/g, (character) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
-  })[character] ?? character);
-}
-
-render();
-void refreshStatus();
-void loadHistory();
-window.setInterval(refreshStatus, 5_000);
+void render().catch(error);
+setInterval(()=>{void api.status().then(value=>{status=value;const node=document.querySelector("#rail-status");if(node)node.textContent=`Serve ${value.provider.state} · Gateway ${value.gateway.state}`;}).catch(error);},5000);

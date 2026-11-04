@@ -18,6 +18,23 @@
         "type": "github"
       }
     },
+    "hellas": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793805292,
+        "narHash": "sha256-I+qWwXSc+ohwbdBZaWl2IniERzuMtT7/GYNtCUhIUIE=",
+        "owner": "hellas-ai",
+        "repo": "hellas",
+        "rev": "2a3de65b4c3d88b5db56a664c9fa925ab809587d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hellas-ai",
+        "repo": "hellas",
+        "rev": "2a3de65b4c3d88b5db56a664c9fa925ab809587d",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1789370336,
@@ -37,6 +54,7 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
+        "hellas": "hellas",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay"
       }
@@ -48,11 +66,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1789543870,
-        "narHash": "sha256-45ikFmtfgBZgMePIm4GevJ9VjDSWO3PGQgOuuwHDpes=",
+        "lastModified": 1792567368,
+        "narHash": "sha256-mrM+zFDRO1pI85t2SEq5R739BIq7Nv5XkFtVZK9nkZM=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "35ca0490d13a3d38c4602d0eb9600a30fa63a367",
+        "rev": "83dd732f2428827f35d997deae108a2ced5125f4",
         "type": "github"
       },
       "original": {

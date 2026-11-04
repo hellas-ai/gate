@@ -46,3 +46,5 @@ button:hover { border-color: #56637a; }.primary { border-color: #6388c3; color: 
 @media (max-width: 850px) { .shell { grid-template-columns: 170px 1fr; } main { width: 100%; padding-inline: 24px; }.field-row { grid-template-columns: 1fr; } }
 
 [hidden] { display: none !important; }
+
+dialog p { white-space: pre-line; }

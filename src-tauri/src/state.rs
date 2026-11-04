@@ -1,841 +1,613 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
-use anyhow::{Context, bail};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use hellas_gateway::{WorkExecutionBackend, WorkFetchRequest};
-use hellas_rpc::protocol::{
-    work_fetch::FetchRoutePolicy,
-    work_grant::{
-        UnixMillis,
-        records::{Principal, SignedOffer},
+use crate::{control::LocalNode, dto::*, history::History, identity::Identity, vault::Vault};
+use anyhow::Context;
+use hellas_rpc::pb::host::GetHostStatusRequest;
+use hellas_sdk::node_control::host::HostHandle;
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
     },
-    work_profile::WorkPolicy,
 };
-use hellas_sdk::grant_client::{GrantSessionOptions, GrantTransport, PinnedOffer, UnpinnedOffer};
-use hellas_sdk::grant_gateway::GrantGateway;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::{Mutex, OnceCell, RwLock};
-
-use crate::apple;
-use crate::dto::{
-    AppStatus, AssuranceInput, GatewayAccess, GatewayConfig, IdentityStatus, ProviderConfig,
-    RunKind, RunRequest, ServiceState, ServiceStatus, WorkClientConfig, WorkTarget,
-};
-use crate::history::History;
-use crate::identity;
-
-#[derive(Clone)]
-struct ClientTarget {
-    backend: Arc<dyn WorkExecutionBackend>,
-    provider: hellas_sdk::iroh::EndpointId,
-    service: String,
-    method: String,
-    environment: hellas_rpc::ContentId,
-}
-
-struct RuntimeStatus {
-    stopping: bool,
-    provider: ServiceStatus,
-    provider_handle: Option<hellas_sdk::ProviderHandle>,
-    gateway: ServiceStatus,
-    gateway_access: Option<GatewayAccess>,
-    gateway_handle: Option<hellas_sdk::gateway::GatewayHandle>,
-    gateway_config: Option<GatewayConfig>,
-}
+use tokio::sync::Mutex;
 
 pub struct AppState {
     pub history: History,
-    socket_path: PathBuf,
-    counter_directory: PathBuf,
-    archive_directory: PathBuf,
-    identity: hellas_sdk::ClientIdentity,
-    chain: crate::chain::ChainNode,
-    #[cfg(target_os = "macos")]
-    provider_identity_path: PathBuf,
-    #[cfg(target_os = "macos")]
-    provider_state_directory: PathBuf,
-    provider_identity: OnceCell<Arc<crate::provider_identity::ProviderIdentity>>,
-    contact: Principal,
-    journal_root: PathBuf,
-    client: Mutex<Option<(String, ClientTarget)>>,
-    lifecycle: Mutex<()>,
-    runtime: RwLock<RuntimeStatus>,
+    pub directory: PathBuf,
+    pub vault: Vault,
+    local: Mutex<Option<Arc<LocalNode>>>,
+    host: Mutex<Option<HostHandle>>,
+    operation: Mutex<()>,
+    stopping: AtomicBool,
+    opened: AtomicBool,
+    failure: Mutex<Option<String>>,
+    plans: Mutex<std::collections::BTreeMap<String, crate::apply::Plan>>,
+    pub runs: Arc<tokio::sync::Semaphore>,
+    pub cancellations: Mutex<std::collections::BTreeMap<String, tokio::sync::watch::Sender<bool>>>,
+}
+impl AppState {
+    /// Construct state without prompting: Tauri setup runs on the UI thread.
+    pub fn open(directory: &Path) -> anyhow::Result<Self> {
+        Self::prepare(directory, Vault::native(directory)?)
+    }
+    #[cfg(test)]
+    pub(crate) async fn with_vault(directory: &Path, vault: Vault) -> anyhow::Result<Self> {
+        let state = Self::prepare(directory, vault)?;
+        state.open_existing().await?;
+        Ok(state)
+    }
+    fn prepare(directory: &Path, vault: Vault) -> anyhow::Result<Self> {
+        hellas_private::create_dir_all_durable(directory)?;
+        hellas_private::restrict_directory(directory)?;
+        let state = Self {
+            history: History::open(&directory.join("history.sqlite3"))?,
+            directory: directory.to_owned(),
+            vault,
+            local: Mutex::new(None),
+            host: Mutex::new(None),
+            operation: Mutex::new(()),
+            stopping: AtomicBool::new(false),
+            opened: AtomicBool::new(false),
+            failure: Mutex::new(None),
+            plans: Mutex::new(std::collections::BTreeMap::new()),
+            runs: Arc::new(tokio::sync::Semaphore::new(64)),
+            cancellations: Mutex::new(std::collections::BTreeMap::new()),
+        };
+        Ok(state)
+    }
+    /// First status request runs after the event loop starts, so native prompts
+    /// can dispatch to the main queue. Failure is shown until an explicit retry.
+    pub async fn open_existing(&self) -> anyhow::Result<()> {
+        let _lock = self.operation.lock().await;
+        anyhow::ensure!(
+            !self.stopping.load(Ordering::SeqCst),
+            "Gate is shutting down"
+        );
+        if self.opened.swap(true, Ordering::SeqCst) || self.local.lock().await.is_some() {
+            return Ok(());
+        }
+        let opened: anyhow::Result<()> = async {
+            if let Some(identity) = Identity::load(&self.directory, &self.vault).await? {
+                self.mount(identity).await?;
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = opened {
+            *self.failure.lock().await = Some(format!("{error:#}"));
+        }
+        Ok(())
+    }
+    async fn mount(&self, identity: Identity) -> anyhow::Result<()> {
+        let (local, host) = LocalNode::open(&self.directory, identity, self.vault.clone()).await?;
+        *self.host.lock().await = Some(host);
+        *self.local.lock().await = Some(local);
+        Ok(())
+    }
+    pub async fn initialize_software(&self, name: String) -> anyhow::Result<AppStatus> {
+        let _lock = self.operation.lock().await;
+        anyhow::ensure!(
+            !self.stopping.load(Ordering::SeqCst),
+            "Gate is shutting down"
+        );
+        anyhow::ensure!(
+            self.local.lock().await.is_none(),
+            "identity already initialized"
+        );
+        let identity = Identity::create(&self.directory, &self.vault, name).await?;
+        self.mount(identity).await?;
+        self.status().await
+    }
+    pub async fn initialize_native(&self, name: String) -> anyhow::Result<AppStatus> {
+        let _lock = self.operation.lock().await;
+        anyhow::ensure!(
+            !self.stopping.load(Ordering::SeqCst),
+            "Gate is shutting down"
+        );
+        anyhow::ensure!(
+            self.local.lock().await.is_none(),
+            "identity already initialized"
+        );
+        let identity = Identity::create_native(&self.directory, &self.vault, name).await?;
+        self.mount(identity).await?;
+        self.status().await
+    }
+    pub(crate) async fn begin_run(
+        &self,
+        request: &RunRequest,
+    ) -> anyhow::Result<(
+        Arc<LocalNode>,
+        tokio::sync::OwnedSemaphorePermit,
+        String,
+        tokio::sync::watch::Receiver<bool>,
+    )> {
+        let _lock = self.operation.lock().await;
+        let local = self.local().await?;
+        let permit = self.runs.clone().try_acquire_owned()?;
+        let id = self.history.begin(request)?;
+        let (cancel, cancelled) = tokio::sync::watch::channel(false);
+        self.cancellations.lock().await.insert(id.clone(), cancel);
+        Ok((local, permit, id, cancelled))
+    }
+    pub async fn local(&self) -> anyhow::Result<Arc<LocalNode>> {
+        anyhow::ensure!(
+            !self.stopping.load(Ordering::SeqCst),
+            "Gate is shutting down"
+        );
+        self.local
+            .lock()
+            .await
+            .clone()
+            .context("create or select an owner passkey before using Gate")
+    }
+    pub async fn status(&self) -> anyhow::Result<AppStatus> {
+        let stopped = || ServiceStatus {
+            state: "stopped".into(),
+            detail: String::new(),
+        };
+        let Some(local) = self.local.lock().await.clone() else {
+            return Ok(AppStatus { version: env!("CARGO_PKG_VERSION").into(), identity: IdentityStatus { initialized: false, recovery_available:self.directory.join("installation.json").try_exists()?, principal: String::new(), fingerprint: String::new(), node_key: String::new(), transport_id: String::new(), provider_address: String::new(), authority: String::new(), generation: 0, attestation: "unavailable".into(), detail: self.failure.lock().await.clone().unwrap_or_else(||"Create your identity with a system passkey on macOS. Software identities are available explicitly for development.".into()), contact_card: String::new() }, provider: stopped(), gateway: stopped(), endpoint: String::new(), socket_path: self.directory.join("gate.sock").display().to_string(), listen_port: crate::settings::load(&self.directory)?.listen_port, bound_addresses: vec![], min_omit_response_blocks: hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS });
+        };
+        let status = local
+            .client(false)
+            .await?
+            .get_host_status(GetHostStatusRequest {
+                authorization: local.authorization(),
+            })
+            .await?;
+        let service = |s: Option<hellas_rpc::pb::host::ServiceStatus>| {
+            s.map(|s| ServiceStatus {
+                state: match s.state {
+                    1 => "starting",
+                    2 => "running",
+                    3 => "stopping",
+                    4 => "failed",
+                    _ => "stopped",
+                }
+                .into(),
+                detail: s.detail,
+            })
+            .unwrap_or_else(stopped)
+        };
+        use base64::Engine;
+        let identity = &local.identity;
+        let enrollment = local.coordinator.provider().await?;
+        let provider_address = enrollment
+            .as_ref()
+            .map(hellas_sdk::client::ProviderAddress::of)
+            .transpose()?
+            .map(|address| address.to_string())
+            .unwrap_or_default();
+        let attestation = match enrollment {
+            Some(enrollment)
+                if matches!(
+                    enrollment.platform,
+                    hellas_rpc::PlatformEnrollment::AppleAppAttest(_)
+                ) =>
+            {
+                "apple-app-attest"
+            }
+            Some(_) => "software (non-private)",
+            None => "unbound",
+        };
+        Ok(AppStatus {
+            version: status.version,
+            identity: IdentityStatus {
+                initialized: true,
+                recovery_available: false,
+                principal: identity.public.owner.to_string(),
+                fingerprint: identity.public.owner.fingerprint(),
+                node_key: hex::encode(identity.node.node_key().public_key().bytes()),
+                transport_id: identity.node.node_id().to_string(),
+                provider_address,
+                authority: identity.public.authority.to_string(),
+                generation: status.generation,
+                attestation: attestation.into(),
+                detail: if identity.public.native_passkey.is_some() {
+                    "System passkey; owner approvals require user verification."
+                } else {
+                    "Development software passkey; user presence only."
+                }
+                .into(),
+                contact_card: base64::engine::general_purpose::STANDARD.encode(
+                    hellas_rpc::protocol::value::canonical_dag_cbor(&identity.public.card)?,
+                ),
+            },
+            provider: service(status.provider),
+            gateway: service(status.gateway),
+            endpoint: status.endpoint,
+            socket_path: local.socket.display().to_string(),
+            listen_port: crate::settings::load(&self.directory)?.listen_port,
+            bound_addresses: local.bound_addresses.get().cloned().unwrap_or_default(),
+            min_omit_response_blocks: hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS,
+        })
+    }
+    pub async fn shutdown(&self) -> anyhow::Result<bool> {
+        if self.stopping.swap(true, Ordering::SeqCst) {
+            return Ok(false);
+        }
+        crate::passkey::shutdown();
+        let _lock = self.operation.lock().await;
+        if let Some(host) = self.host.lock().await.take() {
+            host.shutdown().await?;
+        }
+        if let Some(local) = self.local.lock().await.take() {
+            local.clients.shutdown().await?;
+        }
+        self.plans.lock().await.clear();
+        let _drained = self.runs.acquire_many(64).await?;
+        Ok(true)
+    }
 }
 
 impl AppState {
-    pub fn open(data_dir: &Path) -> anyhow::Result<Self> {
-        let identity = identity::load_or_create(&data_dir.join("identity"))?;
-        let contact = identity::contact(&data_dir.join("contact-root"), &identity)?;
-        Ok(Self {
-            history: History::open(&data_dir.join("history.sqlite3"))?,
-            socket_path: data_dir.join("gate.sock"),
-            counter_directory: data_dir.join("apple-assertion-counters"),
-            archive_directory: data_dir.join("gateway-archive"),
-            identity,
-            chain: crate::chain::ChainNode::new(data_dir.join("chain")),
-            #[cfg(target_os = "macos")]
-            provider_identity_path: data_dir.join("provider-identity"),
-            #[cfg(target_os = "macos")]
-            provider_state_directory: data_dir.join("provider"),
-            provider_identity: OnceCell::new(),
-            contact,
-            journal_root: data_dir.join("work-channels"),
-            client: Mutex::new(None),
-            lifecycle: Mutex::new(()),
-            runtime: RwLock::new(RuntimeStatus {
-                stopping: false,
-                provider: stopped("Not configured"),
-                provider_handle: None,
-                gateway: stopped("Not configured"),
-                gateway_access: None,
-                gateway_handle: None,
-                gateway_config: None,
-            }),
-        })
-    }
-
-    pub fn socket_path(&self) -> &Path {
-        &self.socket_path
-    }
-
-    pub async fn status(&self) -> AppStatus {
-        let runtime = self.runtime.read().await;
-        AppStatus {
-            version: env!("CARGO_PKG_VERSION").into(),
-            identity: IdentityStatus {
-                producer_id: identity::producer_id(&self.identity),
-                caller_public_key: identity::public_key(&self.identity),
-                contact: STANDARD.encode(self.contact.bundle().canonical_bytes()),
-                contact_id: self.contact.id().0.to_string(),
-                apple_app_id: option_env!("HELLAS_GATE_TRUST_APP_ID")
-                    .unwrap_or_default()
-                    .into(),
-                apple_cd_hashes: option_env!("HELLAS_GATE_TRUST_CDHASHES")
-                    .unwrap_or_default()
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .collect(),
-                node_id: self.identity.node_id().to_string(),
-                attestation: if self.provider_identity.get().is_some() {
-                    "apple-app-attest".into()
-                } else {
-                    apple::availability().label.into()
-                },
-                detail: if self.provider_identity.get().is_some() {
-                    "Apple App Attest provider enrollment is active".into()
-                } else {
-                    apple::availability().detail.into()
-                },
-            },
-            provider: runtime.provider.clone(),
-            gateway: runtime.gateway.clone(),
-            endpoint: runtime
-                .provider_handle
-                .as_ref()
-                .map(|handle| handle.node_id().to_string())
-                .unwrap_or_default(),
-            socket_path: self.socket_path.display().to_string(),
-        }
-    }
-
-    pub async fn set_provider_enabled(
-        &self,
-        enabled: bool,
-        config: Option<ProviderConfig>,
-    ) -> anyhow::Result<AppStatus> {
-        let _lifecycle = self.lifecycle.lock().await;
-        anyhow::ensure!(
-            !enabled || !self.runtime.read().await.stopping,
-            "Gate is shutting down"
-        );
-        if !enabled {
-            let handle = {
-                let mut runtime = self.runtime.write().await;
-                runtime.provider = ServiceStatus {
-                    state: ServiceState::Stopping,
-                    detail: "Stopping Hellas Fetch provider".into(),
-                };
-                runtime.provider_handle.take()
-            };
-            if let Some(handle) = handle
-                && let Err(error) = handle.shutdown().await
-            {
-                self.runtime.write().await.provider = ServiceStatus {
-                    state: ServiceState::Failed,
-                    detail: error.to_string(),
-                };
-                return Err(error.into());
-            }
-            self.runtime.write().await.provider = stopped("Stopped by user");
-            return Ok(self.status().await);
-        }
-
-        let config = {
-            let runtime = self.runtime.read().await;
-            if runtime.provider_handle.is_some() {
-                drop(runtime);
-                return Ok(self.status().await);
-            }
-            config.context("configure an upstream and contacts before serving")?
-        };
-        self.runtime.write().await.provider = ServiceStatus {
-            state: ServiceState::Starting,
-            detail: "Creating or loading the attested provider identity".into(),
-        };
-        match self.start_provider(config).await {
-            Ok(handle) => {
-                let node_id = handle.node_id().to_string();
-                let sockets = handle
-                    .bound_sockets()
-                    .into_iter()
-                    .map(|address| address.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let mut runtime = self.runtime.write().await;
-                runtime.provider = ServiceStatus {
-                    state: ServiceState::Running,
-                    detail: format!("Attested Fetch provider {node_id} on {sockets}"),
-                };
-                runtime.provider_handle = Some(handle);
-                drop(runtime);
-                Ok(self.status().await)
-            }
-            Err(error) => {
-                self.runtime.write().await.provider = ServiceStatus {
-                    state: ServiceState::Failed,
-                    detail: error.to_string(),
-                };
-                Err(error)
-            }
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    async fn start_provider(
-        &self,
-        config: ProviderConfig,
-    ) -> anyhow::Result<hellas_sdk::ProviderHandle> {
-        let provider_identity = self
-            .provider_identity
-            .get_or_try_init(|| async {
-                crate::provider_identity::load_or_create(
-                    &self.provider_identity_path,
-                    &self.identity,
-                )
-                .await
-                .map(Arc::new)
+    pub async fn bind_provider(&self, software: bool) -> anyhow::Result<AppStatus> {
+        let _lock = self.operation.lock().await;
+        let local = self.local().await?;
+        let identity = crate::provider_identity::ProviderIdentity::load_or_create(
+            &self.directory,
+            &local,
+            software,
+        )
+        .await?;
+        local
+            .client(true)
+            .await?
+            .bind_provider(hellas_rpc::pb::host::BindProviderRequest {
+                authorization: local.authorization(),
+                enrollment: identity.enrollment.canonical_bytes(),
             })
             .await?;
-        crate::provider_setup::start(
-            config,
-            self.identity.clone(),
-            provider_identity.enrollment().clone(),
-            provider_identity.root(),
-            self.provider_state_directory.clone(),
-            &self.chain,
-        )
-        .await
+        self.status().await
     }
-
-    #[cfg(not(target_os = "macos"))]
-    async fn start_provider(
+    pub async fn configure_provider(
         &self,
-        _config: ProviderConfig,
-    ) -> anyhow::Result<hellas_sdk::ProviderHandle> {
-        bail!("the attested provider requires a provisioned macOS Gate build")
+        expected: u64,
+        change: ProviderChange,
+    ) -> anyhow::Result<ProviderView> {
+        let _lock = self.operation.lock().await;
+        let local = self.local().await?;
+        let current = local.composition.view()?.revision;
+        anyhow::ensure!(
+            expected == current,
+            "provider revision conflict: expected {expected}, current {current}"
+        );
+        let update = crate::provider_setup::update(expected, change);
+        local
+            .client(hellas_sdk::node_control::configuration::requires_passkey(
+                &update,
+            ))
+            .await?
+            .configure_provider(hellas_rpc::pb::host::ConfigureProviderRequest {
+                authorization: local.authorization(),
+                update: Some(update),
+            })
+            .await?;
+        local.composition.view()
     }
+    pub async fn provider_view(&self) -> anyhow::Result<ProviderView> {
+        self.local().await?.composition.view()
+    }
+    pub async fn set_provider(&self, enabled: bool) -> anyhow::Result<AppStatus> {
+        let _lock = self.operation.lock().await;
+        let local = self.local().await?;
+        local
+            .client(false)
+            .await?
+            .set_provider_state(hellas_rpc::pb::host::SetProviderStateRequest {
+                authorization: local.authorization(),
+                enabled,
+            })
+            .await?;
+        self.status().await
+    }
+    pub async fn configure_resource(
+        &self,
+        expected: u64,
+        input: ResourceInput,
+    ) -> anyhow::Result<ProviderView> {
+        let _lock = self.operation.lock().await;
+        let local = self.local().await?;
+        let session = local.session(false).await?;
+        crate::provider_setup::configure_resource(&local, &session, expected, input).await
+    }
+}
 
-    pub async fn set_gateway_enabled(
+impl AppState {
+    pub async fn contacts(&self) -> anyhow::Result<Vec<ContactView>> {
+        self.local().await?;
+        crate::contacts::contacts(&self.directory)
+    }
+    pub async fn add_contact(&self, input: ContactInput) -> anyhow::Result<ContactView> {
+        let _lock = self.operation.lock().await;
+        self.local().await?;
+        crate::contacts::add(&self.directory, input)
+    }
+    pub async fn shares(&self) -> anyhow::Result<Vec<ShareView>> {
+        self.local().await?;
+        crate::contacts::shares(&self.directory)
+    }
+    pub async fn share(&self, input: ShareInput) -> anyhow::Result<ShareView> {
+        let _lock = self.operation.lock().await;
+        crate::contacts::share(&self.directory, self.local().await?.as_ref(), input).await
+    }
+    pub async fn export_access(&self, id: &str) -> anyhow::Result<String> {
+        let _lock = self.operation.lock().await;
+        crate::contacts::export(&self.directory, self.local().await?.as_ref(), id).await
+    }
+    pub async fn import_access(&self, bundle: &str) -> anyhow::Result<AccessView> {
+        let _lock = self.operation.lock().await;
+        crate::contacts::import(&self.directory, self.local().await?.as_ref(), bundle).await
+    }
+    pub async fn accesses(&self) -> anyhow::Result<Vec<AccessView>> {
+        self.local().await?;
+        crate::contacts::accesses(&self.directory)
+    }
+    pub async fn revoke_share(&self, id: &str) -> anyhow::Result<()> {
+        let _lock = self.operation.lock().await;
+        crate::contacts::revoke(&self.directory, self.local().await?.as_ref(), id).await
+    }
+    pub async fn pause_allowance(&self, id: &str, paused: bool) -> anyhow::Result<()> {
+        let _lock = self.operation.lock().await;
+        crate::contacts::pause(self.local().await?.as_ref(), id, paused).await
+    }
+}
+
+impl AppState {
+    pub async fn set_gateway(
         &self,
         enabled: bool,
         config: Option<GatewayConfig>,
     ) -> anyhow::Result<AppStatus> {
-        let _lifecycle = self.lifecycle.lock().await;
-        anyhow::ensure!(
-            !enabled || !self.runtime.read().await.stopping,
-            "Gate is shutting down"
-        );
-        if !enabled {
-            let handle = {
-                let mut runtime = self.runtime.write().await;
-                runtime.gateway = ServiceStatus {
-                    state: ServiceState::Stopping,
-                    detail: "Stopping loopback listener".into(),
-                };
-                runtime.gateway_access = None;
-                runtime.gateway_handle.take()
-            };
-            if let Some(handle) = handle {
-                handle.shutdown().await?;
-                self.client.lock().await.take();
-            }
-            self.runtime.write().await.gateway = stopped("Stopped by user");
-            return Ok(self.status().await);
-        }
-
-        let config = {
-            let mut runtime = self.runtime.write().await;
-            if runtime.gateway_handle.is_some() {
-                drop(runtime);
-                return Ok(self.status().await);
-            }
-            if let Some(config) = config {
-                runtime.gateway_config = Some(config);
-            }
-            runtime
-                .gateway_config
-                .clone()
-                .context("configure a trusted Fetch provider before starting the gateway")?
-        };
-        self.runtime.write().await.gateway = ServiceStatus {
-            state: ServiceState::Starting,
-            detail: "Binding a private loopback endpoint".into(),
-        };
-        match self.start_gateway(&config).await {
-            Ok(handle) => {
-                let access = GatewayAccess {
-                    address: format!("http://{}", handle.address()),
-                    bearer: handle.bearer().to_owned(),
-                };
-                let mut runtime = self.runtime.write().await;
-                runtime.gateway = ServiceStatus {
-                    state: ServiceState::Running,
-                    detail: format!("Gateway at {}", access.address),
-                };
-                runtime.gateway_access = Some(access);
-                runtime.gateway_handle = Some(handle);
-                drop(runtime);
-                Ok(self.status().await)
-            }
-            Err(error) => {
-                self.client.lock().await.take();
-                self.runtime.write().await.gateway = ServiceStatus {
-                    state: ServiceState::Failed,
-                    detail: error.to_string(),
-                };
-                Err(error)
-            }
-        }
+        let _lock = self.operation.lock().await;
+        let local = self.local().await?;
+        let session = local.session(false).await?;
+        crate::gateway::configure(&local, &session, enabled, config).await?;
+        self.status().await
     }
-
-    async fn start_gateway(
-        &self,
-        config: &GatewayConfig,
-    ) -> anyhow::Result<hellas_sdk::gateway::GatewayHandle> {
-        match config {
-            GatewayConfig::Responses { client } => {
-                let target = self.client_for(client).await?;
-                anyhow::ensure!(
-                    target.environment
-                        == hellas_rpc::FetchEnvironment::OpenAiResponses.manifest_id(),
-                    "the Responses gateway requires an OpenAI Responses resource"
-                );
-                let options = hellas_gateway::FetchGatewayOptions {
-                    host: "127.0.0.1".into(),
-                    port: Some(0),
-                    provider: target.provider,
-                    service: target.service,
-                    method: target.method,
-                    request_overrides: Default::default(),
-                    work: target.backend,
-                };
-
-                Ok(hellas_gateway::start_fetch(options).await?)
-            }
-            GatewayConfig::Http {
-                paid_pool_path,
-                http_routes_path,
-                assurance: required,
-                zdr,
-            } => {
-                let bytes = hellas_private::read_bounded_regular_file(
-                    Path::new(http_routes_path),
-                    4 << 20,
-                )?;
-                let routes = serde_json::from_slice(&bytes).context("invalid HTTP routes")?;
-                let options = hellas_sdk::paid_gateway::load_pool_options(
-                    Path::new(paid_pool_path),
-                    assurance(*required),
-                )?;
-                let entry = options
-                    .providers
-                    .first()
-                    .context("paid pool has no providers")?;
-                let node = self.chain.get(&entry.config).await?;
-                let paid = hellas_sdk::paid_gateway::PaidGateway::open(
-                    options,
-                    self.identity.clone(),
-                    node,
-                )
-                .await?;
-                Ok(
-                    hellas_sdk::gateway::start_http(hellas_sdk::gateway::HttpGatewayOptions {
-                        config: routes,
-                        paid,
-                        archive: hellas_sdk::gateway::ArchiveOptions {
-                            directory: self.archive_directory.clone(),
-                            zdr: *zdr,
-                        },
-                        host: "127.0.0.1".into(),
-                        port: Some(0),
-                        bearer_token_file: None,
-                        allow_remote: false,
-                        wrap: None,
-                        wrap_args: Vec::new(),
-                    })
-                    .await?,
-                )
-            }
-        }
-    }
-
-    pub async fn gateway_access(&self) -> Option<GatewayAccess> {
-        self.runtime.read().await.gateway_access.clone()
-    }
-
-    /// The first quit request drains every accepted operation before exit.
-    pub async fn shutdown(&self) -> anyhow::Result<bool> {
-        let _lifecycle = self.lifecycle.lock().await;
-        let (gateway, provider) = {
-            let mut runtime = self.runtime.write().await;
-            if runtime.stopping {
-                return Ok(false);
-            }
-            runtime.stopping = true;
-            (
-                runtime.gateway_handle.take(),
-                runtime.provider_handle.take(),
-            )
-        };
-        let client = self.client.lock().await.take();
-        let gateway_result = if let Some(gateway) = gateway {
-            gateway.shutdown().await.map_err(anyhow::Error::from)
-        } else if let Some((_, client)) = client {
-            client.backend.drain().await.map_err(anyhow::Error::from)
-        } else {
-            Ok(())
-        };
-        let provider_result = if let Some(provider) = provider {
-            provider.shutdown().await.map_err(anyhow::Error::from)
-        } else {
-            Ok(())
-        };
-        let chain_result = self.chain.shutdown().await;
-        gateway_result.and(provider_result).and(chain_result)?;
-        Ok(true)
-    }
-
-    pub async fn export_offers(&self) -> anyhow::Result<Vec<crate::dto::ProviderOffer>> {
-        self.runtime
-            .read()
-            .await
-            .provider_handle
-            .as_ref()
-            .context("start the provider before exporting Offers")?
-            .offers()?
-            .into_iter()
-            .map(|offer| {
-                Ok(crate::dto::ProviderOffer {
-                    contact: offer.offer().grant.kind.principal().id().0.to_string(),
-                    offer: STANDARD.encode(offer.encode()?),
-                })
-            })
-            .collect()
-    }
-
-    pub async fn fetch(
-        &self,
-        request: &RunRequest,
-    ) -> anyhow::Result<hellas_gateway::WorkOutputStream<hellas_rpc::output::OutputEvent>> {
-        let _lifecycle = self.lifecycle.lock().await;
-        anyhow::ensure!(
-            matches!(request.kind, RunKind::Fetch),
-            "select a Fetch target"
-        );
-        let target = self.client_for(&request.client).await?;
-        Ok(target.backend.fetch(WorkFetchRequest {
-            provider: target.provider,
-            service: target.service,
-            method: target.method,
-            body: request.input.as_bytes().to_vec(),
-        })?)
-    }
-
-    async fn client_for(&self, request: &WorkClientConfig) -> anyhow::Result<ClientTarget> {
-        anyhow::ensure!(!self.runtime.read().await.stopping, "Gate is shutting down");
-
-        let key = serde_json::to_string(&(
-            &request.target,
-            &request.assurance,
-            &request.apple_app_id,
-            &request.apple_cd_hashes,
-        ))?;
-        let mut client = self.client.lock().await;
-        if let Some((old, target)) = client.as_ref()
-            && old == &key
-        {
-            return Ok(target.clone());
-        }
-        anyhow::ensure!(
-            self.runtime.read().await.gateway_handle.is_none(),
-            "stop the gateway before switching target or trust policy"
-        );
-        if let Some((_, previous)) = client.take() {
-            previous.backend.drain().await?;
-        }
-        let target = match &request.target {
-            WorkTarget::Authorized {
-                offer: record,
-                resource,
-            } => {
-                let offer = self.pinned_offer(request, record)?;
-                SignedOffer::decode(
-                    &offer.signed().encode()?,
-                    self.contact.id(),
-                    UnixMillis(u64::try_from(
-                        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
-                    )?),
-                )?;
-                let policy = offer
-                    .offer()
-                    .grant
-                    .policies
-                    .iter()
-                    .find(|p| p.name == *resource)
-                    .context("Offer does not name this resource")?;
-                let (service, method, environment) = fetch_route(&policy.work)?;
-                let provider = hellas_sdk::iroh::EndpointId::from_bytes(
-                    &offer.offer().provider.grant_transport()?,
-                )?;
-                let endpoint =
-                    hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::N0)
-                        .secret_key(self.identity.transport_key())
-                        .bind()
-                        .await?;
-                let opened = GrantGateway::open(
-                    GrantSessionOptions {
-                        target: offer.clone(),
-                        client: self.contact.clone(),
-                        signer: Arc::new(self.identity.caller_key().clone()),
-                        journal_root: self.journal_root.clone(),
-                        timeout: Duration::from_millis(offer.offer().grant.max_job_millis.get()),
-                    },
-                    GrantTransport::Remote(endpoint.clone()),
-                    Some(resource.clone()),
-                )
-                .await;
-                let backend = match opened {
-                    Ok(backend) => backend,
-                    Err(error) => {
-                        endpoint.close().await;
-                        return Err(error.into());
-                    }
-                };
-                ClientTarget {
-                    backend,
-                    provider,
-                    service,
-                    method,
-                    environment,
-                }
-            }
-            WorkTarget::Paid {
-                pool_config,
-                provider,
-                route,
-            } => {
-                let options = hellas_sdk::paid_gateway::load_pool_options(
-                    Path::new(pool_config),
-                    assurance(request.assurance),
-                )?;
-                let provider: hellas_sdk::iroh::EndpointId = provider.parse()?;
-                let entry = options
-                    .providers
-                    .iter()
-                    .find(|p| p.provider == provider)
-                    .context("pool does not name this provider")?;
-                let (service, method, environment) =
-                    paid_route(&entry.config.work_policy, route.as_ref())?;
-                let node = self.chain.get(&entry.config).await?;
-                let backend = hellas_sdk::paid_gateway::PaidGateway::open(
-                    options,
-                    self.identity.clone(),
-                    node,
-                )
-                .await?;
-                ClientTarget {
-                    backend,
-                    provider,
-                    service,
-                    method,
-                    environment,
-                }
-            }
-        };
-        *client = Some((key, target.clone()));
-        Ok(target)
-    }
-
-    pub async fn provision_paid_offer(&self, path: &Path, preview: bool) -> anyhow::Result<String> {
-        let _lifecycle = self.lifecycle.lock().await;
-        anyhow::ensure!(!self.runtime.read().await.stopping, "Gate is shutting down");
-        anyhow::ensure!(
-            self.runtime.read().await.provider_handle.is_none(),
-            "stop the provider before provisioning a bond"
-        );
-        #[cfg(target_os = "macos")]
-        let provider = self
-            .provider_identity
-            .get_or_try_init(|| async {
-                crate::provider_identity::load_or_create(
-                    &self.provider_identity_path,
-                    &self.identity,
-                )
-                .await
-                .map(Arc::new)
+    pub async fn gateway_address(&self) -> anyhow::Result<String> {
+        let local = self.local().await?;
+        let access = local
+            .client(false)
+            .await?
+            .get_gateway_access(hellas_rpc::pb::host::GetGatewayAccessRequest {
+                authorization: local.authorization(),
             })
             .await?;
-        #[cfg(not(target_os = "macos"))]
-        let provider = self
-            .provider_identity
-            .get()
-            .context("the attested provider requires a provisioned macOS Gate build")?;
-        crate::paid::provision(
-            path,
-            &self.identity,
-            provider.enrollment().clone(),
-            preview,
-            &self.chain,
-        )
-        .await
+        Ok(access.address)
     }
-
-    fn pinned_offer(
+    pub async fn reconcile_gateway_key(
         &self,
-        request: &WorkClientConfig,
-        record: &str,
-    ) -> anyhow::Result<PinnedOffer> {
-        let bytes = decode_record(
-            record,
-            hellas_rpc::protocol::work_grant::records::MAX_OFFER_BYTES,
-        )?;
-        let now = UnixMillis(0); // A running session refreshes standing independently of bootstrap expiry.
-        let signed = SignedOffer::decode(&bytes, self.contact.id(), now)?;
-        let expected_genesis = signed.offer().provider.content_id();
-        let assurance = match request.assurance {
-            AssuranceInput::ProducerSigned => hellas_rpc::Assurance::ProducerSigned,
-            AssuranceInput::AppleAppAttest => hellas_rpc::Assurance::AppleAppAttest,
-        };
-        let apple_app_attest = if matches!(request.assurance, AssuranceInput::AppleAppAttest) {
-            if request.apple_app_id.is_empty() || request.apple_cd_hashes.is_empty() {
-                bail!("Apple App Attest requires an app ID and at least one allowed CDHash")
-            }
-            let hashes = request
-                .apple_cd_hashes
-                .iter()
-                .map(|hash| decode_hash(hash))
-                .collect::<anyhow::Result<Vec<_>>>()?;
-            Some(hellas_sdk::client::AppleAppAttestTrust::new(
-                request.apple_app_id.clone(),
-                hashes,
-                Arc::new(hellas_sdk::FilesystemAssertionCounterStore::new(
-                    &self.counter_directory,
-                )),
-            ))
-        } else {
-            None
-        };
-        let provider_trust = hellas_sdk::client::ProviderTrustAnchor {
-            expected_genesis,
-            required_assurance: assurance,
-            apple_app_attest,
-        };
-        Ok(UnpinnedOffer::decode(&bytes, self.contact.id(), now)?.pin(&provider_trust)?)
+        id: &str,
+    ) -> anyhow::Result<(GatewayKeyView, String)> {
+        let _lock = self.operation.lock().await;
+        crate::gateway::reconcile(self.local().await?.as_ref(), id).await
+    }
+    pub async fn gateway_keys(&self) -> anyhow::Result<Vec<GatewayKeyView>> {
+        crate::gateway::list(self.local().await?.as_ref()).await
+    }
+    pub async fn issue_gateway_key(
+        &self,
+        input: GatewayKeyInput,
+    ) -> anyhow::Result<(GatewayKeyView, String)> {
+        let _lock = self.operation.lock().await;
+        crate::gateway::issue(self.local().await?.as_ref(), input).await
+    }
+    pub async fn revoke_gateway_key(&self, id: &str) -> anyhow::Result<()> {
+        let _lock = self.operation.lock().await;
+        crate::gateway::revoke(self.local().await?.as_ref(), id).await
+    }
+    pub async fn save_paid_pool(&self, input: PaidPoolInput) -> anyhow::Result<()> {
+        let _lock = self.operation.lock().await;
+        self.local().await?.clients.save_pool(input).await
     }
 }
 
-fn stopped(detail: &str) -> ServiceStatus {
-    ServiceStatus {
-        state: ServiceState::Stopped,
-        detail: detail.into(),
-    }
-}
-
-fn decode_hash(value: &str) -> anyhow::Result<[u8; 32]> {
-    if value.len() != 64 {
-        bail!("Apple CDHash must contain exactly 64 hexadecimal characters")
-    }
-    let mut output = [0_u8; 32];
-    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
-        let text = std::str::from_utf8(pair)?;
-        output[index] = u8::from_str_radix(text, 16).context("Apple CDHash is not hexadecimal")?;
-    }
-    Ok(output)
-}
-
-pub(crate) fn decode_record(record: &str, max: usize) -> anyhow::Result<Vec<u8>> {
-    anyhow::ensure!(
-        record.len() <= max.div_ceil(3) * 4,
-        "imported record exceeds size limit"
-    );
-    STANDARD
-        .decode(record.trim())
-        .context("record must be base64 exported by Hellas")
-}
-
-fn fetch_route(policy: &WorkPolicy) -> anyhow::Result<(String, String, hellas_rpc::ContentId)> {
-    match policy {
-        WorkPolicy::Fetch {
-            policy,
-            route: FetchRoutePolicy::SealedRoute { service, method },
-        } => Ok((service.clone(), method.clone(), policy.allowed_environment)),
-        _ => bail!("target requires a sealed Fetch resource"),
-    }
-}
-
-fn assurance(value: AssuranceInput) -> hellas_rpc::Assurance {
-    match value {
-        AssuranceInput::ProducerSigned => hellas_rpc::Assurance::ProducerSigned,
-        AssuranceInput::AppleAppAttest => hellas_rpc::Assurance::AppleAppAttest,
-    }
-}
-
-fn paid_route(
-    policy: &WorkPolicy,
-    selected: Option<&crate::dto::FetchRouteInput>,
-) -> anyhow::Result<(String, String, hellas_rpc::ContentId)> {
-    let route = match policy {
-        WorkPolicy::Fetch {
-            policy,
-            route: FetchRoutePolicy::OpenFetch { .. },
-        } => {
-            let selected =
-                selected.context("select the provider's HTTPS Fetch service and method")?;
-            FetchRoutePolicy::sealed_route(&selected.service, &selected.method)?;
-            (
-                selected.service.clone(),
-                selected.method.clone(),
-                policy.allowed_environment,
-            )
-        }
-        _ => fetch_route(policy)?,
-    };
-    if let Some(selected) = selected {
+impl AppState {
+    pub async fn recover_owner(&self) -> anyhow::Result<AppStatus> {
+        let _lock = self.operation.lock().await;
         anyhow::ensure!(
-            selected.service == route.0 && selected.method == route.1,
-            "selected route differs from the paid policy"
+            !self.stopping.load(Ordering::SeqCst),
+            "Gate is shutting down"
         );
+        anyhow::ensure!(
+            self.local.lock().await.is_none(),
+            "stop this node before offline owner recovery"
+        );
+        let identity = Identity::recover(&self.directory, &self.vault).await?;
+        self.mount(identity).await?;
+        *self.failure.lock().await = None;
+        self.status().await
     }
-    Ok(route)
+}
+
+impl AppState {
+    pub async fn issue_admin_access(&self, input: AdminAccessInput) -> anyhow::Result<AdminAccess> {
+        let _lock = self.operation.lock().await;
+        crate::credentials::issue_admin(self.local().await?.as_ref(), input).await
+    }
+    pub async fn rotate_gateway_key(
+        &self,
+        old: &str,
+        input: GatewayKeyInput,
+    ) -> anyhow::Result<(GatewayKeyView, String)> {
+        let _lock = self.operation.lock().await;
+        crate::gateway::rotate(self.local().await?.as_ref(), old, input).await
+    }
+}
+
+impl AppState {
+    pub async fn preview_apply(&self, document: DesiredState) -> anyhow::Result<ApplyPreview> {
+        let _lock = self.operation.lock().await;
+        let local = self.local().await?;
+        let plan = crate::apply::plan(&local, document).await?;
+        let id = hex::encode(crate::identity::random::<16>()?);
+        let preview = plan.preview(id.clone());
+        let mut plans = self.plans.lock().await;
+        anyhow::ensure!(plans.len() < 8, "discard or apply earlier previews first");
+        plans.insert(id, plan);
+        Ok(preview)
+    }
+    pub async fn apply_document(&self, id: &str) -> anyhow::Result<ApplyReport> {
+        let _lock = self.operation.lock().await;
+        let local = self.local().await?;
+        let plan = self
+            .plans
+            .lock()
+            .await
+            .remove(id)
+            .context("preview is missing or already consumed; preview the document again")?;
+        crate::apply::execute(&local, plan).await
+    }
+    pub async fn quota(&self, id: &str) -> anyhow::Result<QuotaView> {
+        let _lock = self.operation.lock().await;
+        crate::contacts::quota(self.local().await?.as_ref(), id).await
+    }
+    pub async fn discard_apply(&self, id: &str) {
+        self.plans.lock().await.remove(id);
+    }
+    pub async fn set_quota(&self, input: QuotaInput) -> anyhow::Result<()> {
+        let _lock = self.operation.lock().await;
+        let local = self.local().await?;
+        let session = local.session(false).await?;
+        crate::contacts::set_quota(&local, &session, input).await
+    }
+}
+
+impl AppState {
+    pub async fn configure_paid_serve(
+        &self,
+        expected: u64,
+        input: Option<PaidServeInput>,
+    ) -> anyhow::Result<ProviderView> {
+        let _lock = self.operation.lock().await;
+        let local = self.local().await?;
+        let session = local.session(input.is_some()).await?;
+        local
+            .composition
+            .configure_paid(&local, &session, expected, input)
+            .await
+    }
+}
+
+impl AppState {
+    pub async fn save_listen_port(&self, port: Option<u16>) -> anyhow::Result<AppStatus> {
+        let _lock = self.operation.lock().await;
+        anyhow::ensure!(
+            !self.stopping.load(Ordering::SeqCst),
+            "Gate is shutting down"
+        );
+        let local = self.local.lock().await.clone();
+        let current = if let Some(local) = local {
+            local.session(false).await?.status().await?;
+            local.bound_addresses.get().cloned().unwrap_or_default()
+        } else {
+            vec![]
+        };
+        crate::settings::save(&self.directory, port, &current)?;
+        self.status().await
+    }
+    pub async fn retry_open(&self) -> anyhow::Result<AppStatus> {
+        let _lock = self.operation.lock().await;
+        anyhow::ensure!(
+            !self.stopping.load(Ordering::SeqCst),
+            "Gate is shutting down"
+        );
+        anyhow::ensure!(self.local.lock().await.is_none(), "Gate is already open");
+        let identity = Identity::load(&self.directory, &self.vault)
+            .await?
+            .context("initialize an identity first")?;
+        self.mount(identity).await?;
+        *self.failure.lock().await = None;
+        self.status().await
+    }
 }
 
 #[cfg(test)]
-mod tests {
+mod recovery_tests {
     use super::*;
-
-    /// Run the test executable inside a signed, provisioned .app. The pins come
-    /// from that app's signing metadata, not from the imported Offer.
-    #[cfg(target_os = "macos")]
     #[tokio::test]
-    #[ignore = "requires a provisioned App Attest bundle and HELLAS_GATE_TEST_APP_ID/CDHASH"]
-    async fn provisioned_provider_opens_pinned_grant_sessions_after_restart() {
+    async fn shutdown_closes_admission_before_waiting_for_an_approval() {
         let directory = tempfile::tempdir().unwrap();
-        let provider_dir = directory.path().join("provider");
-        let client_dir = directory.path().join("client");
-        std::fs::create_dir_all(&provider_dir).unwrap();
-        std::fs::create_dir_all(&client_dir).unwrap();
-        let client = AppState::open(&client_dir).unwrap();
-        let mut enrollment = None;
-        for _ in 0..2 {
-            let provider = AppState::open(&provider_dir).unwrap();
-            provider
-                .set_provider_enabled(
-                    true,
-                    Some(ProviderConfig {
-                        service: "openai".into(),
-                        method: "responses".into(),
-                        openai_api_key: "unused-handshake-fixture".into(),
-                        work_config_path: None,
-                        https_config: None,
-                        contacts: vec![STANDARD.encode(client.contact.bundle().canonical_bytes())],
-                        requests_per_day: 2,
-                        port: Some(0),
-                    }),
-                )
+        let secrets = tempfile::tempdir().unwrap();
+        let app = Arc::new(
+            AppState::with_vault(directory.path(), Vault::fixture(secrets.path()))
                 .await
-                .unwrap();
-            let genesis = provider
-                .provider_identity
-                .get()
-                .unwrap()
-                .enrollment()
-                .content_id();
-            if let Some(previous) = enrollment {
-                assert_eq!(previous, genesis, "restart preserves the enrolled identity");
+                .unwrap(),
+        );
+        let approval = app.operation.lock().await;
+        let task = tokio::spawn({
+            let app = app.clone();
+            async move { app.shutdown().await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !app.stopping.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
             }
-            enrollment = Some(genesis);
-            let offers = provider.export_offers().await.unwrap();
-            assert_eq!(offers.len(), 1);
-            let target = client
-                .client_for(&WorkClientConfig {
-                    target: WorkTarget::Authorized {
-                        offer: offers[0].offer.clone(),
-                        resource: "responses".into(),
-                    },
-                    assurance: AssuranceInput::AppleAppAttest,
-                    apple_app_id: std::env::var("HELLAS_GATE_TEST_APP_ID").unwrap(),
-                    apple_cd_hashes: vec![std::env::var("HELLAS_GATE_TEST_CDHASH").unwrap()],
-                })
+        })
+        .await
+        .expect("shutdown must signal before waiting for the approval lock");
+        assert!(!task.is_finished());
+        drop(approval);
+        assert!(task.await.unwrap().unwrap());
+        assert!(
+            app.initialize_software("Late approval".into())
                 .await
-                .unwrap();
-            assert_eq!(
-                target.environment,
-                hellas_rpc::FetchEnvironment::OpenAiResponses.manifest_id()
-            );
-            target.backend.drain().await.unwrap();
-            client.client.lock().await.take();
-            provider.shutdown().await.unwrap();
-        }
-        client.shutdown().await.unwrap();
+                .is_err()
+        );
+        assert!(app.open_existing().await.is_err());
     }
-
-    #[tokio::test]
-    async fn invalid_http_pool_exposes_no_listener_and_retains_configuration() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn missing_application_secret_requires_explicit_owner_recovery_and_rotates_generation() {
         let directory = tempfile::tempdir().unwrap();
-        let routes = directory.path().join("routes.json");
-        std::fs::write(&routes, r#"{"service":"http","method":"fetch"}"#).unwrap();
-        let state = AppState::open(directory.path()).unwrap();
-        let config = GatewayConfig::Http {
-            paid_pool_path: directory
-                .path()
-                .join("missing-pool.json")
-                .display()
-                .to_string(),
-            http_routes_path: routes.display().to_string(),
-            assurance: AssuranceInput::ProducerSigned,
-            zdr: true,
-        };
-        let error = state
-            .set_gateway_enabled(true, Some(config))
+        let secrets = tempfile::tempdir().unwrap();
+        let vault = Vault::fixture(secrets.path());
+        let app = AppState::with_vault(directory.path(), vault.clone())
             .await
-            .unwrap_err();
-        assert!(error.to_string().contains("missing-pool.json"), "{error}");
-        assert!(matches!(
-            state.status().await.gateway.state,
-            ServiceState::Failed
-        ));
-        assert!(state.gateway_access().await.is_none());
-        assert!(state.runtime.read().await.gateway_handle.is_none());
-        assert!(matches!(
-            state.runtime.read().await.gateway_config,
-            Some(GatewayConfig::Http { zdr: true, .. })
-        ));
-        assert!(state.set_gateway_enabled(true, None).await.is_err());
-        assert!(state.shutdown().await.unwrap());
-        assert!(!state.shutdown().await.unwrap());
-        assert!(!directory.path().join("chain").exists());
+            .unwrap();
+        let before = app.initialize_software("Alice".into()).await.unwrap();
+        let (_, bearer) = app
+            .issue_gateway_key(GatewayKeyInput {
+                request_id: hex::encode([71; 16]),
+                label: "old generation".into(),
+                period: crate::period::Period::Week,
+            })
+            .await
+            .unwrap();
+        app.shutdown().await.unwrap();
+        drop(app);
+        vault.delete("application-credential").await.unwrap();
+        let app = AppState::with_vault(directory.path(), vault.clone())
+            .await
+            .unwrap();
+        let broken = app.status().await.unwrap();
+        assert!(!broken.identity.initialized);
+        assert!(broken.identity.recovery_available);
+        assert!(
+            app.initialize_software("Silent replacement".into())
+                .await
+                .is_err()
+        );
+        let recovered = app.recover_owner().await.unwrap();
+        assert_eq!(recovered.identity.generation, 2);
+        assert_eq!(before.identity.principal, recovered.identity.principal);
+        assert_eq!(before.identity.node_key, recovered.identity.node_key);
+        assert!(
+            app.gateway_keys()
+                .await
+                .unwrap()
+                .iter()
+                .all(|key| key.state == GatewayKeyState::Revoked)
+        );
+        let local = app.local().await.unwrap();
+        let bytes = hex::decode(bearer).unwrap();
+        let old = crate::identity::decode_credential(&bytes).unwrap();
+        assert!(local.coordinator.authenticate(&old).await.is_err());
+        app.shutdown().await.unwrap();
+        drop(local);
+        drop(app);
+        let reopened = AppState::with_vault(directory.path(), vault).await.unwrap();
+        assert_eq!(reopened.status().await.unwrap().identity.generation, 2);
+        reopened.shutdown().await.unwrap();
     }
 }
