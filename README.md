@@ -46,7 +46,7 @@ application pipeline.
 ## Identity, control and custody
 
 First launch creates a system passkey on a signed, domain-associated macOS app.
-Setup then requests one owner assertion to initialize the node. Signing a contact card is a separate, explicit Settings action for when you want to share your identity; successful exports are saved and reused without another approval. Cancelling that action leaves the initialized node usable.
+Setup then requests one owner assertion to initialize the node. Signing a contact card is a separate, explicit Settings action for when you want to share your identity; successful exports are saved and reused without another approval. Cancelling that action leaves the initialized node usable. Gateway listener access is provisioned only when you explicitly enable Gateway, using that operation's owner-approved session; mounting or reopening Gate never asks for listener approval.
 A separate development option explicitly selects a software identity on any
 platform. Native prompt errors never fall back to software. Interrupted setup
 reuses the saved native credential when retried. Restart uses

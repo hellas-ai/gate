@@ -439,29 +439,27 @@ impl Identity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    struct CountingSigner {
+        signer: SoftPasskey,
+        calls: AtomicUsize,
+        cancel: AtomicBool,
+    }
+    #[async_trait::async_trait]
+    impl Authenticator for CountingSigner {
+        fn public_key(&self) -> Result<hellas_authority::authenticator::PublicKey, AuthorityError> {
+            self.signer.public_key()
+        }
+        async fn assert(&self, challenge: Digest) -> Result<PasskeyAssertion, AuthorityError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.cancel.load(Ordering::SeqCst) {
+                return Err(AuthorityError::Credential);
+            }
+            self.signer.assert(challenge).await
+        }
+    }
     #[tokio::test]
     async fn setup_uses_one_assertion_and_contact_export_is_durable_and_cached() {
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-        struct CountingSigner {
-            signer: SoftPasskey,
-            calls: AtomicUsize,
-            cancel: AtomicBool,
-        }
-        #[async_trait::async_trait]
-        impl Authenticator for CountingSigner {
-            fn public_key(
-                &self,
-            ) -> Result<hellas_authority::authenticator::PublicKey, AuthorityError> {
-                self.signer.public_key()
-            }
-            async fn assert(&self, challenge: Digest) -> Result<PasskeyAssertion, AuthorityError> {
-                self.calls.fetch_add(1, Ordering::SeqCst);
-                if self.cancel.load(Ordering::SeqCst) {
-                    return Err(AuthorityError::Credential);
-                }
-                self.signer.assert(challenge).await
-            }
-        }
         let directory = tempfile::tempdir().unwrap();
         let secrets = tempfile::tempdir().unwrap();
         let vault = Vault::fixture(secrets.path());
@@ -541,6 +539,99 @@ mod tests {
             legacy.export_contact_card(directory.path()).await.unwrap(),
             card
         );
+    }
+    #[tokio::test(flavor = "multi_thread")]
+    async fn full_mount_and_reopen_never_request_listener_approval() {
+        let directory = tempfile::tempdir().unwrap();
+        let secrets = tempfile::tempdir().unwrap();
+        let vault = Vault::fixture(secrets.path());
+        vault.set("owner-software-passkey", &[9; 32]).await.unwrap();
+        let app = crate::state::AppState::prepare(directory.path(), vault.clone()).unwrap();
+        let signer = Arc::new(CountingSigner {
+            signer: SoftPasskey::from_secret_scalar([9; 32]).unwrap(),
+            calls: AtomicUsize::new(0),
+            cancel: AtomicBool::new(false),
+        });
+        let identity = Identity::prepare(
+            directory.path(),
+            &vault,
+            "Alice".into(),
+            signer.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+        app.mount(identity).await.unwrap();
+        assert!(app.status().await.unwrap().identity.initialized);
+        assert_eq!(
+            signer.calls.load(Ordering::SeqCst),
+            1,
+            "complete setup has only the bootstrap assertion"
+        );
+        let path = directory.path().join("gateway-listener-credential.json");
+        assert!(!path.exists(), "mount must not provision a listener");
+        signer.cancel.store(true, Ordering::SeqCst);
+        assert!(app.set_gateway(true, None).await.is_err());
+        assert!(
+            !path.exists(),
+            "rejected owner approval must not prepare or issue listener access"
+        );
+        signer.cancel.store(false, Ordering::SeqCst);
+
+        {
+            let local = app.local().await.unwrap();
+            let daily = local.session(false).await.unwrap();
+            assert!(
+                crate::credentials::provision_gateway_anchor(&local, &daily)
+                    .await
+                    .is_err(),
+                "daily sessions cannot issue listener credentials"
+            );
+            assert!(
+                crate::credentials::load_gateway_anchor(&local)
+                    .await
+                    .is_err()
+            );
+        }
+        // No gateway configuration exists yet: enable fails, but issuance still
+        // must use exactly the one owner session, never a second hidden prompt.
+        assert!(app.set_gateway(true, None).await.is_err());
+        assert_eq!(signer.calls.load(Ordering::SeqCst), 3);
+        {
+            let local = app.local().await.unwrap();
+            crate::credentials::load_gateway_anchor(&local)
+                .await
+                .unwrap()
+                .validate()
+                .await
+                .unwrap();
+            let held = vault::read::<crate::credentials::PreparedIssue>(&path)
+                .unwrap()
+                .unwrap();
+            let permissions = &held.credential.scope().permissions;
+            assert_eq!(permissions.len(), 1);
+            assert_eq!(
+                permissions.iter().next().unwrap().operation.as_str(),
+                hellas_authority::node::GATEWAY_INVOKE
+            );
+            assert_eq!(held.credential.holder(), CredentialHolder::Bearer);
+        }
+        app.shutdown().await.unwrap();
+        drop(app);
+        let reopened = crate::state::AppState::prepare(directory.path(), vault.clone()).unwrap();
+        let mut identity = Identity::load(directory.path(), &vault)
+            .await
+            .unwrap()
+            .unwrap();
+        identity.passkey = signer.clone();
+        reopened.mount(identity).await.unwrap();
+        assert!(reopened.status().await.unwrap().identity.initialized);
+        assert_eq!(
+            signer.calls.load(Ordering::SeqCst),
+            3,
+            "reopen and status must not prompt"
+        );
+        reopened.shutdown().await.unwrap();
     }
     #[tokio::test]
     async fn native_metadata_reloads_without_a_software_secret_and_rejects_a_different_owner() {

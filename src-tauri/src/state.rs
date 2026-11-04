@@ -36,7 +36,7 @@ impl AppState {
         state.open_existing().await?;
         Ok(state)
     }
-    fn prepare(directory: &Path, vault: Vault) -> anyhow::Result<Self> {
+    pub(crate) fn prepare(directory: &Path, vault: Vault) -> anyhow::Result<Self> {
         hellas_private::create_dir_all_durable(directory)?;
         hellas_private::restrict_directory(directory)?;
         let state = Self {
@@ -78,7 +78,7 @@ impl AppState {
         }
         Ok(())
     }
-    async fn mount(&self, identity: Identity) -> anyhow::Result<()> {
+    pub(crate) async fn mount(&self, identity: Identity) -> anyhow::Result<()> {
         let (local, host) = LocalNode::open(&self.directory, identity, self.vault.clone()).await?;
         *self.host.lock().await = Some(host);
         *self.local.lock().await = Some(local);
@@ -383,9 +383,16 @@ impl AppState {
         enabled: bool,
         config: Option<GatewayConfig>,
     ) -> anyhow::Result<AppStatus> {
-        let _lock = self.operation.lock().await;
+        let _lock = self
+            .operation
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("another owner operation is already in progress"))?;
+        anyhow::ensure!(
+            !self.stopping.load(Ordering::SeqCst),
+            "Gate is shutting down"
+        );
         let local = self.local().await?;
-        let session = local.session(false).await?;
+        let session = local.session(enabled).await?;
         crate::gateway::configure(&local, &session, enabled, config).await?;
         self.status().await
     }

@@ -461,6 +461,9 @@ pub async fn configure(
             )
             .await?;
     }
+    if enabled {
+        crate::credentials::provision_gateway_anchor(local, session).await?;
+    }
     session.gateway_state(enabled).await?;
     if !enabled {
         session
