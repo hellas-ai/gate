@@ -36,6 +36,8 @@ fn main() {
             let state = Arc::new(AppState::open(&data_dir)?);
             app.manage(state.clone());
 
+            #[cfg(target_os = "macos")]
+            install_macos_menu(app)?;
             install_tray(app)?;
             Ok(())
         })
@@ -102,7 +104,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    // All ordinary exits (including macOS Cmd-Q and the tray) drain the host.
+    // Tauri exit requests (including our Cmd-Q menu and tray) drain the host.
     // The second exit request, emitted after draining, is allowed through.
     let exit = Arc::new(AtomicU8::new(0));
     app.run(move |app, event| {
@@ -123,12 +125,16 @@ fn main() {
             {
                 return;
             }
+            tracing::info!("Gate graceful shutdown requested");
             let app = app.clone();
             let state = app.state::<Arc<AppState>>().inner().clone();
             let exit = exit.clone();
             tauri::async_runtime::spawn(async move {
                 let code = match state.shutdown().await {
-                    Ok(_) => code.unwrap_or(0),
+                    Ok(_) => {
+                        tracing::info!("Gate graceful shutdown completed");
+                        code.unwrap_or(0)
+                    }
                     Err(error) => {
                         tracing::error!(%error, "Gate shutdown failed");
                         1
@@ -147,6 +153,39 @@ fn show_main_window(app: &tauri::AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+/// Muda's predefined macOS Quit calls NSApplication.terminate directly,
+/// bypassing Tauri ExitRequested. Use an ordinary action to enter our drain.
+#[cfg(target_os = "macos")]
+fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{PredefinedMenuItem, Submenu};
+    let menu = Menu::default(app.handle())?;
+    // Keep Tauri's Edit/View/Window/Help menus and replace its application menu.
+    menu.remove_at(0)?;
+    let application = Submenu::with_items(
+        app,
+        "Hellas Gate",
+        true,
+        &[
+            &PredefinedMenuItem::about(app, Some("About Hellas Gate"), None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "gate-quit", "Quit Hellas Gate", true, Some("Cmd+Q"))?,
+        ],
+    )?;
+    menu.insert(&application, 0)?;
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, event| {
+        if event.id().as_ref() == "gate-quit" {
+            app.exit(0);
+        }
+    });
+    Ok(())
 }
 
 fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {

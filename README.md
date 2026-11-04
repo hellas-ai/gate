@@ -135,3 +135,9 @@ forms. Preview captures the configuration revision; stale previews refuse.
 Applies are sequential: failures report acknowledged effects, unapplied work
 and any uncertain operation separately. Reapplying converges without resetting
 budgets, credentials or journal history.
+
+Gate's application-menu Quit (Cmd-Q on macOS) and tray Quit wait for the local
+host to shut down before exiting. macOS Dock Quit and OS termination can bypass
+this asynchronous shutdown path, as can a force quit. On relaunch, the local
+control listener safely recovers a stale socket while refusing an active listener;
+the identity and other persisted state are retained.
