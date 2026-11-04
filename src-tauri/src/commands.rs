@@ -29,6 +29,13 @@ pub async fn get_status(state: State<'_, Arc<AppState>>) -> ApiResult<AppStatus>
     state.status().await.map_err(ApiError::internal)
 }
 #[tauri::command]
+pub async fn export_contact_card(state: State<'_, Arc<AppState>>) -> ApiResult<AppStatus> {
+    state
+        .export_contact_card()
+        .await
+        .map_err(ApiError::internal)
+}
+#[tauri::command]
 pub async fn initialize_software(
     state: State<'_, Arc<AppState>>,
     name: String,

@@ -20,7 +20,10 @@ pub struct Installation {
     pub authority: AuthorityId,
     pub root: GrantId,
     pub owner: PrincipalId,
-    pub card: ContactCard,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub card: Option<ContactCard>,
     pub prepared: PreparedBootstrap,
     pub credential_id: CredentialId,
     pub owner_scope: GrantSpec,
@@ -108,6 +111,7 @@ impl Identity {
                 && !directory.join("node/authority").try_exists()?,
             "identity already initialized; resume or recover it"
         );
+        validate_name(&name)?;
         let path = directory.join("native-passkey.json");
         let native = match vault::read::<crate::passkey::NativePasskey>(&path)? {
             Some(native) => {
@@ -136,6 +140,7 @@ impl Identity {
         passkey: Arc<dyn Authenticator>,
         native_passkey: Option<crate::passkey::NativePasskey>,
     ) -> anyhow::Result<Self> {
+        validate_name(&name)?;
         let owner = PrincipalId::from_public_key(hellas_auth::PublicKey::P256(
             passkey.public_key()?.to_compressed(),
         ))?;
@@ -158,11 +163,6 @@ impl Identity {
             assertion: passkey.assert(digest).await?,
         };
         let (prepared, credential) = approval.prepare(None)?;
-        let card = ContactCard::new(
-            owner,
-            name.clone(),
-            passkey.assert(ContactCard::digest(owner, &name)).await?,
-        )?;
         let tls = rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
         // All secret material is durable before publishing the prepared verifier.
         let mut secrets = zeroize::Zeroizing::new(node.transport_secret_bytes().to_vec());
@@ -176,7 +176,8 @@ impl Identity {
             authority,
             root,
             owner,
-            card,
+            name,
+            card: None,
             prepared: prepared.clone(),
             certificate: tls.cert.der().to_vec(),
             credential_id: credential.id(),
@@ -191,6 +192,47 @@ impl Identity {
             passkey,
             credential,
         })
+    }
+    /// Reading status never requests owner approval. Existing installations can
+    /// keep their original embedded card; new exports use a separate durable file.
+    pub fn contact_card(&self, directory: &Path) -> anyhow::Result<Option<ContactCard>> {
+        let card = vault::read::<ContactCard>(&directory.join("contact-card.json"))?
+            .or_else(|| self.public.card.clone());
+        if let Some(card) = &card {
+            ensure!(
+                card.principal() == self.public.owner,
+                "contact card differs from owner"
+            );
+            ensure!(
+                card.name() == self.display_name(),
+                "contact card name differs from installation"
+            );
+        }
+        Ok(card)
+    }
+    fn display_name(&self) -> &str {
+        if self.public.name.is_empty() {
+            self.public.card.as_ref().map_or("", ContactCard::name)
+        } else {
+            &self.public.name
+        }
+    }
+    pub async fn export_contact_card(&self, directory: &Path) -> anyhow::Result<ContactCard> {
+        if let Some(card) = self.contact_card(directory)? {
+            return Ok(card);
+        }
+        let name = self.display_name();
+        validate_name(name)?;
+        let card = ContactCard::new(
+            self.public.owner,
+            name.to_owned(),
+            self.passkey
+                .assert(ContactCard::digest(self.public.owner, name))
+                .await?,
+        )?;
+        // An approval or write failure leaves installation and credentials intact.
+        vault::write(&directory.join("contact-card.json"), &card)?;
+        Ok(card)
     }
     pub async fn load(directory: &Path, vault: &Vault) -> anyhow::Result<Option<Self>> {
         let Some(public) = vault::read::<Installation>(&directory.join("installation.json"))?
@@ -253,6 +295,15 @@ impl Identity {
         );
         Ok(store)
     }
+}
+fn validate_name(name: &str) -> anyhow::Result<()> {
+    ensure!(
+        !name.is_empty()
+            && name.len() <= MAX_CONTACT_NAME_BYTES
+            && !name.chars().any(char::is_control),
+        "name must contain 1–64 bytes without control characters"
+    );
+    Ok(())
 }
 async fn load_passkey(
     public: &Installation,
@@ -388,6 +439,109 @@ impl Identity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn setup_uses_one_assertion_and_contact_export_is_durable_and_cached() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        struct CountingSigner {
+            signer: SoftPasskey,
+            calls: AtomicUsize,
+            cancel: AtomicBool,
+        }
+        #[async_trait::async_trait]
+        impl Authenticator for CountingSigner {
+            fn public_key(
+                &self,
+            ) -> Result<hellas_authority::authenticator::PublicKey, AuthorityError> {
+                self.signer.public_key()
+            }
+            async fn assert(&self, challenge: Digest) -> Result<PasskeyAssertion, AuthorityError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                if self.cancel.load(Ordering::SeqCst) {
+                    return Err(AuthorityError::Credential);
+                }
+                self.signer.assert(challenge).await
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let secrets = tempfile::tempdir().unwrap();
+        let vault = Vault::fixture(secrets.path());
+        vault.set("owner-software-passkey", &[9; 32]).await.unwrap();
+        let signer = Arc::new(CountingSigner {
+            signer: SoftPasskey::from_secret_scalar([9; 32]).unwrap(),
+            calls: AtomicUsize::new(0),
+            cancel: AtomicBool::new(false),
+        });
+        let identity = Identity::prepare(
+            directory.path(),
+            &vault,
+            "Alice".into(),
+            signer.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(signer.calls.load(Ordering::SeqCst), 1);
+        assert!(identity.contact_card(directory.path()).unwrap().is_none());
+        drop(identity.open_store(directory.path()).await.unwrap());
+        signer.cancel.store(true, Ordering::SeqCst);
+        assert!(
+            identity
+                .export_contact_card(directory.path())
+                .await
+                .is_err()
+        );
+        assert!(identity.contact_card(directory.path()).unwrap().is_none());
+        assert!(
+            Identity::load(directory.path(), &vault)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        signer.cancel.store(false, Ordering::SeqCst);
+        vault::publication_fault::fail_next_write(directory.path().join("contact-card.json"));
+        assert!(
+            identity
+                .export_contact_card(directory.path())
+                .await
+                .is_err()
+        );
+        assert!(identity.contact_card(directory.path()).unwrap().is_none());
+        let card = identity
+            .export_contact_card(directory.path())
+            .await
+            .unwrap();
+        assert_eq!(signer.calls.load(Ordering::SeqCst), 4);
+        assert_eq!(
+            identity
+                .export_contact_card(directory.path())
+                .await
+                .unwrap(),
+            card
+        );
+        assert_eq!(signer.calls.load(Ordering::SeqCst), 4);
+        let loaded = Identity::load(directory.path(), &vault)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            loaded.contact_card(directory.path()).unwrap(),
+            Some(card.clone())
+        );
+        // An existing embedded signed card needs no migration or new approval.
+        let mut old = serde_json::to_value(&identity.public).unwrap();
+        old.as_object_mut().unwrap().remove("name");
+        old["card"] = serde_json::to_value(&card).unwrap();
+        vault::write(&directory.path().join("installation.json"), &old).unwrap();
+        std::fs::remove_file(directory.path().join("contact-card.json")).unwrap();
+        let legacy = Identity::load(directory.path(), &vault)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            legacy.export_contact_card(directory.path()).await.unwrap(),
+            card
+        );
+    }
     #[tokio::test]
     async fn native_metadata_reloads_without_a_software_secret_and_rejects_a_different_owner() {
         let directory = tempfile::tempdir().unwrap();

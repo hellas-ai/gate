@@ -20,6 +20,7 @@ export const api = {
   quota: (id:string):Promise<T.QuotaView> => call("get_quota",{id}),
   setQuota: (input:T.QuotaInput):Promise<void> => call("set_quota",{input}),
   status: (): Promise<T.AppStatus> => call("get_status"),
+  exportContactCard: (): Promise<T.AppStatus> => call("export_contact_card"),
   initializeNative: (name: string): Promise<T.AppStatus> => call("initialize_native", { name }),
   initializeSoftware: (name: string): Promise<T.AppStatus> => call("initialize_software", { name }),
   recoverOwner: (): Promise<T.AppStatus> => call("recover_owner"),

@@ -689,7 +689,8 @@ mod tests {
             .await
             .unwrap();
         alice.initialize_software("Alice".into()).await.unwrap();
-        let bob_status = bob.initialize_software("Bob".into()).await.unwrap();
+        bob.initialize_software("Bob".into()).await.unwrap();
+        let bob_status = bob.export_contact_card().await.unwrap();
         alice.bind_provider(true).await.unwrap();
         for (i, name) in ["a", "b"].into_iter().enumerate() {
             alice

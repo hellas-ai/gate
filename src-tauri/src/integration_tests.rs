@@ -133,7 +133,8 @@ async fn real_authorized_fetch_recovers_issuance_preserves_live_composition_quot
         .await
         .unwrap();
     alice.initialize_software("Alice".into()).await.unwrap();
-    let bs = bob.initialize_software("Bob".into()).await.unwrap();
+    bob.initialize_software("Bob".into()).await.unwrap();
+    let bs = bob.export_contact_card().await.unwrap();
     alice.bind_provider(true).await.unwrap();
     alice
         .configure_provider(
@@ -553,7 +554,8 @@ async fn gateway_admits_only_current_named_credentials_and_zdr_does_not_archive(
         .await
         .unwrap();
     alice.initialize_software("Alice".into()).await.unwrap();
-    let bs = bob.initialize_software("Bob".into()).await.unwrap();
+    bob.initialize_software("Bob".into()).await.unwrap();
+    let bs = bob.export_contact_card().await.unwrap();
     alice.bind_provider(true).await.unwrap();
     alice
         .configure_provider(
@@ -1003,7 +1005,7 @@ async fn grant_https(
         )
         .await
         .unwrap();
-    let recipient_status = recipient.status().await.unwrap();
+    let recipient_status = recipient.export_contact_card().await.unwrap();
     let contact = provider
         .add_contact(ContactInput {
             card: recipient_status.identity.contact_card,
@@ -2444,7 +2446,8 @@ async fn late_auth_refusal_reports_committed_share_budgets_and_allowance_exactly
         .unwrap();
     alice.initialize_software("Alice".into()).await.unwrap();
     bob.initialize_software("Bob".into()).await.unwrap();
-    let carol_status = carol.initialize_software("Carol".into()).await.unwrap();
+    carol.initialize_software("Carol".into()).await.unwrap();
+    let carol_status = carol.export_contact_card().await.unwrap();
     grant_https(&alice, &bob, &upstream, "alice", 130).await;
     let contact = alice
         .add_contact(ContactInput {
@@ -3217,7 +3220,7 @@ async fn grant_responses(
         )
         .await
         .unwrap();
-    let recipient_status = recipient.status().await.unwrap();
+    let recipient_status = recipient.export_contact_card().await.unwrap();
     let contact = provider
         .add_contact(ContactInput {
             card: recipient_status.identity.contact_card,

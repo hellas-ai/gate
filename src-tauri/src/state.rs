@@ -118,6 +118,19 @@ impl AppState {
         self.mount(identity).await?;
         self.status().await
     }
+    pub async fn export_contact_card(&self) -> anyhow::Result<AppStatus> {
+        let _lock = self
+            .operation
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("another owner operation is in progress"))?;
+        anyhow::ensure!(
+            !self.stopping.load(Ordering::SeqCst),
+            "Gate is shutting down"
+        );
+        let local = self.local().await?;
+        local.identity.export_contact_card(&self.directory).await?;
+        self.status().await
+    }
     pub(crate) async fn begin_run(
         &self,
         request: &RunRequest,
@@ -215,9 +228,14 @@ impl AppState {
                     "Development software passkey; user presence only."
                 }
                 .into(),
-                contact_card: base64::engine::general_purpose::STANDARD.encode(
-                    hellas_rpc::protocol::value::canonical_dag_cbor(&identity.public.card)?,
-                ),
+                contact_card: identity
+                    .contact_card(&self.directory)?
+                    .map(|card| {
+                        hellas_rpc::protocol::value::canonical_dag_cbor(&card)
+                            .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes))
+                    })
+                    .transpose()?
+                    .unwrap_or_default(),
             },
             provider: service(status.provider),
             gateway: service(status.gateway),
