@@ -227,10 +227,15 @@ test("setup defaults to native passkeys and never falls back after a cancelled p
   assert.equal(nodes.get("#error").textContent, "Enter your name to create an identity.");
   assert.equal(dialogs.length, 0, "invalid setup must not open owner approval");
   assert.deepEqual(calls, [], "invalid setup must not request identity creation");
-  const submit = () => listeners.get("submit")({ target: { id: "initialize" }, preventDefault() {} });
-  submit(); await flush();
+  const button = { disabled: false };
+  const form = { id: "initialize", querySelector() { return button; } };
+  const submit = () => listeners.get("submit")({ target: form, preventDefault() {} });
+  submit(); submit(); await flush();
+  assert.equal(button.disabled, true);
+  assert.equal(dialogs.length, 1, "duplicate setup must not open another approval");
   dialogs[0].returnValue = "approve"; dialogs[0].close(); await flush();
   assert.deepEqual(calls, ["initialize_native"]);
+  assert.equal(button.disabled, false);
   assert.equal(nodes.get("#error").textContent, "Passkey authorization cancelled");
   values.software = "on";
   submit(); await flush();
