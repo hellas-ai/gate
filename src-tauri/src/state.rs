@@ -19,6 +19,7 @@ pub struct AppState {
     host: Mutex<Option<HostHandle>>,
     operation: Mutex<()>,
     stopping: AtomicBool,
+    shutdown_lock: Mutex<()>,
     opened: AtomicBool,
     failure: Mutex<Option<String>>,
     plans: Mutex<std::collections::BTreeMap<String, crate::apply::Plan>>,
@@ -47,6 +48,7 @@ impl AppState {
             host: Mutex::new(None),
             operation: Mutex::new(()),
             stopping: AtomicBool::new(false),
+            shutdown_lock: Mutex::new(()),
             opened: AtomicBool::new(false),
             failure: Mutex::new(None),
             plans: Mutex::new(std::collections::BTreeMap::new()),
@@ -247,6 +249,8 @@ impl AppState {
         })
     }
     pub async fn shutdown(&self) -> anyhow::Result<bool> {
+        // Concurrent exit/restart callers must wait for the first drain.
+        let _shutdown = self.shutdown_lock.lock().await;
         if self.stopping.swap(true, Ordering::SeqCst) {
             return Ok(false);
         }
@@ -599,8 +603,16 @@ mod recovery_tests {
         .await
         .expect("shutdown must signal before waiting for the approval lock");
         assert!(!task.is_finished());
+        let mut duplicate = Box::pin(app.shutdown());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut duplicate)
+                .await
+                .is_err(),
+            "a repeated shutdown must not return while the first is still draining"
+        );
         drop(approval);
         assert!(task.await.unwrap().unwrap());
+        assert!(!duplicate.await.unwrap());
         assert!(
             app.initialize_software("Late approval".into())
                 .await

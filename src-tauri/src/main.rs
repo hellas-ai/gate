@@ -1,7 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![recursion_limit = "256"]
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, Ordering},
+};
 
 use hellas_gate::commands;
 use hellas_gate::state::AppState;
@@ -91,11 +94,47 @@ fn main() {
                 }
             }
         })
-        .run(tauri::generate_context!());
-    if let Err(error) = result {
-        tracing::error!(%error, "Gate failed");
-        std::process::exit(1);
-    }
+        .build(tauri::generate_context!());
+    let app = match result {
+        Ok(app) => app,
+        Err(error) => {
+            tracing::error!(%error, "Gate failed");
+            std::process::exit(1);
+        }
+    };
+    // All ordinary exits (including macOS Cmd-Q and the tray) drain the host.
+    // The second exit request, emitted after draining, is allowed through.
+    let exit = Arc::new(AtomicU8::new(0));
+    app.run(move |app, event| {
+        if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+            // Tauri cannot prevent restart. restart_gate drains state before
+            // requesting it; keep that ordering in every restart call site.
+            if code == Some(tauri::RESTART_EXIT_CODE) || exit.load(Ordering::SeqCst) == 2 {
+                return;
+            }
+            api.prevent_exit();
+            if exit
+                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return;
+            }
+            let app = app.clone();
+            let state = app.state::<Arc<AppState>>().inner().clone();
+            let exit = exit.clone();
+            tauri::async_runtime::spawn(async move {
+                let code = match state.shutdown().await {
+                    Ok(_) => code.unwrap_or(0),
+                    Err(error) => {
+                        tracing::error!(%error, "Gate shutdown failed");
+                        1
+                    }
+                };
+                exit.store(2, Ordering::SeqCst);
+                app.exit(code);
+            });
+        }
+    });
 }
 
 fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
@@ -112,20 +151,7 @@ fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
                     let _ = window.set_focus();
                 }
             }
-            "quit" => {
-                let app = app.clone();
-                let state = app.state::<Arc<AppState>>().inner().clone();
-                tauri::async_runtime::spawn(async move {
-                    match state.shutdown().await {
-                        Ok(false) => {}
-                        Ok(true) => app.exit(0),
-                        Err(error) => {
-                            tracing::error!(%error, "Gate shutdown failed");
-                            app.exit(1);
-                        }
-                    }
-                });
-            }
+            "quit" => app.exit(0),
             _ => {}
         });
     if let Some(icon) = app.default_window_icon() {
