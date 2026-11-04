@@ -8,7 +8,7 @@ type View="run"|"serve"|"contacts"|"gateway"|"trust"|"history"|"settings";
 let view:View="settings";
 let status:T.AppStatus|null=null;
 let provider:T.ProviderView={revision:0,upstreams:[],resources:[],paid:null};
-let output="";let activeRun="";
+let output="";let activeRun="";let setupPending=false;
 function error(value:unknown):void {debug("uiError");const message=value&&typeof value==="object"&&"message" in value?value.message:value;let node=document.querySelector("#error");if(!node){node=document.createElement("p");node.id="error";node.setAttribute("role","alert");root.append(node);}node.textContent=String(message);}
 function message(value:string):void {const node=document.querySelector("#message");if(node)node.textContent=value;}
 function secret(value:string,title:string):void {const dialog=document.createElement("dialog");dialog.innerHTML=`<h2>${e(title)}</h2><p>Copy this handoff through a private channel. It is not saved in browser storage.</p><textarea readonly></textarea><form method="dialog"><button>Close</button></form>`;const node=dialog.querySelector("textarea");if(node)node.value=value;document.body.append(dialog);dialog.addEventListener("close",()=>dialog.remove(),{once:true});dialog.showModal();}
@@ -89,7 +89,7 @@ root.addEventListener("invalid",event=>{
   const input=event.target as HTMLInputElement;
   if(input.form?.id==="initialize") { debug("setupInvalid"); error("Enter your name to create an identity."); }
 },true);
-root.addEventListener("submit",event=>{const form=event.target as HTMLFormElement;if(!form.id)return;event.preventDefault();void submit(form).catch(error);});
+root.addEventListener("submit",event=>{const form=event.target as HTMLFormElement;if(!form.id)return;event.preventDefault();if(form.id==="initialize"){if(setupPending)return;setupPending=true;const button=form.querySelector<HTMLButtonElement>("button[type=submit],button:not([type])");if(button)button.disabled=true;void submit(form).catch(error).finally(()=>{setupPending=false;if(button)button.disabled=false;});return;}void submit(form).catch(error);});
 async function submit(form:HTMLFormElement):Promise<void>{
   const data=new FormData(form);const operation=form.id;
   if(operation==="initialize"){debug("setupSubmitted");const software=data.has("software");if(!await approve(`Create ${software?"development software":"system passkey"} owner ${text(data,"name")} and initialize this node. ${software?"Software assertions claim user presence only.":"macOS will request passkey creation and owner approvals."}`))return;if(!software)debug("nativeRequested");await (software?api.initializeSoftware:api.initializeNative)(text(data,"name"));if(!software)debug("nativeSucceeded");}

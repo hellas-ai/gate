@@ -85,7 +85,10 @@ impl AppState {
         Ok(())
     }
     pub async fn initialize_software(&self, name: String) -> anyhow::Result<AppStatus> {
-        let _lock = self.operation.lock().await;
+        let _lock = self
+            .operation
+            .try_lock()
+            .context("another Gate operation is already in progress")?;
         anyhow::ensure!(
             !self.stopping.load(Ordering::SeqCst),
             "Gate is shutting down"
@@ -99,7 +102,10 @@ impl AppState {
         self.status().await
     }
     pub async fn initialize_native(&self, name: String) -> anyhow::Result<AppStatus> {
-        let _lock = self.operation.lock().await;
+        let _lock = self
+            .operation
+            .try_lock()
+            .context("another Gate operation is already in progress")?;
         anyhow::ensure!(
             !self.stopping.load(Ordering::SeqCst),
             "Gate is shutting down"
@@ -526,6 +532,26 @@ impl AppState {
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+    #[tokio::test]
+    async fn duplicate_setup_does_not_wait_behind_active_operation() {
+        let directory = tempfile::tempdir().unwrap();
+        let secrets = tempfile::tempdir().unwrap();
+        let app = AppState::with_vault(directory.path(), Vault::fixture(secrets.path()))
+            .await
+            .unwrap();
+        let _active = app.operation.lock().await;
+        for result in [
+            app.initialize_native("Owner".into()).await,
+            app.initialize_software("Owner".into()).await,
+        ] {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("already in progress")
+            );
+        }
+    }
     #[tokio::test]
     async fn shutdown_closes_admission_before_waiting_for_an_approval() {
         let directory = tempfile::tempdir().unwrap();
