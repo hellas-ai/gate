@@ -21,10 +21,13 @@ path = "src/main.rs"
 required-features = ["desktop"]
 
 [dependencies]
-hellas-chain = { git = "https://github.com/hellas-ai/hellas", rev = "5ff392dcb81c48ec6ea0dcc873080531a056af92" }
-hellas-authority = { git = "https://github.com/hellas-ai/hellas", rev = "5ff392dcb81c48ec6ea0dcc873080531a056af92" }
-hellas-channel = { git = "https://github.com/hellas-ai/hellas", rev = "5ff392dcb81c48ec6ea0dcc873080531a056af92" }
-hellas-executor = { git = "https://github.com/hellas-ai/hellas", rev = "5ff392dcb81c48ec6ea0dcc873080531a056af92", default-features = false }
+hellas-webauthn = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d", features = ["der"] }
+ciborium = "0.2"
+sha2 = "0.10"
+hellas-chain = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-authority = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-channel = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-executor = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d", default-features = false }
 anyhow = "1"
 async-trait = "0.1"
 getrandom = "0.4"
@@ -34,16 +37,16 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 zeroize = "1"
 base64 = "0.22"
 futures = "0.3"
-hellas-genesis = { git = "https://github.com/hellas-ai/hellas", rev = "5ff392dcb81c48ec6ea0dcc873080531a056af92" }
-hellas-auth = { git = "https://github.com/hellas-ai/hellas", rev = "5ff392dcb81c48ec6ea0dcc873080531a056af92" }
-hellas-reseller = { git = "https://github.com/hellas-ai/hellas", rev = "5ff392dcb81c48ec6ea0dcc873080531a056af92" }
-hellas-providers = { git = "https://github.com/hellas-ai/hellas", rev = "5ff392dcb81c48ec6ea0dcc873080531a056af92" }
-hellas-attestation = { git = "https://github.com/hellas-ai/hellas", rev = "5ff392dcb81c48ec6ea0dcc873080531a056af92", features = ["apple-app-attest"] }
-hellas-gateway = { git = "https://github.com/hellas-ai/hellas", rev = "5ff392dcb81c48ec6ea0dcc873080531a056af92" }
-hellas-private = { git = "https://github.com/hellas-ai/hellas", rev = "5ff392dcb81c48ec6ea0dcc873080531a056af92" }
-hellas-rpc = { git = "https://github.com/hellas-ai/hellas", rev = "5ff392dcb81c48ec6ea0dcc873080531a056af92", features = ["host-control", "execute", "fetch", "work"] }
-hellas-sdk = { git = "https://github.com/hellas-ai/hellas", rev = "5ff392dcb81c48ec6ea0dcc873080531a056af92", default-features = false }
-hellas-wire = { git = "https://github.com/hellas-ai/hellas", rev = "5ff392dcb81c48ec6ea0dcc873080531a056af92", features = ["unix"] }
+hellas-genesis = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-auth = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-reseller = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-providers = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-attestation = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d", features = ["apple-app-attest"] }
+hellas-gateway = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-private = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d" }
+hellas-rpc = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d", features = ["host-control", "execute", "fetch", "work"] }
+hellas-sdk = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d", default-features = false }
+hellas-wire = { git = "https://github.com/hellas-ai/hellas", rev = "2a3de65b4c3d88b5db56a664c9fa925ab809587d", features = ["unix"] }
 # The same bundled SQLite that hellas's Work journals compile in; history.rs
 # drives it through the C API.
 libsqlite3-sys = { version = "0.37", features = ["bundled"] }
@@ -63,6 +66,7 @@ tauri-build = { version = "2", features = [], optional = true }
 cc = "1"
 
 [dev-dependencies]
+p256 = { version = "0.14", features = ["ecdsa"] }
 tempfile = "3"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }

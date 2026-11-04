@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tauri::State;
 #[tauri::command]
 pub async fn get_status(state: State<'_, Arc<AppState>>) -> ApiResult<AppStatus> {
+    state.open_existing().await.map_err(ApiError::internal)?;
     state.status().await.map_err(ApiError::internal)
 }
 #[tauri::command]
@@ -16,6 +17,16 @@ pub async fn initialize_software(
 ) -> ApiResult<AppStatus> {
     state
         .initialize_software(name)
+        .await
+        .map_err(ApiError::internal)
+}
+#[tauri::command]
+pub async fn initialize_native(
+    state: State<'_, Arc<AppState>>,
+    name: String,
+) -> ApiResult<AppStatus> {
+    state
+        .initialize_native(name)
         .await
         .map_err(ApiError::internal)
 }
@@ -209,8 +220,8 @@ pub async fn run_request(
 }
 
 #[tauri::command]
-pub async fn recover_software(state: State<'_, Arc<AppState>>) -> ApiResult<AppStatus> {
-    state.recover_software().await.map_err(ApiError::internal)
+pub async fn recover_owner(state: State<'_, Arc<AppState>>) -> ApiResult<AppStatus> {
+    state.recover_owner().await.map_err(ApiError::internal)
 }
 
 #[tauri::command]

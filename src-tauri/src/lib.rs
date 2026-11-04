@@ -18,6 +18,7 @@ pub mod identity;
 mod integration_tests;
 mod mutations;
 pub mod paid;
+pub mod passkey;
 pub mod period;
 pub mod provider_identity;
 pub mod provider_setup;

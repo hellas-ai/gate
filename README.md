@@ -5,10 +5,11 @@ local control, provider and gateway lifecycles. Run and gateway requests share
 SDK clients and their durable channels; paid roles share one lazy chain node.
 
 A person has a P-256 passkey principal. Each installation has separate node and
-transport keys; provider attestation has its own key. The current explicit
-software authenticator is for development: assertions prove user presence, not
-user verification. Native passkey and provisioned App Attest runtime acceptance
-are required before a desktop release. Gate never silently substitutes software
+transport keys; provider attestation has its own key. On macOS, Gate uses AuthenticationServices to create a system passkey and request
+user verification for owner approvals. Gate stores its public key and credential
+identifier, never its private key. The explicit software authenticator remains
+for development: assertions prove user presence, not user verification. Signed
+macOS passkey and provisioned App Attest runtime acceptance remain release checks. Gate never silently substitutes software
 assurance for an Apple policy.
 
 ## Develop and verify
@@ -44,11 +45,15 @@ application pipeline.
 
 ## Identity, control and custody
 
-First launch explicitly creates the development passkey identity. Restart uses
+First launch creates a system passkey on a signed, domain-associated macOS app.
+A separate development option explicitly selects a software identity on any
+platform. Native prompt errors never fall back to software. Interrupted setup
+reuses the saved native credential when retried. Restart uses
 the same prepared app credential and pinned TLS certificate. Local Unix sockets
 and Windows pipes require a scoped credential and device proof; filesystem
 ownership does not grant administration. Settings can issue device-bound CLI
-access after fresh owner approval. Offline owner recovery is explicit, advances
+access after fresh owner approval. Offline owner recovery uses the installation's existing native or software
+owner authenticator, is explicit, advances
 the authority generation and invalidates earlier credentials. A failed service
 open can be retried without recovering or replacing the owner.
 

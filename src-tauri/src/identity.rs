@@ -26,6 +26,8 @@ pub struct Installation {
     pub owner_scope: GrantSpec,
     pub generation: u64,
     pub certificate: Vec<u8>,
+    #[serde(default)]
+    pub native_passkey: Option<crate::passkey::NativePasskey>,
 }
 pub struct Identity {
     pub public: Installation,
@@ -89,8 +91,53 @@ impl Identity {
         );
         let passkey = SoftPasskey::from_secret_scalar(scalar)
             .map_err(|_| anyhow::anyhow!("invalid passkey scalar"))?;
+        ensure!(
+            !directory.join("native-passkey.json").try_exists()?,
+            "resume native passkey setup instead"
+        );
+        vault.set("owner-software-passkey", &scalar).await?;
+        Self::prepare(directory, vault, name, Arc::new(passkey), None).await
+    }
+    pub async fn create_native(
+        directory: &Path,
+        vault: &Vault,
+        name: String,
+    ) -> anyhow::Result<Self> {
+        ensure!(
+            !directory.join("installation.json").try_exists()?
+                && !directory.join("node/authority").try_exists()?,
+            "identity already initialized; resume or recover it"
+        );
+        let path = directory.join("native-passkey.json");
+        let native = match vault::read::<crate::passkey::NativePasskey>(&path)? {
+            Some(native) => {
+                native.validate()?;
+                native
+            }
+            None => {
+                let native = crate::passkey::NativePasskey::register(&name).await?;
+                vault::write(&path, &native)?;
+                native
+            }
+        };
+        Self::prepare(
+            directory,
+            vault,
+            name,
+            Arc::new(native.clone()),
+            Some(native),
+        )
+        .await
+    }
+    async fn prepare(
+        directory: &Path,
+        vault: &Vault,
+        name: String,
+        passkey: Arc<dyn Authenticator>,
+        native_passkey: Option<crate::passkey::NativePasskey>,
+    ) -> anyhow::Result<Self> {
         let owner = PrincipalId::from_public_key(hellas_auth::PublicKey::P256(
-            passkey.party_key().to_bytes(),
+            passkey.public_key()?.to_compressed(),
         ))?;
         let node = NodeIdentity::generate();
         let root = GrantId(random()?);
@@ -118,7 +165,6 @@ impl Identity {
         )?;
         let tls = rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
         // All secret material is durable before publishing the prepared verifier.
-        vault.set("owner-software-passkey", &scalar).await?;
         let mut secrets = zeroize::Zeroizing::new(node.transport_secret_bytes().to_vec());
         secrets.extend_from_slice(&node.node_secret_bytes());
         vault.set("node-keys", &secrets).await?;
@@ -136,12 +182,13 @@ impl Identity {
             credential_id: credential.id(),
             owner_scope: prepared.administrator.clone(),
             generation: 1,
+            native_passkey,
         };
         vault::write(&directory.join("installation.json"), &public)?;
         Ok(Self {
             public,
             node,
-            passkey: Arc::new(passkey),
+            passkey,
             credential,
         })
     }
@@ -158,13 +205,7 @@ impl Identity {
         ensure!(bytes.len() == 64, "invalid node vault entry");
         let node =
             NodeIdentity::from_secret_bytes(bytes[..32].try_into()?, bytes[32..].try_into()?)?;
-        let bytes = vault.required("owner-software-passkey").await?;
-        let passkey = SoftPasskey::from_secret_scalar(bytes.as_slice().try_into()?)
-            .map_err(|_| anyhow::anyhow!("invalid stored passkey"))?;
-        ensure!(
-            passkey.party_key().to_bytes() == *public.owner.as_bytes(),
-            "stored passkey differs from owner"
-        );
+        let passkey = load_passkey(&public, vault).await?;
         let credential = decode_credential(&vault.required("application-credential").await?)?;
         ensure!(
             credential.id() == public.credential_id,
@@ -173,7 +214,7 @@ impl Identity {
         Ok(Some(Self {
             public,
             node,
-            passkey: Arc::new(passkey),
+            passkey,
             credential,
         }))
     }
@@ -212,6 +253,26 @@ impl Identity {
         );
         Ok(store)
     }
+}
+async fn load_passkey(
+    public: &Installation,
+    vault: &Vault,
+) -> anyhow::Result<Arc<dyn Authenticator>> {
+    let passkey: Arc<dyn Authenticator> = if let Some(native) = &public.native_passkey {
+        native.validate()?;
+        Arc::new(native.clone())
+    } else {
+        let bytes = vault.required("owner-software-passkey").await?;
+        Arc::new(
+            SoftPasskey::from_secret_scalar(bytes.as_slice().try_into()?)
+                .map_err(|_| anyhow::anyhow!("invalid stored software passkey"))?,
+        )
+    };
+    ensure!(
+        passkey.public_key()?.to_compressed() == *public.owner.as_bytes(),
+        "stored passkey differs from owner"
+    );
+    Ok(passkey)
 }
 fn admin_scope(
     authority: AuthorityId,
@@ -258,16 +319,10 @@ fn admin_scope(
 
 impl Identity {
     /// Explicit offline owner approval; a lost recovery reply requires another approval.
-    pub async fn recover_software(directory: &Path, vault: &Vault) -> anyhow::Result<Self> {
+    pub async fn recover(directory: &Path, vault: &Vault) -> anyhow::Result<Self> {
         let mut public = vault::read::<Installation>(&directory.join("installation.json"))?
             .context("installation metadata is missing")?;
-        let bytes = vault.required("owner-software-passkey").await?;
-        let passkey = SoftPasskey::from_secret_scalar(bytes.as_slice().try_into()?)
-            .map_err(|_| anyhow::anyhow!("invalid software owner passkey"))?;
-        ensure!(
-            passkey.party_key().to_bytes() == *public.owner.as_bytes(),
-            "selected passkey differs from this owner"
-        );
+        let passkey = load_passkey(&public, vault).await?;
         let node_bytes = vault.required("node-keys").await?;
         ensure!(node_bytes.len() == 64, "invalid stored node keys");
         let node = NodeIdentity::from_secret_bytes(
@@ -324,7 +379,7 @@ impl Identity {
         Ok(Self {
             public,
             node,
-            passkey: Arc::new(passkey),
+            passkey,
             credential,
         })
     }
@@ -333,6 +388,42 @@ impl Identity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn native_metadata_reloads_without_a_software_secret_and_rejects_a_different_owner() {
+        let directory = tempfile::tempdir().unwrap();
+        let secrets = tempfile::tempdir().unwrap();
+        let vault = Vault::fixture(secrets.path());
+        // The software signer supplies fixture proofs only; persistence records
+        // the corresponding native public credential, never its private scalar.
+        let signer = SoftPasskey::from_secret_scalar([9; 32]).unwrap();
+        let native = serde_json::from_value(serde_json::json!({
+            "credential_id": [1, 2, 3],
+            "public_key": signer.public_key().unwrap().to_compressed().to_vec(),
+        }))
+        .unwrap();
+        let identity = Identity::prepare(
+            directory.path(),
+            &vault,
+            "Alice".into(),
+            Arc::new(signer),
+            Some(native),
+        )
+        .await
+        .unwrap();
+        assert!(vault.required("owner-software-passkey").await.is_err());
+        let loaded = Identity::load(directory.path(), &vault)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.public.owner, identity.public.owner);
+        assert_eq!(loaded.credential.id(), identity.credential.id());
+        let mut public = loaded.public;
+        public.native_passkey = None;
+        vault::write(&directory.path().join("installation.json"), &public).unwrap();
+        assert!(Identity::load(directory.path(), &vault).await.is_err());
+        vault.set("owner-software-passkey", &[8; 32]).await.unwrap();
+        assert!(Identity::load(directory.path(), &vault).await.is_err());
+    }
     #[tokio::test]
     async fn prepared_bootstrap_reconciles_exact_id_after_lost_reply_and_rejects_missing_secret() {
         let directory = tempfile::tempdir().unwrap();

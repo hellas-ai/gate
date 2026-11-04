@@ -21,7 +21,7 @@ fn main() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             create_private_directory(&data_dir)?;
-            let state = Arc::new(tauri::async_runtime::block_on(AppState::open(&data_dir))?);
+            let state = Arc::new(AppState::open(&data_dir)?);
             app.manage(state.clone());
 
             install_tray(app)?;
@@ -33,6 +33,7 @@ fn main() {
             commands::retry_open,
             commands::restart_gate,
             commands::initialize_software,
+            commands::initialize_native,
             commands::preview_apply,
             commands::apply_document,
             commands::set_quota,
@@ -40,7 +41,7 @@ fn main() {
             commands::discard_apply,
             commands::issue_admin_access,
             commands::rotate_gateway_key,
-            commands::recover_software,
+            commands::recover_owner,
             commands::bind_provider,
             commands::provider_view,
             commands::configure_provider,

@@ -19,16 +19,24 @@ pub struct AppState {
     host: Mutex<Option<HostHandle>>,
     operation: Mutex<()>,
     stopping: AtomicBool,
+    opened: AtomicBool,
     failure: Mutex<Option<String>>,
     plans: Mutex<std::collections::BTreeMap<String, crate::apply::Plan>>,
     pub runs: Arc<tokio::sync::Semaphore>,
     pub cancellations: Mutex<std::collections::BTreeMap<String, tokio::sync::watch::Sender<bool>>>,
 }
 impl AppState {
-    pub async fn open(directory: &Path) -> anyhow::Result<Self> {
-        Self::with_vault(directory, Vault::native(directory)?).await
+    /// Construct state without prompting: Tauri setup runs on the UI thread.
+    pub fn open(directory: &Path) -> anyhow::Result<Self> {
+        Self::prepare(directory, Vault::native(directory)?)
     }
+    #[cfg(test)]
     pub(crate) async fn with_vault(directory: &Path, vault: Vault) -> anyhow::Result<Self> {
+        let state = Self::prepare(directory, vault)?;
+        state.open_existing().await?;
+        Ok(state)
+    }
+    fn prepare(directory: &Path, vault: Vault) -> anyhow::Result<Self> {
         hellas_private::create_dir_all_durable(directory)?;
         hellas_private::restrict_directory(directory)?;
         let state = Self {
@@ -39,22 +47,32 @@ impl AppState {
             host: Mutex::new(None),
             operation: Mutex::new(()),
             stopping: AtomicBool::new(false),
+            opened: AtomicBool::new(false),
             failure: Mutex::new(None),
             plans: Mutex::new(std::collections::BTreeMap::new()),
             runs: Arc::new(tokio::sync::Semaphore::new(64)),
             cancellations: Mutex::new(std::collections::BTreeMap::new()),
         };
+        Ok(state)
+    }
+    /// First status request runs after the event loop starts, so native prompts
+    /// can dispatch to the main queue. Failure is shown until an explicit retry.
+    pub async fn open_existing(&self) -> anyhow::Result<()> {
+        let _lock = self.operation.lock().await;
+        if self.opened.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
         let opened: anyhow::Result<()> = async {
-            if let Some(identity) = Identity::load(directory, &state.vault).await? {
-                state.mount(identity).await?;
+            if let Some(identity) = Identity::load(&self.directory, &self.vault).await? {
+                self.mount(identity).await?;
             }
             Ok(())
         }
         .await;
         if let Err(error) = opened {
-            *state.failure.lock().await = Some(format!("{error:#}"));
+            *self.failure.lock().await = Some(format!("{error:#}"));
         }
-        Ok(state)
+        Ok(())
     }
     async fn mount(&self, identity: Identity) -> anyhow::Result<()> {
         let (local, host) = LocalNode::open(&self.directory, identity, self.vault.clone()).await?;
@@ -73,6 +91,20 @@ impl AppState {
             "identity already initialized"
         );
         let identity = Identity::create(&self.directory, &self.vault, name).await?;
+        self.mount(identity).await?;
+        self.status().await
+    }
+    pub async fn initialize_native(&self, name: String) -> anyhow::Result<AppStatus> {
+        let _lock = self.operation.lock().await;
+        anyhow::ensure!(
+            !self.stopping.load(Ordering::SeqCst),
+            "Gate is shutting down"
+        );
+        anyhow::ensure!(
+            self.local.lock().await.is_none(),
+            "identity already initialized"
+        );
+        let identity = Identity::create_native(&self.directory, &self.vault, name).await?;
         self.mount(identity).await?;
         self.status().await
     }
@@ -110,7 +142,7 @@ impl AppState {
             detail: String::new(),
         };
         let Some(local) = self.local.lock().await.clone() else {
-            return Ok(AppStatus { version: env!("CARGO_PKG_VERSION").into(), identity: IdentityStatus { initialized: false, recovery_available:self.directory.join("installation.json").try_exists()?, principal: String::new(), fingerprint: String::new(), node_key: String::new(), transport_id: String::new(), provider_address: String::new(), authority: String::new(), generation: 0, attestation: "unavailable".into(), detail: self.failure.lock().await.clone().unwrap_or_else(||"Native passkey bridge unavailable. Explicit software identity is for development; user presence only.".into()), contact_card: String::new() }, provider: stopped(), gateway: stopped(), endpoint: String::new(), socket_path: self.directory.join("gate.sock").display().to_string(), listen_port: crate::settings::load(&self.directory)?.listen_port, bound_addresses: vec![], min_omit_response_blocks: hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS });
+            return Ok(AppStatus { version: env!("CARGO_PKG_VERSION").into(), identity: IdentityStatus { initialized: false, recovery_available:self.directory.join("installation.json").try_exists()?, principal: String::new(), fingerprint: String::new(), node_key: String::new(), transport_id: String::new(), provider_address: String::new(), authority: String::new(), generation: 0, attestation: "unavailable".into(), detail: self.failure.lock().await.clone().unwrap_or_else(||"Create your identity with a system passkey on macOS. Software identities are available explicitly for development.".into()), contact_card: String::new() }, provider: stopped(), gateway: stopped(), endpoint: String::new(), socket_path: self.directory.join("gate.sock").display().to_string(), listen_port: crate::settings::load(&self.directory)?.listen_port, bound_addresses: vec![], min_omit_response_blocks: hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS });
         };
         let status = local
             .client(false)
@@ -154,7 +186,37 @@ impl AppState {
             Some(_) => "software (non-private)",
             None => "unbound",
         };
-        Ok(AppStatus { version: status.version, identity: IdentityStatus { initialized: true, recovery_available:false, principal: identity.public.owner.to_string(), fingerprint: identity.public.owner.fingerprint(), node_key: hex::encode(identity.node.node_key().public_key().bytes()), transport_id: identity.node.node_id().to_string(), provider_address, authority: identity.public.authority.to_string(), generation: status.generation, attestation: attestation.into(), detail: "Software P-256 passkey (UP only); execution is non-private unless independently attested.".into(), contact_card: base64::engine::general_purpose::STANDARD.encode(hellas_rpc::protocol::value::canonical_dag_cbor(&identity.public.card)?) }, provider: service(status.provider), gateway: service(status.gateway), endpoint: status.endpoint, socket_path: local.socket.display().to_string(), listen_port: crate::settings::load(&self.directory)?.listen_port, bound_addresses: local.bound_addresses.get().cloned().unwrap_or_default(), min_omit_response_blocks: hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS })
+        Ok(AppStatus {
+            version: status.version,
+            identity: IdentityStatus {
+                initialized: true,
+                recovery_available: false,
+                principal: identity.public.owner.to_string(),
+                fingerprint: identity.public.owner.fingerprint(),
+                node_key: hex::encode(identity.node.node_key().public_key().bytes()),
+                transport_id: identity.node.node_id().to_string(),
+                provider_address,
+                authority: identity.public.authority.to_string(),
+                generation: status.generation,
+                attestation: attestation.into(),
+                detail: if identity.public.native_passkey.is_some() {
+                    "System passkey; owner approvals require user verification."
+                } else {
+                    "Development software passkey; user presence only."
+                }
+                .into(),
+                contact_card: base64::engine::general_purpose::STANDARD.encode(
+                    hellas_rpc::protocol::value::canonical_dag_cbor(&identity.public.card)?,
+                ),
+            },
+            provider: service(status.provider),
+            gateway: service(status.gateway),
+            endpoint: status.endpoint,
+            socket_path: local.socket.display().to_string(),
+            listen_port: crate::settings::load(&self.directory)?.listen_port,
+            bound_addresses: local.bound_addresses.get().cloned().unwrap_or_default(),
+            min_omit_response_blocks: hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS,
+        })
     }
     pub async fn shutdown(&self) -> anyhow::Result<bool> {
         let _lock = self.operation.lock().await;
@@ -337,7 +399,7 @@ impl AppState {
 }
 
 impl AppState {
-    pub async fn recover_software(&self) -> anyhow::Result<AppStatus> {
+    pub async fn recover_owner(&self) -> anyhow::Result<AppStatus> {
         let _lock = self.operation.lock().await;
         anyhow::ensure!(
             !self.stopping.load(Ordering::SeqCst),
@@ -347,7 +409,7 @@ impl AppState {
             self.local.lock().await.is_none(),
             "stop this node before offline owner recovery"
         );
-        let identity = Identity::recover_software(&self.directory, &self.vault).await?;
+        let identity = Identity::recover(&self.directory, &self.vault).await?;
         self.mount(identity).await?;
         *self.failure.lock().await = None;
         self.status().await
@@ -490,7 +552,7 @@ mod recovery_tests {
                 .await
                 .is_err()
         );
-        let recovered = app.recover_software().await.unwrap();
+        let recovered = app.recover_owner().await.unwrap();
         assert_eq!(recovered.identity.generation, 2);
         assert_eq!(before.identity.principal, recovered.identity.principal);
         assert_eq!(before.identity.node_key, recovered.identity.node_key);

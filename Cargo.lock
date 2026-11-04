@@ -856,7 +856,7 @@ dependencies = [
 [[package]]
 name = "catena-lang"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/catena-lang.git?branch=master#721edd0a567d725723c37d9c51f3ec3a2f3f0a40"
+source = "git+https://github.com/hellas-ai/catena-lang.git?branch=master#cef40b1ea587bec1d6145a79e79b9013b32a6380"
 dependencies = [
  "anyhow",
  "bincode",
@@ -1142,7 +1142,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2098,7 +2098,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2329,7 +2329,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2538,6 +2538,7 @@ dependencies = [
  "ff",
  "group",
  "hybrid-array",
+ "pem-rfc7468",
  "pkcs8",
  "rand_core 0.10.1",
  "sec1",
@@ -2635,7 +2636,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3100,7 +3101,7 @@ dependencies = [
  "log",
  "rustversion",
  "windows-link 0.1.3",
- "windows-result 0.3.4",
+ "windows-result 0.4.1",
 ]
 
 [[package]]
@@ -3511,7 +3512,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "hellas-adaptors"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "futures-core",
  "futures-util",
@@ -3524,7 +3525,7 @@ dependencies = [
 [[package]]
 name = "hellas-attestation"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "base64 0.23.1",
  "ciborium",
@@ -3543,7 +3544,7 @@ dependencies = [
 [[package]]
 name = "hellas-auth"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
@@ -3562,7 +3563,7 @@ dependencies = [
 [[package]]
 name = "hellas-authority"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3599,7 +3600,7 @@ dependencies = [
 [[package]]
 name = "hellas-chain"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "axum",
  "base64ct",
@@ -3649,7 +3650,7 @@ dependencies = [
 [[package]]
 name = "hellas-channel"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3681,7 +3682,7 @@ dependencies = [
 [[package]]
 name = "hellas-client"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3718,7 +3719,7 @@ dependencies = [
 [[package]]
 name = "hellas-executor"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "async-trait",
  "bincode",
@@ -3757,6 +3758,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "cc",
+ "ciborium",
  "commonware-codec",
  "commonware-cryptography",
  "commonware-runtime",
@@ -3775,14 +3777,17 @@ dependencies = [
  "hellas-reseller",
  "hellas-rpc",
  "hellas-sdk",
+ "hellas-webauthn",
  "hellas-wire",
  "hex",
  "libsqlite3-sys",
+ "p256",
  "rcgen",
  "reqwest",
  "rustls",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tauri",
  "tauri-build",
  "tempfile",
@@ -3798,7 +3803,7 @@ dependencies = [
 [[package]]
 name = "hellas-gateway"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "async-stream",
  "axum",
@@ -3836,7 +3841,7 @@ dependencies = [
 [[package]]
 name = "hellas-genesis"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -3845,7 +3850,7 @@ dependencies = [
 [[package]]
 name = "hellas-kernel"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "hellas-webauthn",
  "hellas-xet",
@@ -3856,7 +3861,7 @@ dependencies = [
 [[package]]
 name = "hellas-presentation"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "anyhow",
  "catena-models",
@@ -3871,7 +3876,7 @@ dependencies = [
 [[package]]
 name = "hellas-private"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "apple-native-keyring-store",
  "base64 0.23.1",
@@ -3887,7 +3892,7 @@ dependencies = [
 [[package]]
 name = "hellas-providers"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "async-stream",
  "base64 0.23.1",
@@ -3912,7 +3917,7 @@ dependencies = [
 [[package]]
 name = "hellas-reseller"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "hellas-adaptors",
  "hellas-auth",
@@ -3931,7 +3936,7 @@ dependencies = [
 [[package]]
 name = "hellas-rpc"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "base64 0.23.1",
  "base64ct",
@@ -3968,7 +3973,7 @@ dependencies = [
 [[package]]
 name = "hellas-sdk"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "async-stream",
  "futures",
@@ -4009,7 +4014,7 @@ dependencies = [
 [[package]]
 name = "hellas-store"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "hellas-private",
  "hellas-rpc",
@@ -4027,7 +4032,7 @@ dependencies = [
 [[package]]
 name = "hellas-webauthn"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "p256",
  "sha2 0.11.0",
@@ -4036,7 +4041,7 @@ dependencies = [
 [[package]]
 name = "hellas-wire"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "async-stream",
  "blake3",
@@ -4071,7 +4076,7 @@ dependencies = [
 [[package]]
 name = "hellas-xet"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=5ff392dcb81c48ec6ea0dcc873080531a056af92#5ff392dcb81c48ec6ea0dcc873080531a056af92"
+source = "git+https://github.com/hellas-ai/hellas?rev=2a3de65b4c3d88b5db56a664c9fa925ab809587d#2a3de65b4c3d88b5db56a664c9fa925ab809587d"
 dependencies = [
  "blake3",
  "gearhash",
@@ -4362,7 +4367,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -6036,7 +6041,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6150,7 +6155,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 1.3.1",
+ "proc-macro-crate 2.0.2",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -7225,7 +7230,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
  "heck 0.4.1",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "petgraph",
@@ -7244,7 +7249,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -7386,7 +7391,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7791,7 +7796,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7850,7 +7855,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9271,7 +9276,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -10565,7 +10570,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -11029,8 +11034,8 @@ dependencies = [
  "log",
  "serde",
  "thiserror 2.0.20",
- "windows 0.61.3",
- "windows-core 0.61.2",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]

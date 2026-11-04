@@ -173,3 +173,58 @@ test("Paid Serve publishes standing terms only after owner approval", async () =
   assert.equal(changes.length, 1, "cancelling owner approval must not publish");
   assert.equal(nodes.get("#error").textContent, "");
 });
+
+test("setup defaults to native passkeys and never falls back after a cancelled prompt", async () => {
+  const nodes = new Map(), listeners = new Map(), dialogs = [], calls = [];
+  const values = { name: "Alice" };
+  const root = {
+    set innerHTML(value) {
+      for (const id of ["error", "content", "rail-status", "message"])
+        if (value.includes(`id="${id}"`)) nodes.set(`#${id}`, { innerHTML: "", textContent: "" });
+    },
+    addEventListener(name, handler) { listeners.set(name, handler); },
+    querySelectorAll() { return []; },
+    append(node) { nodes.set(`#${node.id}`, node); },
+  };
+  nodes.set("#app", root);
+  const context = vm.createContext({
+    document: {
+      querySelector(selector) { return nodes.get(selector) ?? null; },
+      body: { append() {} },
+      createElement() { return {
+        querySelector() { return { textContent: "" }; },
+        showModal() { dialogs.push(this); },
+        addEventListener(_name, handler) { this.close = handler; }, remove() {},
+      }; },
+    },
+    FormData: class {
+      get(name) { return values[name] ?? ""; }
+      has(name) { return Object.hasOwn(values, name); }
+    },
+    window: { __TAURI__: { core: {
+      Channel: class {},
+      async invoke(command) {
+        if (command === "get_status") return { identity: { initialized: false, detail: "Set up Gate" },
+          provider: { state: "stopped" }, gateway: { state: "stopped" }, boundAddresses: [] };
+        calls.push(command);
+        if (command === "initialize_native") throw { message: "Passkey authorization cancelled" };
+        if (command === "initialize_software") return {};
+        throw new Error(`unexpected command ${command}`);
+      },
+    } } },
+    setInterval() { return 0; },
+  });
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  vm.runInContext(await readFile(new URL("../target/ui-dist/main.js", import.meta.url), "utf8"), context);
+  await flush();
+  assert.match(nodes.get("#content").innerHTML, /name="software" type="checkbox">/);
+  const submit = () => listeners.get("submit")({ target: { id: "initialize" }, preventDefault() {} });
+  submit(); await flush();
+  dialogs[0].returnValue = "approve"; dialogs[0].close(); await flush();
+  assert.deepEqual(calls, ["initialize_native"]);
+  assert.equal(nodes.get("#error").textContent, "Passkey authorization cancelled");
+  values.software = "on";
+  submit(); await flush();
+  dialogs[1].returnValue = "approve"; dialogs[1].close(); await flush();
+  assert.deepEqual(calls, ["initialize_native", "initialize_software"]);
+});
