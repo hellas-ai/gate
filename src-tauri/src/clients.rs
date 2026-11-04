@@ -6,7 +6,7 @@ use hellas_auth::authority::*;
 use hellas_gateway::{WorkExecutionBackend, WorkFetchRequest};
 use hellas_sdk::{
     grant_client::{GrantSessionOptions, GrantTransport, UnpinnedOffer},
-    grant_gateway::GrantGateway,
+    grant_gateway::GrantPool,
 };
 use std::{
     collections::BTreeMap,
@@ -22,6 +22,8 @@ use tokio::sync::Mutex;
 pub struct Target {
     pub backend: Arc<RetirableBackend>,
     pub provider: hellas_sdk::iroh::EndpointId,
+    pub resource: Option<ResourceId>,
+    pub channel: Option<hellas_channel::model::grant::ChannelId>,
     pub service: String,
     pub method: String,
     pub presentation: FetchPresentation,
@@ -379,6 +381,14 @@ impl Clients {
                 )?;
                 let pinned =
                     UnpinnedOffer::decode(&offer.encode()?, UnixMillis::now()?)?.pin(&approved)?;
+                let channel = pinned
+                    .offer()
+                    .channel(hellas_channel::model::grant::ChannelClient {
+                        principal: access.subject,
+                        node: NodeKey::from_public_key(
+                            local.identity.node.node_key().public_key(),
+                        )?,
+                    });
                 let credential =
                     identity::decode_credential(&local.vault.required(&access.vault_key()).await?)?;
                 let application = Arc::new(hellas_sdk::node_control::profile::ClientProfile {
@@ -393,7 +403,7 @@ impl Clients {
                 }
                 // Outgoing work has its own SDK-owned transport lifetime.
                 let transport = GrantTransport::remote(self.transport(local, &key).await?).await?;
-                let backend = GrantGateway::open(
+                let backend = GrantPool::open(
                     GrantSessionOptions {
                         target: pinned,
                         principal: access.subject,
@@ -413,6 +423,8 @@ impl Clients {
                 Target {
                     backend: RetirableBackend::new(backend),
                     provider,
+                    resource: Some(selected.resource),
+                    channel: Some(channel),
                     service,
                     method,
                     presentation,
@@ -478,6 +490,8 @@ impl Clients {
                 Target {
                     backend,
                     provider: provider_id,
+                    resource: None,
+                    channel: None,
                     service: service.clone(),
                     method: method.clone(),
                     presentation: selected.policy.presentation,
@@ -544,6 +558,8 @@ impl Clients {
         let target = self.target(local, &input.client).await?;
         Ok(target.backend.fetch(WorkFetchRequest {
             provider: target.provider,
+            resource: target.resource,
+            channel: target.channel,
             service: target.service.clone(),
             method: target.method.clone(),
             body: input.input.as_bytes().to_vec(),
@@ -678,6 +694,7 @@ mod tests {
         let mut ambiguous = policy(http);
         ambiguous.admissions.push(Admission::Compute {
             evaluator: hellas_rpc::protocol::invocation::compute::EVALUATOR.into(),
+            programs: hellas_rpc::protocol::invocation::ComputePrograms::Any {},
         });
         ambiguous.validate().unwrap();
         assert!(route(&ambiguous).is_err());

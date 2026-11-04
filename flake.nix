@@ -3,7 +3,7 @@
 
   inputs = {
     hellas = {
-      url = "github:hellas-ai/hellas/f45a403bce5fc42abea9c265207d74f4d9916cc9";
+      url = "github:hellas-ai/hellas/5ff392dcb81c48ec6ea0dcc873080531a056af92";
       flake = false;
     };
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";

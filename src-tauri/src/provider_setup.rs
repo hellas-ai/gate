@@ -502,6 +502,7 @@ impl Composition {
                         accounting: hellas_authority::model::http_usage::AccountingProfile::None,
                         max_output_tokens: 0,
                         max_response_bytes: *max_response_bytes,
+                        model_policy: None,
                     };
                     https.validate()?;
                     let route = WorkRoute::sealed_route(&resource.service, &resource.method)?;

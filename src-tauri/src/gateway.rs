@@ -74,6 +74,7 @@ fn http_config(
                 },
                 headers: vec![],
                 max_response_bytes: route.max_response_bytes,
+                models: None,
             })
             .collect(),
         backends: Default::default(),

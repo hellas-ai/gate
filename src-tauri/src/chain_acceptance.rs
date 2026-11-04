@@ -460,6 +460,8 @@ async fn funded_setup(
             .backend
             .fetch(hellas_gateway::WorkFetchRequest {
                 provider: target.provider,
+                resource: target.resource,
+                channel: target.channel,
                 service: target.service.clone(),
                 method: target.method.clone(),
                 body: request.input.as_bytes().to_vec()
@@ -482,11 +484,13 @@ async fn funded_setup(
     .unwrap();
     let mut session = sealing_while(
         &mut devnet,
-        hellas_sdk::paid_client::PaidWorkSession::open_retained(
+        hellas_sdk::paid_client::PaidWorkSession::open(
             args.clone(),
             endpoint.clone(),
             signer.clone(),
             owner.clone(),
+            hellas_sdk::paid_client::SessionOpenMode::Retained,
+            Default::default(),
         ),
     )
     .await
@@ -531,11 +535,13 @@ async fn funded_setup(
     drop(session);
     let mut reopened = sealing_while(
         &mut devnet,
-        hellas_sdk::paid_client::PaidWorkSession::open_retained(
+        hellas_sdk::paid_client::PaidWorkSession::open(
             args.clone(),
             endpoint.clone(),
             signer,
             owner,
+            hellas_sdk::paid_client::SessionOpenMode::Retained,
+            Default::default(),
         ),
     )
     .await
@@ -569,7 +575,7 @@ async fn funded_setup(
         .view()
         .unwrap()
         .client()
-        .get_coins_by_owner(NATIVE.key().into())
+        .get_coins_by_owner(NATIVE.key())
         .await
         .unwrap()
         .unwrap();
@@ -586,7 +592,7 @@ async fn funded_setup(
             .view()
             .unwrap()
             .client()
-            .get_coins_by_owner(ALICE.key().into())
+            .get_coins_by_owner(ALICE.key())
             .await
             .unwrap()
             .unwrap()

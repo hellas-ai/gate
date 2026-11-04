@@ -1115,6 +1115,38 @@ async fn real_authorized_trust_revision_and_policy_switch_reuse_one_journal_and_
         .target(&recipient, &request.client)
         .await
         .unwrap();
+    assert!(original.resource.is_some());
+    assert!(original.channel.is_some());
+    for (resource, channel) in [
+        (
+            Some(hellas_auth::authority::ResourceId(
+                hellas_auth::Digest::hash(b"another resource"),
+            )),
+            original.channel,
+        ),
+        (
+            original.resource,
+            Some(hellas_channel::model::grant::ChannelId(
+                hellas_auth::Digest::hash(b"another channel"),
+            )),
+        ),
+    ] {
+        assert!(
+            original
+                .backend
+                .fetch(hellas_gateway::WorkFetchRequest {
+                    provider: original.provider,
+                    resource,
+                    channel,
+                    service: original.service.clone(),
+                    method: original.method.clone(),
+                    body: request.input.as_bytes().to_vec(),
+                })
+                .is_err(),
+            "a request cannot escape its selected grant resource or channel"
+        );
+    }
+    assert_eq!(upstream.calls.load(Ordering::SeqCst), 0);
     assert!(finished(
         &execute(&recipient.clients, &recipient, &request)
             .await
@@ -1155,6 +1187,8 @@ async fn real_authorized_trust_revision_and_policy_switch_reuse_one_journal_and_
             .backend
             .fetch(hellas_gateway::WorkFetchRequest {
                 provider: original.provider,
+                resource: original.resource,
+                channel: original.channel,
                 service: original.service.clone(),
                 method: original.method.clone(),
                 body: request.input.as_bytes().to_vec()
