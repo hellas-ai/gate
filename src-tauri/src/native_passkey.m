@@ -48,6 +48,8 @@ static NSData *GateDecode(id value) {
 @property(nonatomic) void *context;
 @property(nonatomic, strong) ASAuthorizationController *controller;
 @property(nonatomic, strong) NSWindow *window;
+@property(nonatomic, copy) NSString *kind;
+@property(nonatomic, strong) id sheetObserver;
 @property(nonatomic) BOOL completed;
 - (void)finish:(NSDictionary *)result;
 @end
@@ -59,14 +61,25 @@ static NSData *GateDecode(id value) {
     __attribute__((objc_precise_lifetime)) GatePasskeyRequest *keepAlive = self;
     (void)keepAlive;
     self.completed = YES;
-    // The registry may own the last strong reference to this delegate. Copy
-    // the callback before removing it and do not access self afterwards.
+    if (self.sheetObserver) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self.sheetObserver];
+        self.sheetObserver = nil;
+    }
+    // keepAlive retains the delegate after the registry releases it.
     GatePasskeyCallback callback = self.callback;
     void *context = self.context;
     [gatePasskeyRequests removeObjectForKey:@(self.token)];
     NSData *bytes = [NSJSONSerialization dataWithJSONObject:result options:0 error:NULL];
     NSString *json = bytes ? [[NSString alloc] initWithData:bytes encoding:NSUTF8StringEncoding] : nil;
-    callback(context, json ? json.UTF8String : "{\"error\":\"Could not encode passkey result\"}");
+    NSLog(@"Gate passkey token=%llu kind=%@ completed=%@", (unsigned long long)self.token, self.kind ?: @"unknown", result[@"error"] ? @"error" : @"success");
+    // Release the completed controller and return from its delegate callback
+    // before Rust can request another authorization on the same window.
+    self.controller.delegate = nil;
+    self.controller.presentationContextProvider = nil;
+    self.controller = nil;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        callback(context, json ? json.UTF8String : "{\"error\":\"Could not encode passkey result\"}");
+    });
 }
 
 - (ASPresentationAnchor)presentationAnchorForAuthorizationController:(ASAuthorizationController *)controller {
@@ -141,12 +154,15 @@ uint64_t hellas_native_passkey_start(const char *request_json, GatePasskeyCallba
                 [operation finish:@{@"error": @"Invalid passkey request challenge or kind"}];
                 return;
             }
-            NSWindow *window = NSApp.keyWindow ?: NSApp.mainWindow;
+            operation.kind = kind;
+            NSWindow *window = NSApp.mainWindow ?: NSApp.keyWindow;
+            while (window.sheetParent) window = window.sheetParent;
             if (!window) {
                 [operation finish:@{@"error": @"No active Gate window is available for passkey authorization"}];
                 return;
             }
             operation.window = window;
+            NSLog(@"Gate passkey token=%llu kind=%@ window=%ld main=%d key=%d", (unsigned long long)token, kind, (long)window.windowNumber, window == NSApp.mainWindow, window == NSApp.keyWindow);
             ASAuthorizationPlatformPublicKeyCredentialProvider *provider = [[ASAuthorizationPlatformPublicKeyCredentialProvider alloc] initWithRelyingPartyIdentifier:@"hellas.ai"];
             ASAuthorizationRequest *authorizationRequest;
             if ([kind isEqualToString:@"register"]) {
@@ -176,7 +192,24 @@ uint64_t hellas_native_passkey_start(const char *request_json, GatePasskeyCallba
             operation.controller = [[ASAuthorizationController alloc] initWithAuthorizationRequests:@[authorizationRequest]];
             operation.controller.delegate = operation;
             operation.controller.presentationContextProvider = operation;
-            [operation.controller performRequests];
+            if (window.attachedSheet) {
+                NSLog(@"Gate passkey token=%llu kind=%@ waiting for prior sheet", (unsigned long long)token, kind);
+                __weak GatePasskeyRequest *weakOperation = operation;
+                operation.sheetObserver = [[NSNotificationCenter defaultCenter]
+                    addObserverForName:NSWindowDidEndSheetNotification object:window queue:[NSOperationQueue mainQueue]
+                    usingBlock:^(NSNotification *notification) {
+                        (void)notification;
+                        GatePasskeyRequest *pending = weakOperation;
+                        if (!pending || pending.completed || pending.window.attachedSheet) return;
+                        [[NSNotificationCenter defaultCenter] removeObserver:pending.sheetObserver];
+                        pending.sheetObserver = nil;
+                        NSLog(@"Gate passkey token=%llu kind=%@ presenting", (unsigned long long)pending.token, pending.kind);
+                        [pending.controller performRequests];
+                    }];
+            } else {
+                NSLog(@"Gate passkey token=%llu kind=%@ presenting", (unsigned long long)token, kind);
+                [operation.controller performRequests];
+            }
         } else {
             [operation finish:@{@"error": @"Native passkeys require macOS 13 or later"}];
         }
