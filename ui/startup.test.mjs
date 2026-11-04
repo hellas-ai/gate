@@ -29,6 +29,7 @@ test("a rejected first status call displays its cause on an existing error surfa
     window: { __TAURI__: { core: {
       Channel: class {},
       async invoke(command) {
+        if (command === "frontend_debug") return;
         assert.equal(command, "get_status");
         requests++;
         errorSurfacePrecededRequest = nodes.has("#error");
@@ -72,6 +73,7 @@ test("Gateway renders issued and pending keys with recovery actions", async () =
     window: { __TAURI__: { core: {
       Channel: class {},
       async invoke(command) {
+        if (command === "frontend_debug") return;
         if (command === "get_status") return {
           identity: { initialized: true }, provider: { state: "stopped" }, gateway: { state: "stopped" },
         };
@@ -139,6 +141,7 @@ test("Paid Serve publishes standing terms only after owner approval", async () =
     window: { __TAURI__: { core: {
       Channel: class {},
       async invoke(command, args) {
+        if (command === "frontend_debug") return;
         if (command === "get_status") return { identity: { initialized: true },
           provider: { state: "running" }, gateway: { state: "stopped" }, minOmitResponseBlocks: 16 };
         if (command === "provider_view") return { revision: 7, resources: [], upstreams: [], paid: null };
@@ -204,6 +207,7 @@ test("setup defaults to native passkeys and never falls back after a cancelled p
     window: { __TAURI__: { core: {
       Channel: class {},
       async invoke(command) {
+        if (command === "frontend_debug") return;
         if (command === "get_status") return { identity: { initialized: false, detail: "Set up Gate" },
           provider: { state: "stopped" }, gateway: { state: "stopped" }, boundAddresses: [] };
         calls.push(command);
@@ -218,6 +222,11 @@ test("setup defaults to native passkeys and never falls back after a cancelled p
   vm.runInContext(await readFile(new URL("../target/ui-dist/main.js", import.meta.url), "utf8"), context);
   await flush();
   assert.match(nodes.get("#content").innerHTML, /name="software" type="checkbox">/);
+  listeners.get("invalid")({ target: { form: { id: "initialize" }, name: "name" } });
+  await flush();
+  assert.equal(nodes.get("#error").textContent, "Enter your name to create an identity.");
+  assert.equal(dialogs.length, 0, "invalid setup must not open owner approval");
+  assert.deepEqual(calls, [], "invalid setup must not request identity creation");
   const submit = () => listeners.get("submit")({ target: { id: "initialize" }, preventDefault() {} });
   submit(); await flush();
   dialogs[0].returnValue = "approve"; dialogs[0].close(); await flush();

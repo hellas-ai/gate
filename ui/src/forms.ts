@@ -1,4 +1,5 @@
 import type * as T from "./types.ts";
+import { debug } from "./api.ts";
 export const escapeHtml = (value: unknown): string => String(value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c] ?? c));
 export const text = (data: FormData, name: string): string => String(data.get(name) ?? "").trim();
 export const lines = (data: FormData, name: string): string[] => text(data, name).split(/[\n,]/).map(v => v.trim()).filter(Boolean);
@@ -24,8 +25,8 @@ export function client(data: FormData): T.WorkClientConfig {
 export async function approve(summary: string, passkey = true): Promise<boolean> {
   const dialog=document.createElement("dialog"); dialog.innerHTML=`<form method="dialog"><h2>Owner approval</h2><p></p><button value="cancel">Cancel</button><button value="approve">${passkey?"Continue to passkey":"Apply changes"}</button></form>`;
   const p=dialog.querySelector("p");if(p)p.textContent=summary;
-  document.body.append(dialog);dialog.showModal();
-  return new Promise(resolve=>dialog.addEventListener("close",()=>{const accepted=dialog.returnValue==="approve";dialog.remove();resolve(accepted);},{once:true}));
+  document.body.append(dialog);dialog.showModal();debug("approvalShown");
+  return new Promise(resolve=>dialog.addEventListener("close",()=>{const accepted=dialog.returnValue==="approve";debug(accepted?"approvalAccepted":"approvalCancelled");dialog.remove();resolve(accepted);},{once:true}));
 }
 function chainFields(p?:T.PaidClientPolicyInput|T.PaidPolicyInput):string {
   return field("network","Network ID",p?.chain.network)+field("genesisDigest","Independent genesis payload digest",p?.chain.genesisDigest)+field("thresholdIdentity","Independent threshold finality identity (hex)",p?.chain.thresholdIdentity)+area("validators","Six distinct validator RPC URLs (ws:// or wss://)",p?.chain.validators.join("\n"))+

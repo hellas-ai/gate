@@ -10,6 +10,9 @@ async function call<R>(command: string, args?: Record<string, unknown>): Promise
     throw { code: "internal", message: String(error) } satisfies T.ApiError;
   }
 }
+export function debug(event: "setupClicked"|"setupInvalid"|"setupSubmitted"|"approvalShown"|"approvalAccepted"|"approvalCancelled"|"nativeRequested"|"nativeSucceeded"|"uiError"): void {
+  void invoke("frontend_debug", {event}).catch(()=>{});
+}
 export const api = {
   previewApply: (document:T.DesiredState):Promise<T.ApplyPreview> => call("preview_apply",{document}),
   applyDocument: (id:string):Promise<T.ApplyReport> => call("apply_document",{id}),

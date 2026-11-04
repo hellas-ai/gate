@@ -94,3 +94,11 @@ CDHash, environment, provider genesis or replayed assertion must refuse without
 software fallback. Keep the signed application's logs and exact provisioning
 metadata with the acceptance evidence; no external API request is implied by
 binding alone.
+
+## Debugging the setup flow
+
+Launch the app executable with `RUST_LOG=hellas_gate=debug` to log setup button
+clicks, validation failures, submission, approval-dialog decisions and native
+registration results. Frontend diagnostics contain fixed event labels only,
+without form values, private keys or passkey assertion bytes. Capture stdout and
+stderr to a private file alongside the isolated acceptance directory.

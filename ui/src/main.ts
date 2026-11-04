@@ -1,5 +1,5 @@
 import "./style.css";
-import { api } from "./api.ts";
+import { api, debug } from "./api.ts";
 import type * as T from "./types.ts";
 import { escapeHtml as e, field, area, select, text, lines, number, checked, requestId, periodPicker, period, keyInput, targetFields, client, approve, paidFields, paidPool, paidServeFields, paidServe, id } from "./forms.ts";
 const element=document.querySelector<HTMLDivElement>("#app");if(!element)throw new Error("missing app");const root=element;
@@ -9,7 +9,7 @@ let view:View="settings";
 let status:T.AppStatus|null=null;
 let provider:T.ProviderView={revision:0,upstreams:[],resources:[],paid:null};
 let output="";let activeRun="";
-function error(value:unknown):void {const message=value&&typeof value==="object"&&"message" in value?value.message:value;let node=document.querySelector("#error");if(!node){node=document.createElement("p");node.id="error";node.setAttribute("role","alert");root.append(node);}node.textContent=String(message);}
+function error(value:unknown):void {debug("uiError");const message=value&&typeof value==="object"&&"message" in value?value.message:value;let node=document.querySelector("#error");if(!node){node=document.createElement("p");node.id="error";node.setAttribute("role","alert");root.append(node);}node.textContent=String(message);}
 function message(value:string):void {const node=document.querySelector("#message");if(node)node.textContent=value;}
 function secret(value:string,title:string):void {const dialog=document.createElement("dialog");dialog.innerHTML=`<h2>${e(title)}</h2><p>Copy this handoff through a private channel. It is not saved in browser storage.</p><textarea readonly></textarea><form method="dialog"><button>Close</button></form>`;const node=dialog.querySelector("textarea");if(node)node.value=value;document.body.append(dialog);dialog.addEventListener("close",()=>dialog.remove(),{once:true});dialog.showModal();}
 async function render():Promise<void>{
@@ -58,7 +58,7 @@ function updateFunding():void {
   root.querySelectorAll<HTMLFormElement>("#run,#gateway").forEach(form=>{const funding=form.querySelector<HTMLSelectElement>('[name="funding"]')?.value;for(const name of ["accessId","allowance","resource"]){const input=form.querySelector<HTMLInputElement>(`[name="${name}"]`);if(input){input.disabled=funding==="paid";input.required=funding!=="paid";}}for(const name of ["poolId","provider","service","method"]){const input=form.querySelector<HTMLInputElement>(`[name="${name}"]`);if(input){input.disabled=funding!=="paid";input.required=funding==="paid";}}});
 }
 root.addEventListener("change",updateFunding);
-root.addEventListener("click",event=>{const button=(event.target as Element).closest<HTMLButtonElement>("button");if(!button)return;if(button.dataset.view){view=button.dataset.view as View;void render().catch(error);return;}if(button.dataset.action)void action(button).catch(error);});
+root.addEventListener("click",event=>{const button=(event.target as Element).closest<HTMLButtonElement>("button");if(!button)return;if(button.form?.id==="initialize")debug("setupClicked");if(button.dataset.view){view=button.dataset.view as View;void render().catch(error);return;}if(button.dataset.action)void action(button).catch(error);});
 async function action(button:HTMLButtonElement):Promise<void>{
   const action=button.dataset.action;const record=button.dataset.id??"";
   if(action==="disable-paid-serve"){if(!await approve("Disable paid Serve and drain accepted paid work.",false))return;await api.configurePaidServe(provider.revision,null);}
@@ -85,10 +85,14 @@ async function action(button:HTMLButtonElement):Promise<void>{
   else if(action==="clear-history")await api.clearHistory();
   await render();
 }
+root.addEventListener("invalid",event=>{
+  const input=event.target as HTMLInputElement;
+  if(input.form?.id==="initialize") { debug("setupInvalid"); error("Enter your name to create an identity."); }
+},true);
 root.addEventListener("submit",event=>{const form=event.target as HTMLFormElement;if(!form.id)return;event.preventDefault();void submit(form).catch(error);});
 async function submit(form:HTMLFormElement):Promise<void>{
   const data=new FormData(form);const operation=form.id;
-  if(operation==="initialize"){const software=data.has("software");if(!await approve(`Create ${software?"development software":"system passkey"} owner ${text(data,"name")} and initialize this node. ${software?"Software assertions claim user presence only.":"macOS will request passkey creation and owner approvals."}`))return;await (software?api.initializeSoftware:api.initializeNative)(text(data,"name"));}
+  if(operation==="initialize"){debug("setupSubmitted");const software=data.has("software");if(!await approve(`Create ${software?"development software":"system passkey"} owner ${text(data,"name")} and initialize this node. ${software?"Software assertions claim user presence only.":"macOS will request passkey creation and owner approvals."}`))return;if(!software)debug("nativeRequested");await (software?api.initializeSoftware:api.initializeNative)(text(data,"name"));if(!software)debug("nativeSucceeded");}
   else if(operation==="desired"){
     const file=data.get("document");if(!(file instanceof File)||file.size>4*1024*1024)throw new Error("Choose a settings document no larger than 4 MiB");
     const preview=await api.previewApply(JSON.parse(await file.text(),(_key,value:unknown)=>{if(typeof value==="number"&&!Number.isSafeInteger(value))throw new Error("Settings require exact integer values within the supported numeric range");return value;}) as T.DesiredState);

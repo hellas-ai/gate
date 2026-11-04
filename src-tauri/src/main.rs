@@ -38,6 +38,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
+            commands::frontend_debug,
             commands::save_listen_port,
             commands::retry_open,
             commands::restart_gate,
