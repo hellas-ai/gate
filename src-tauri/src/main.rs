@@ -106,6 +106,10 @@ fn main() {
     // The second exit request, emitted after draining, is allowed through.
     let exit = Arc::new(AtomicU8::new(0));
     app.run(move |app, event| {
+        #[cfg(target_os = "macos")]
+        if matches!(&event, tauri::RunEvent::Reopen { .. }) && exit.load(Ordering::SeqCst) == 0 {
+            show_main_window(app);
+        }
         if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
             // Tauri cannot prevent restart. restart_gate drains state before
             // requesting it; keep that ordering in every restart call site.
@@ -137,6 +141,14 @@ fn main() {
     });
 }
 
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open Gate", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -145,12 +157,7 @@ fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .menu(&menu)
         .tooltip("Hellas Gate")
         .on_menu_event(|app, event| match event.id().as_ref() {
-            "open" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            }
+            "open" => show_main_window(app),
             "quit" => app.exit(0),
             _ => {}
         });
