@@ -58,6 +58,13 @@ owner authenticator, is explicit, advances
 the authority generation and invalidates earlier credentials. A failed service
 open can be retried without recovering or replacing the owner.
 
+This version uses the Hellas PR 115 node journal format. Existing journals that
+contain legacy Work resource or capacity mutations may not replay; keep the
+original data and matching Gate/Hellas build. If opening fails, Gate reports the
+error without offering owner recovery or resetting the store. Use a separate
+data directory for a fresh installation; no automatic migration is provided.
+The provider/daemon serving a configured node must use the matching Hellas version.
+
 All private material uses the SDK OS secret store. An unavailable or locked store
 is an error. Private files are used only by isolated headless tests. Public
 configuration, verified cards, offers, trust approvals, replay counters, channel

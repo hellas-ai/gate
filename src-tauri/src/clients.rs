@@ -81,10 +81,19 @@ struct CachedTarget {
 
 // Callers retain this proxy, never a journal owner. Retirement removes the owner,
 // drains its accepted work, and drops its exclusive journal before any reopen.
-pub struct RetirableBackend(std::sync::Mutex<Option<Arc<dyn WorkExecutionBackend>>>);
+pub struct RetirableBackend(
+    std::sync::Mutex<Option<Arc<dyn WorkExecutionBackend>>>,
+    Option<hellas_sdk::iroh::Endpoint>,
+);
 impl RetirableBackend {
     fn new(backend: Arc<dyn WorkExecutionBackend>) -> Arc<Self> {
-        Arc::new(Self(std::sync::Mutex::new(Some(backend))))
+        Arc::new(Self(std::sync::Mutex::new(Some(backend)), None))
+    }
+    fn with_endpoint(
+        backend: Arc<dyn WorkExecutionBackend>,
+        endpoint: hellas_sdk::iroh::Endpoint,
+    ) -> Arc<Self> {
+        Arc::new(Self(std::sync::Mutex::new(Some(backend)), Some(endpoint)))
     }
     fn with_backend<R>(
         &self,
@@ -111,10 +120,15 @@ impl RetirableBackend {
                 )))
             })?
             .take();
-        if let Some(backend) = backend {
-            backend.drain().await?;
+        let result = if let Some(backend) = backend {
+            backend.drain().await
+        } else {
+            Ok(())
+        };
+        if let Some(endpoint) = &self.1 {
+            endpoint.close().await;
         }
-        Ok(())
+        result
     }
 }
 impl WorkExecutionBackend for RetirableBackend {
@@ -402,7 +416,10 @@ impl Clients {
                     held.target.backend.retire().await?;
                 }
                 // Outgoing work has its own SDK-owned transport lifetime.
-                let transport = GrantTransport::remote(self.transport(local, &key).await?).await?;
+                let endpoint =
+                    hellas_sdk::grant_client::bind_endpoint(self.transport(local, &key).await?)
+                        .await?;
+                let transport = GrantTransport::Remote(endpoint.clone());
                 let backend = GrantPool::open(
                     GrantSessionOptions {
                         target: pinned,
@@ -421,7 +438,7 @@ impl Clients {
                 )
                 .await?;
                 Target {
-                    backend: RetirableBackend::new(backend),
+                    backend: RetirableBackend::with_endpoint(backend, endpoint),
                     provider,
                     resource: Some(selected.resource),
                     channel: Some(channel),

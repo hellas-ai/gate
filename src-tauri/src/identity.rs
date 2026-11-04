@@ -14,6 +14,15 @@ use hellas_sdk::{NodeIdentity, kernel::SoftPasskey};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Arc};
 
+#[derive(Debug)]
+pub struct ExistingJournalError;
+impl std::fmt::Display for ExistingJournalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Existing node journal could not be opened. It may require a compatible Gate/Hellas version; preserve the data and restore the matching version or use a separate data directory")
+    }
+}
+impl std::error::Error for ExistingJournalError {}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Installation {
@@ -265,7 +274,9 @@ impl Identity {
         let network = hellas_authority::model::grant::grant_network();
         let now = UnixMillis::now()?;
         let store = if path.join("authority").try_exists()? {
-            NodeStore::open(&path, network, None, now).await?
+            NodeStore::open(&path, network, None, now)
+                .await
+                .context(ExistingJournalError)?
         } else {
             ensure!(
                 self.public.generation == 1,
