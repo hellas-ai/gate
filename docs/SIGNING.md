@@ -13,6 +13,10 @@ The optional attested provider additionally requires macOS 27, an executable
 linked against the macOS 27 SDK or newer, and the
 `com.apple.developer.devicecheck.app-attest-opt-in` entitlement with value
 `CDhash` in the provisioning profile. Gate rejects incomplete App Attest evidence.
+The Mac must also use Full Security with System Integrity Protection enabled.
+The known `ai.hellas.gate` passkey profile does not authorize App Attest; a
+profile for a differently named spike app is not a substitute. The shipping
+attested sharing journey remains untested. See [the privacy boundary](../PRIVACY.md).
 
 The Nix shell uses the Xcode selected by `xcode-select`. Set
 `GATE_DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` before
@@ -107,3 +111,88 @@ clicks, validation failures, submission, approval-dialog decisions and native
 registration results. Frontend diagnostics contain fixed event labels only,
 without form values, private keys or passkey assertion bytes. Capture stdout and
 stderr to a private file alongside the isolated acceptance directory.
+
+## Unattended signing on the Mac (one-time user setup, about 10 minutes)
+
+**UNTESTED:** this dedicated-keychain procedure must pass the plain SSH probe
+below before unattended signing is established. It does not enable App Attest on
+unsupported hardware or replace the provisioning profile.
+
+**USER:** in Keychain Access, export only the Developer ID Application identity
+(certificate **and private key**) to a password-protected `.p12`, kept on the Mac.
+Create the real `ai.hellas.gate` profile with `app-attest-opt-in = [CDhash]` and
+`webcredentials:hellas.ai`; the existing passkey profile is insufficient.
+Do not send the export or its passwords through chat or commit them.
+
+**USER:** in a private bash terminal on the Mac, with shell tracing disabled:
+
+```bash
+set +x
+umask 077
+mkdir -p "$HOME/.gate-signing"
+kc="$HOME/Library/Keychains/gate-signing.keychain-db"
+security create-keychain "$kc" # prompts for a NEW dedicated keychain password
+security unlock-keychain "$kc" # prompts for that password
+security import "$HOME/.gate-signing/developer-id.p12" -k "$kc" -T /usr/bin/codesign
+# import prompts for the export password; never use -A (allow every app)
+read -r -s -p 'Dedicated keychain password: ' gate_keychain_password
+printf '\n'
+security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+  -k "$gate_keychain_password" "$kc"
+# USER approves retaining this unlock secret for unattended use on this Mac.
+printf '%s' "$gate_keychain_password" > "$HOME/.gate-signing/keychain-password"
+chmod 600 "$HOME/.gate-signing/keychain-password"
+unset gate_keychain_password
+security set-keychain-settings -lut 21600 "$kc"
+security find-identity -v -p codesigning "$kc"
+```
+
+`security import` and partition access apply to the dedicated keychain. Leave
+the login/default keychain and its search list alone. The password file enables
+the logged-in user (including that user's agents) to unlock this signing key;
+keep it local, owner-only, and remove it when unattended signing is no longer
+wanted. `security` necessarily receives passwords as process arguments: do not
+trace these commands or run them in a shared diagnostic session.
+
+**AGENT, after setup:** set `SIGNING_MAC` to your SSH destination and replace
+the example Developer ID label below with your identity. Run over **plain SSH**;
+the keychain password stays on the signing Mac:
+
+```bash
+ssh -T "$SIGNING_MAC" 'bash -s' <<'REMOTE'
+set -eu
+set +x
+kc="$HOME/Library/Keychains/gate-signing.keychain-db"
+security unlock-keychain -p "$(cat "$HOME/.gate-signing/keychain-password")" "$kc"
+security find-identity -v -p codesigning "$kc"
+probe=$(mktemp -d)
+trap 'rm -rf "$probe"' EXIT
+cp /usr/bin/true "$probe/gate-signing-probe"
+codesign --force --options runtime --timestamp --keychain "$kc" \
+  --sign 'Developer ID Application: YOUR NAME (TEAMID)' \
+  "$probe/gate-signing-probe"
+codesign --verify --strict --verbose=2 "$probe/gate-signing-probe"
+"$probe/gate-signing-probe"
+REMOTE
+```
+
+Expected outcome, **not a captured result yet**: the identity is valid,
+`codesign --verify` succeeds, and the probe exits zero without a prompt. Record
+actual output. Then sign the provisioned Gate bundle with the same explicit
+keychain and identity and run the live test:
+
+```sh
+SIGN_KEYCHAIN="$HOME/Library/Keychains/gate-signing.keychain-db" \
+SIGN_IDENTITY='Developer ID Application: YOUR NAME (TEAMID)' \
+./macos/sign.sh /path/to/gate.provisionprofile \
+  'target/release/bundle/macos/Hellas Gate.app'
+```
+
+The probe alone proves only SSH
+access to the signing key. Unlock before each automated job; the six-hour
+keychain timeout is not a guarantee that the Mac is awake or reachable.
+
+Apple documents the App Attest server checks in
+[Validating apps that connect to your server](https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server).
+The device certificate chain, signed challenge and build evidence are security
+checks; captured objects are regression inputs, not an alternative trust root.

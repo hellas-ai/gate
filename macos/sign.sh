@@ -78,15 +78,19 @@ do
 done
 
 if [ -z "$identity" ]; then
-    identity=$(security find-identity -v -p codesigning \
+    set --
+    if [ -n "${SIGN_KEYCHAIN:-}" ]; then set -- "$SIGN_KEYCHAIN"; fi
+    identity=$(security find-identity -v -p codesigning "$@" \
         | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' \
         | head -n 1)
 fi
 test -n "$identity"
 
 cp "$profile" "$contents/embedded.provisionprofile"
+set --
+if [ -n "${SIGN_KEYCHAIN:-}" ]; then set -- --keychain "$SIGN_KEYCHAIN"; fi
 codesign --force --options runtime --timestamp --entitlements "$entitlements" \
-    --sign "$identity" "$app"
+    "$@" --sign "$identity" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 signed_entitlements="$temporary/signed-entitlements.plist"
 codesign --display --entitlements :- "$app" >"$signed_entitlements" 2>/dev/null
