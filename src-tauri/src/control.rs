@@ -64,8 +64,7 @@ impl LocalNode {
             hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::Minimal);
         #[cfg(not(test))]
         let endpoint = hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::N0);
-        let settings = crate::settings::load(directory)?;
-        let endpoint = if let Some(port) = settings.listen_port {
+        let endpoint = if let Some(port) = local.composition.listen_port()? {
             endpoint.bind_addr(std::net::SocketAddrV4::new(
                 std::net::Ipv4Addr::UNSPECIFIED,
                 port,

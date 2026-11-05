@@ -716,6 +716,22 @@ mod tests {
             .await
             .unwrap();
         calls.store(0, Ordering::SeqCst);
+        // The shared config declares the account before control APIs add its key.
+        let path = directory.path().join("serve.json");
+        let mut config = hellas_sdk::serve_config::ServeConfig::load(&path).unwrap();
+        config.routes.push(
+            serde_json::from_value(serde_json::json!({"service":"web","method":"get",
+            "destination":{"type":"http","config":{}}}))
+            .unwrap(),
+        );
+        crate::vault::write(&path, &config).unwrap();
+        crate::provider_setup::declare_test_account(
+            directory.path(),
+            "web",
+            "get",
+            &["account"],
+            "http://127.0.0.1:9/metrics",
+        );
         let desired = document();
         let mut conflicted = desired.clone();
         conflicted.gateway_keys[0].request_id =
@@ -753,8 +769,7 @@ mod tests {
             view.upstreams[0].keys[0].secret_reference,
             "declared-source"
         );
-        let metadata =
-            std::fs::read_to_string(directory.path().join("provider-configuration.json")).unwrap();
+        let metadata = std::fs::read_to_string(directory.path().join("serve.json")).unwrap();
         assert!(!metadata.contains("fixture-source-secret"));
         let credential: crate::credentials::PreparedIssue = crate::vault::read(
             &directory

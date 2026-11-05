@@ -1,4 +1,6 @@
-use crate::{clients::Clients, contacts, dto::*, state::AppState, trust, vault::Vault};
+use crate::{
+    clients::Clients, contacts, dto::*, provider_setup, state::AppState, trust, vault::Vault,
+};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures::TryStreamExt;
 use std::sync::{
@@ -180,6 +182,13 @@ async fn real_authorized_fetch_recovers_issuance_preserves_live_composition_quot
         )
         .await
         .unwrap();
+    provider_setup::declare_test_account(
+        a.path(),
+        "openai",
+        "responses",
+        &["first", "second"],
+        "http://127.0.0.1:9/metrics",
+    );
     for (revision, alias) in [(3, "first"), (4, "second")] {
         alice
             .configure_provider(
@@ -423,7 +432,7 @@ async fn real_authorized_fetch_recovers_issuance_preserves_live_composition_quot
     )
     .await
     .unwrap();
-    let before = std::fs::read(a.path().join("provider-configuration.json")).unwrap();
+    let before = std::fs::read(a.path().join("serve.json")).unwrap();
     let authority_before = local
         .session(false)
         .await
@@ -469,10 +478,7 @@ async fn real_authorized_fetch_recovers_issuance_preserves_live_composition_quot
                 .contains("one endpoint cannot mix resource drivers")
                 || failure.to_string().contains("same credential alias")
         );
-        assert_eq!(
-            std::fs::read(a.path().join("provider-configuration.json")).unwrap(),
-            before
-        );
+        assert_eq!(std::fs::read(a.path().join("serve.json")).unwrap(), before);
         assert_eq!(alice.provider_view().await.unwrap().revision, 6);
         assert_eq!(alice.status().await.unwrap().provider.state, "running");
         assert!(!inflight.is_finished());
@@ -569,6 +575,13 @@ async fn gateway_admits_only_current_named_credentials_and_zdr_does_not_archive(
         )
         .await
         .unwrap();
+    provider_setup::declare_test_account(
+        a.path(),
+        "openai",
+        "responses",
+        &["account"],
+        "http://127.0.0.1:9/metrics",
+    );
     alice
         .configure_provider(
             1,
@@ -2221,7 +2234,7 @@ async fn stale_resource_and_retirement_previews_refuse_before_touching_live_work
         tokio::spawn(async move { execute(&active.clients, &active, &pending).await });
     tokio::select! {result=&mut inflight=>panic!("live Fetch failed before reaching the fixture: {result:?}"),result=tokio::time::timeout(std::time::Duration::from_secs(20),upstream.started.notified())=>{result.unwrap();}}
 
-    let metadata = std::fs::read(a.path().join("provider-configuration.json")).unwrap();
+    let metadata = std::fs::read(a.path().join("serve.json")).unwrap();
     let revision = local
         .session(false)
         .await
@@ -2240,7 +2253,7 @@ async fn stale_resource_and_retirement_previews_refuse_before_touching_live_work
         .unwrap_err();
         assert!(error.to_string().contains("revision conflict"));
         assert_eq!(
-            std::fs::read(a.path().join("provider-configuration.json")).unwrap(),
+            std::fs::read(a.path().join("serve.json")).unwrap(),
             metadata
         );
         assert_eq!(
@@ -2283,6 +2296,13 @@ async fn desired_key_resource_and_https_origin_switches_converge_and_reapply_ide
     )
     .await
     .unwrap();
+    provider_setup::declare_test_account(
+        directory.path(),
+        "web",
+        "get",
+        &["old", "new"],
+        "http://127.0.0.1:9/metrics",
+    );
     app.configure_provider(
         1,
         ProviderChange::AddKey {
@@ -2345,14 +2365,14 @@ async fn desired_key_resource_and_https_origin_switches_converge_and_reapply_ide
     let current = app.provider_view().await.unwrap();
     assert_eq!(current.upstreams[0].keys.len(), 1);
     assert_eq!(current.upstreams[0].keys[0].name, "new");
-    let before = std::fs::read(directory.path().join("provider-configuration.json")).unwrap();
+    let before = std::fs::read(directory.path().join("serve.json")).unwrap();
     let again = app.preview_apply(desired.clone()).await.unwrap();
     let reapplied = app.apply_document(&again.id).await.unwrap();
     assert!(reapplied.error.is_none());
     assert_eq!(report.authority_revision, reapplied.authority_revision);
     assert_eq!(
         before,
-        std::fs::read(directory.path().join("provider-configuration.json")).unwrap()
+        std::fs::read(directory.path().join("serve.json")).unwrap()
     );
     desired.expected_provider_revision = report.provider_revision;
     desired.upstreams[0].hosts = vec!["other.example".into()];
@@ -2676,6 +2696,13 @@ async fn same_route_openai_resources_switch_credential_as_one_validated_group() 
     )
     .await
     .unwrap();
+    provider_setup::declare_test_account(
+        directory.path(),
+        "openai",
+        "responses",
+        &["old", "new"],
+        "http://127.0.0.1:9/metrics",
+    );
     app.configure_provider(
         1,
         ProviderChange::AddKey {
@@ -2767,7 +2794,7 @@ async fn same_route_openai_resources_switch_credential_as_one_validated_group() 
     };
     assert_eq!(policies.len(), 2);
     assert!(policies.iter().all(|policy| policy.revision.0 == 2));
-    let bytes = std::fs::read(directory.path().join("provider-configuration.json")).unwrap();
+    let bytes = std::fs::read(directory.path().join("serve.json")).unwrap();
     let preview = app.preview_apply(desired).await.unwrap();
     let again = app.apply_document(&preview.id).await.unwrap();
     assert!(again.error.is_none());
@@ -2776,7 +2803,7 @@ async fn same_route_openai_resources_switch_credential_as_one_validated_group() 
     assert_eq!(again.authority_revision, report.authority_revision);
     assert_eq!(
         bytes,
-        std::fs::read(directory.path().join("provider-configuration.json")).unwrap()
+        std::fs::read(directory.path().join("serve.json")).unwrap()
     );
     app.shutdown().await.unwrap();
 }
@@ -2811,6 +2838,13 @@ async fn stopped_policy_two_start_and_unused_key_cleanup_converge_in_one_apply()
         *max_response_bytes = 8192;
     }
     alice.configure_resource(2, resource).await.unwrap();
+    provider_setup::declare_test_account(
+        a.path(),
+        "web",
+        "get",
+        &["unused"],
+        "http://127.0.0.1:9/metrics",
+    );
     alice
         .configure_provider(
             3,
@@ -2964,6 +2998,13 @@ async fn openai_https_and_paid_share_one_host_and_invalid_paid_settings_preserve
         )
         .await
         .unwrap();
+    provider_setup::declare_test_account(
+        a.path(),
+        "openai",
+        "responses",
+        &["openai"],
+        "http://127.0.0.1:9/metrics",
+    );
     alice
         .configure_provider(
             3,
@@ -3038,15 +3079,12 @@ async fn openai_https_and_paid_share_one_host_and_invalid_paid_settings_preserve
     let applied = alice.apply_document(&preview.id).await.unwrap();
     assert!(applied.error.is_none(), "{applied:?}");
     desired.expected_provider_revision = 6;
-    let bytes = std::fs::read(a.path().join("provider-configuration.json")).unwrap();
+    let bytes = std::fs::read(a.path().join("serve.json")).unwrap();
     let preview = alice.preview_apply(desired).await.unwrap();
     let applied = alice.apply_document(&preview.id).await.unwrap();
     assert!(applied.error.is_none(), "{applied:?}");
     assert!(applied.applied.is_empty());
-    assert_eq!(
-        std::fs::read(a.path().join("provider-configuration.json")).unwrap(),
-        bytes
-    );
+    assert_eq!(std::fs::read(a.path().join("serve.json")).unwrap(), bytes);
     let local = alice.local().await.unwrap();
     let approved = local.coordinator.paid_policy().await.unwrap().unwrap();
     assert_eq!(
@@ -3092,7 +3130,7 @@ async fn openai_https_and_paid_share_one_host_and_invalid_paid_settings_preserve
     let inflight =
         tokio::spawn(async move { execute(&recipient.clients, &recipient, &request).await });
     upstream.started.notified().await;
-    let metadata = std::fs::read(a.path().join("provider-configuration.json")).unwrap();
+    let metadata = std::fs::read(a.path().join("serve.json")).unwrap();
     let mut invalid = paid.clone();
     invalid.policy.max_observation_age_ms = invalid.policy.poll_ms;
     let mut duplicate = paid.clone();
@@ -3104,7 +3142,7 @@ async fn openai_https_and_paid_share_one_host_and_invalid_paid_settings_preserve
     for input in [invalid, duplicate, missing, wrong] {
         assert!(alice.configure_paid_serve(6, Some(input)).await.is_err());
         assert_eq!(
-            std::fs::read(a.path().join("provider-configuration.json")).unwrap(),
+            std::fs::read(a.path().join("serve.json")).unwrap(),
             metadata
         );
         assert_eq!(alice.status().await.unwrap().provider.state, "running");
@@ -3152,6 +3190,13 @@ async fn grant_responses(
         )
         .await
         .unwrap();
+    provider_setup::declare_test_account(
+        &provider.directory,
+        "openai",
+        "responses",
+        &["fixture"],
+        &format!("{}/metrics", origin.url),
+    );
     provider
         .configure_provider(
             revision + 1,
@@ -3313,7 +3358,7 @@ async fn authorized_responses_gateway_enforces_keys_zdr_archive_revocation_and_s
         .keys[0]
         .last_use;
     assert!(used.is_some());
-    let metadata = std::fs::read_to_string(a.path().join("provider-configuration.json")).unwrap();
+    let metadata = std::fs::read_to_string(a.path().join("serve.json")).unwrap();
     assert!(!metadata.contains("fixture-only-secret"));
     let (key, bearer) = bob
         .issue_gateway_key(GatewayKeyInput {
@@ -3479,7 +3524,7 @@ async fn refused_first_paid_policy_cannot_select_the_shared_chain() {
     let pending =
         tokio::spawn(async move { execute(&recipient.clients, &recipient, &request).await });
     upstream.started.notified().await;
-    let metadata = std::fs::read(a.path().join("provider-configuration.json")).unwrap();
+    let metadata = std::fs::read(a.path().join("serve.json")).unwrap();
     let mut http = chain_a.clone();
     http.chain.validators[0] = http.chain.validators[0].replace("ws://", "http://");
     let mut duplicate = chain_a.clone();
@@ -3501,7 +3546,7 @@ async fn refused_first_paid_policy_cannot_select_the_shared_chain() {
         assert!(!local.chain.initialized());
         assert!(!a.path().join("chain").exists());
         assert_eq!(
-            std::fs::read(a.path().join("provider-configuration.json")).unwrap(),
+            std::fs::read(a.path().join("serve.json")).unwrap(),
             metadata
         );
         assert_eq!(alice.status().await.unwrap().provider.state, "running");
@@ -3518,7 +3563,7 @@ async fn refused_first_paid_policy_cannot_select_the_shared_chain() {
     assert!(!local.chain.initialized());
     assert!(!a.path().join("chain").exists());
     assert_eq!(
-        std::fs::read(a.path().join("provider-configuration.json")).unwrap(),
+        std::fs::read(a.path().join("serve.json")).unwrap(),
         metadata
     );
     assert_eq!(alice.status().await.unwrap().provider.state, "running");

@@ -15,13 +15,16 @@ struct Driver {
 }
 impl FetchProvider for Driver {
     fn execution_environment(&self) -> hellas_rpc::ContentId {
-        hellas_reseller::responses_contract().unwrap().manifest_id()
+        hellas_providers::responses_contract()
+            .unwrap()
+            .manifest_id()
     }
     fn run(&self, request: PreparedFetchRequest) -> FetchProviderFuture<'_> {
         Box::pin(async move {
             hellas_providers::execute_responses_request(
                 &self.client,
                 self.endpoint.clone(),
+                request.upstream.as_ref(),
                 "fixture-upstream",
                 request.body.as_bytes().to_vec(),
                 &request.idempotency_key(),
@@ -32,10 +35,11 @@ impl FetchProvider for Driver {
     }
 }
 pub fn provider(origin: &str) -> Arc<dyn FetchProvider> {
-    Arc::new(Driver {
-        endpoint: format!("{origin}/v1/responses").parse().unwrap(),
-        client: hellas_providers::responses_http_client(Default::default()).unwrap(),
-    })
+    let (endpoint, client) = hellas_providers::test_support::https_forward(
+        format!("{origin}/v1/responses").parse().unwrap(),
+        Default::default(),
+    );
+    Arc::new(Driver { endpoint, client })
 }
 pub struct Origin {
     pub url: String,
@@ -69,6 +73,17 @@ impl Origin {
                         assert!(head.len() <= 8192);
                     }
                     let head = String::from_utf8(head).unwrap();
+                    if head.starts_with("GET /metrics ") {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs();
+                        let body = format!(
+                            "llm_account_info{{provider=\"fixture\",upstream=\"openai\",account=\"personal\"}} 1\nllm_quota_data_fresh{{provider=\"fixture\"}} 1\nllm_quota_last_success_timestamp_seconds{{provider=\"fixture\"}} {now}\nllm_quota_utilization_ratio{{provider=\"fixture\",scope=\"all\",window=\"seven_day\"}} 0\n"
+                        );
+                        stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                        return;
+                    }
                     let length: usize = head
                         .lines()
                         .find_map(|l| {

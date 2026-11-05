@@ -7,7 +7,13 @@ pub struct Settings {
     pub listen_port: Option<u16>,
 }
 pub fn load(directory: &Path) -> anyhow::Result<Settings> {
-    Ok(crate::vault::read(&directory.join("settings.json"))?.unwrap_or_default())
+    let path = crate::provider_setup::configuration_path(directory)?;
+    if !path.try_exists()? && std::env::var_os("HELLAS_GATE_CONFIG").is_none() {
+        return Ok(Settings::default());
+    }
+    Ok(Settings {
+        listen_port: hellas_sdk::serve_config::ServeConfig::load(&path)?.port,
+    })
 }
 pub fn save(directory: &Path, port: Option<u16>, current: &[String]) -> anyhow::Result<()> {
     let port = port.filter(|p| *p != 0);
@@ -20,8 +26,16 @@ pub fn save(directory: &Path, port: Option<u16>, current: &[String]) -> anyhow::
             let _probe = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, port))?;
         }
     }
-    crate::vault::write(
-        &directory.join("settings.json"),
-        &Settings { listen_port: port },
-    )
+    let path = crate::provider_setup::configuration_path(directory)?;
+    let mut document = if path.try_exists()? {
+        hellas_sdk::serve_config::ServeConfig::load(&path)?
+    } else {
+        hellas_sdk::serve_config::ServeConfig::empty()
+    };
+    document.port = port;
+    document.revision = document
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("configuration revision overflow"))?;
+    crate::vault::write(&path, &document)
 }

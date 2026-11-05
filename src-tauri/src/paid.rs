@@ -20,7 +20,7 @@ use std::{
 
 pub fn contract(presentation: FetchPresentation) -> anyhow::Result<hellas_rpc::FetchContract> {
     Ok(match presentation {
-        FetchPresentation::Responses => hellas_reseller::responses_contract()?,
+        FetchPresentation::Responses => hellas_providers::responses_contract()?,
         FetchPresentation::Http => hellas_rpc::FetchContract::http()?,
     })
 }

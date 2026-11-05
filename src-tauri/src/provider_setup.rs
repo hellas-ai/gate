@@ -23,9 +23,9 @@ use hellas_rpc::protocol::invocation::{
 };
 use hellas_sdk::{
     FetchRoute, FetchRouteEntry, FetchRoutePolicy, FetchRouteRegistry,
+    grant_config::ResourceFile,
     node_control::{NodeControl, configuration::*, host::*},
 };
-use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     num::NonZeroU64,
@@ -33,8 +33,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-#[derive(Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Default)]
 struct Configuration {
     revision: u64,
     paid: Option<PaidServeInput>,
@@ -42,8 +41,7 @@ struct Configuration {
     endpoints: BTreeMap<String, Endpoint>,
     resources: Vec<ResourceInput>,
 }
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone)]
 struct Endpoint {
     service: String,
     method: String,
@@ -51,8 +49,7 @@ struct Endpoint {
     private: bool,
     keys: BTreeMap<String, Key>,
 }
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone)]
 struct Key {
     origins: Vec<String>,
     paths: Vec<String>,
@@ -66,6 +63,7 @@ struct Key {
 #[derive(Clone)]
 pub struct Composition {
     directory: PathBuf,
+    config_path: PathBuf,
     vault: Vault,
     state: Arc<Mutex<Configuration>>,
     sources: Arc<Mutex<BTreeMap<String, String>>>,
@@ -80,10 +78,21 @@ fn id(domain: &str, name: &str) -> ResourceId {
 }
 impl Composition {
     pub fn open(directory: &Path, vault: Vault) -> anyhow::Result<Self> {
-        let config =
-            vault::read(&directory.join("provider-configuration.json"))?.unwrap_or_default();
+        let config_path = document::path(directory)?;
+        if !config_path.try_exists()? && std::env::var_os("HELLAS_GATE_CONFIG").is_none() {
+            ensure!(
+                !directory.join("provider-configuration.json").try_exists()?,
+                "old Gate composition is unsupported; write serve.json using the SDK v1 schema"
+            );
+            vault::write(
+                &config_path,
+                &hellas_sdk::serve_config::ServeConfig::empty(),
+            )?;
+        }
+        let config = document::view(&document::read(&config_path)?, directory)?;
         Ok(Self {
             directory: directory.to_owned(),
+            config_path,
             vault,
             state: Arc::new(Mutex::new(config)),
             sources: Arc::new(Mutex::new(BTreeMap::new())),
@@ -92,11 +101,12 @@ impl Composition {
         })
     }
     fn snapshot(&self) -> anyhow::Result<Configuration> {
-        Ok(self
+        let fresh = document::view(&document::read(&self.config_path)?, &self.directory)?;
+        *self
             .state
             .lock()
-            .map_err(|_| anyhow::anyhow!("provider configuration lock failed"))?
-            .clone())
+            .map_err(|_| anyhow::anyhow!("provider configuration lock failed"))? = fresh.clone();
+        Ok(fresh)
     }
     fn publish(&self, expected: u64, mut config: Configuration) -> anyhow::Result<()> {
         let mut held = self
@@ -124,15 +134,22 @@ impl Composition {
                 }
             }
         }
-        vault::write(&self.directory.join("provider-configuration.json"), &config)?;
+        document::write(self, &config, &held)?;
         *held = config;
         Ok(())
     }
     pub fn policy(&self, name: &str) -> anyhow::Result<GrantPolicy> {
-        self.validate(&self.snapshot()?)?
+        let doc = document::read(&self.config_path)?;
+        let resource = doc
+            .grants
             .into_iter()
+            .flat_map(|g| g.resources)
             .find(|p| p.name == name)
-            .context("resource is not in the composition catalogue")
+            .context("resource is not in the composition catalogue")?;
+        Ok(document::policy(&resource))
+    }
+    pub fn listen_port(&self) -> anyhow::Result<Option<u16>> {
+        Ok(document::read(&self.config_path)?.port)
     }
     pub fn view(&self) -> anyhow::Result<ProviderView> {
         let config = self.snapshot()?;
@@ -175,21 +192,41 @@ impl Composition {
                 return Ok((policy.revision.0, false));
             }
         }
-        let resource = id("hellas.gate.resource.v1", &input.name);
+        let configured = config
+            .resources
+            .iter()
+            .find(|r| r.name == input.name)
+            .map(|_| self.policy(&input.name))
+            .transpose()?;
+        let resource = configured
+            .as_ref()
+            .map(|p| p.resource)
+            .unwrap_or_else(|| id("hellas.gate.resource.v1", &input.name));
+        let account = configured.as_ref().map(|p| p.account).unwrap_or_else(|| {
+            id(
+                "hellas.gate.account.v1",
+                &route_id(&input.service, &input.method),
+            )
+        });
         let previous = active.iter().find(|policy| policy.resource == resource);
         if let Some(previous) = previous {
             ensure!(
-                previous.account
-                    == id(
-                        "hellas.gate.account.v1",
-                        &route_id(&input.service, &input.method)
-                    ),
+                previous.account == account,
                 "a resource cannot move to another upstream account; choose a new resource name"
             );
         }
-        let revision = previous
-            .map_or(Some(1), |policy| policy.revision.0.checked_add(1))
-            .context("resource revision overflow")?;
+        let baseline = previous
+            .map(|p| p.revision.0)
+            .into_iter()
+            .chain(configured.as_ref().map(|p| p.revision.0))
+            .max();
+        let revision = if !changed && previous.is_none() {
+            baseline.unwrap_or(1)
+        } else {
+            baseline
+                .map_or(Some(1), |r| r.checked_add(1))
+                .context("resource revision overflow")?
+        };
         Ok((
             revision,
             changed || config.policy_revisions.get(&input.name) != Some(&revision),
@@ -325,7 +362,7 @@ impl Composition {
             changed = true;
         }
         if changed {
-            vault::write(&self.directory.join("provider-configuration.json"), &next)?;
+            document::write(self, &next, &held)?;
             *held = next;
         }
         Ok(())
@@ -371,7 +408,7 @@ impl Composition {
             credentials,
         )?)
     }
-    fn validate(&self, config: &Configuration) -> anyhow::Result<Vec<GrantPolicy>> {
+    fn validate(&self, config: &Configuration) -> anyhow::Result<Vec<ResourceFile>> {
         ensure!(
             config.endpoints.len() <= 16,
             "at most 16 endpoints are supported"
@@ -417,6 +454,8 @@ impl Composition {
                 "paid presentation differs from the route implementation"
             );
         }
+        let canonical = document::read(&self.config_path)?;
+        let previous = document::view(&canonical, &self.directory)?;
         let mut names = std::collections::BTreeSet::new();
         let mut policies = Vec::new();
         for resource in &config.resources {
@@ -433,42 +472,97 @@ impl Composition {
                 revision,
                 rates: None,
             };
-            let mut policy = match &resource.resource {
+            if let ResourceKind::OpenAi { credential, .. } = &resource.resource {
+                ensure!(
+                    endpoint.hosts == ["api.openai.com"] && !endpoint.private,
+                    "OpenAI requires its explicit public endpoint"
+                );
+                let key = endpoint
+                    .keys
+                    .get(credential)
+                    .context("select an upstream key")?;
+                ensure!(
+                    key.origins == ["https://api.openai.com"]
+                        && key.paths == ["/v1/responses"]
+                        && key.methods == ["POST"]
+                        && key.header.eq_ignore_ascii_case("authorization")
+                        && key.prefix == "Bearer ",
+                    "OpenAI key must be scoped to POST /v1/responses"
+                );
+            }
+            let existing = canonical
+                .grants
+                .as_ref()
+                .and_then(|g| g.resources.iter().find(|r| r.name == resource.name));
+            if let Some(existing) = existing
+                && previous.resources.iter().any(|r| r == resource)
+                && existing.revision == revision
+            {
+                document::policy(existing).validate()?;
+                continue;
+            }
+            let responses = matches!(resource.resource, ResourceKind::OpenAi { .. });
+            let mut policy = match existing.filter(|p| {
+                if responses {
+                    p.responses.is_some()
+                } else {
+                    p.https.is_some()
+                }
+            }) {
+                Some(existing) => existing.clone(),
+                None => ResourceFile {
+                    resource: existing.map_or(resource_id, |p| p.resource),
+                    account: existing.map_or(account, |p| p.account),
+                    revision,
+                    name: resource.name.clone(),
+                    invocation_policy: InvocationPolicy {
+                        admissions: vec![Admission::Fetch {
+                            admission: FetchAdmission {
+                                route: WorkRoute::sealed_route(
+                                    &resource.service,
+                                    &resource.method,
+                                )?,
+                                contract: if responses {
+                                    hellas_providers::responses_contract()?
+                                } else {
+                                    hellas_rpc::FetchContract::http()?
+                                },
+                                limits: FetchLimits {
+                                    max_request_body_bytes: 64 << 10,
+                                    max_output_events: 4096,
+                                    max_spool_bytes: if responses { 4 << 20 } else { 8 << 20 },
+                                    max_encoded_result_frame: 4 << 20,
+                                    max_encoded_prepared_input: 128 << 10,
+                                },
+                            },
+                        }],
+                        limits: Limits {
+                            max_upload_bytes: 128 << 10,
+                            max_output_bytes: if responses { 1 << 20 } else { 4 << 20 },
+                            max_steps: 1,
+                            execution_timeout_ms: 300_000,
+                        },
+                    },
+                    https: None,
+                    responses: None,
+                    pricing,
+                },
+            };
+            // Apply only represented fields to the canonical resource, including
+            // new resources. Unrepresented policy and limits never round-trip.
+            match &resource.resource {
                 ResourceKind::OpenAi {
                     model,
                     max_output_tokens,
-                    credential,
+                    ..
                 } => {
-                    ensure!(
-                        endpoint.hosts == ["api.openai.com"] && !endpoint.private,
-                        "OpenAI requires its explicit public endpoint"
-                    );
-                    let key = endpoint
-                        .keys
-                        .get(credential)
-                        .context("select an upstream key")?;
-                    ensure!(
-                        key.origins == ["https://api.openai.com"]
-                            && key.paths == ["/v1/responses"]
-                            && key.methods == ["POST"]
-                            && key.header.eq_ignore_ascii_case("authorization")
-                            && key.prefix == "Bearer ",
-                        "OpenAI key must be scoped to POST /v1/responses"
-                    );
-                    hellas_reseller::responses_policy(
-                        resource_id,
-                        account,
-                        revision,
-                        &resource.service,
-                        &resource.method,
-                        ResponsesResource {
-                            model: model.clone(),
-                            max_output_tokens: *max_output_tokens,
-                            settings: Default::default(),
-                        },
-                        pricing,
-                        NonZeroU64::new(300_000).context("invalid job duration")?,
-                    )?
+                    let responses = policy.responses.get_or_insert(ResponsesResource {
+                        model: String::new(),
+                        max_output_tokens: 0,
+                        settings: Default::default(),
+                    });
+                    responses.model = model.clone();
+                    responses.max_output_tokens = *max_output_tokens;
                 }
                 ResourceKind::Https {
                     origin,
@@ -484,63 +578,36 @@ impl Composition {
                             "unknown HTTPS credential alias"
                         );
                     }
-                    let https = HttpsResource {
-                        origin: origin.clone(),
-                        paths: paths.clone(),
-                        methods: methods.clone(),
-                        credential: credential.clone(),
+                    let https = policy.https.get_or_insert(HttpsResource {
+                        origin: String::new(),
+                        paths: vec![],
+                        methods: vec![],
+                        credential: None,
                         tls: hellas_rpc::http_fetch::HttpTls {
-                            roots: if tls_roots.is_empty() {
-                                hellas_rpc::http_fetch::HttpTrustRoots::WebPki
-                            } else {
-                                hellas_rpc::http_fetch::HttpTrustRoots::Certificates {
-                                    der_base64: tls_roots.clone(),
-                                }
-                            },
+                            roots: hellas_rpc::http_fetch::HttpTrustRoots::WebPki,
                             spki_sha256: vec![],
                         },
                         accounting: hellas_authority::model::http_usage::AccountingProfile::None,
                         max_output_tokens: 0,
-                        max_response_bytes: *max_response_bytes,
+                        max_response_bytes: 0,
                         model_policy: None,
+                    });
+                    https.origin = origin.clone();
+                    https.paths = paths.clone();
+                    https.methods = methods.clone();
+                    https.credential = credential.clone();
+                    https.max_response_bytes = *max_response_bytes;
+                    https.tls.roots = if tls_roots.is_empty() {
+                        hellas_rpc::http_fetch::HttpTrustRoots::WebPki
+                    } else {
+                        hellas_rpc::http_fetch::HttpTrustRoots::Certificates {
+                            der_base64: tls_roots.clone(),
+                        }
                     };
-                    https.validate()?;
-                    let route = WorkRoute::sealed_route(&resource.service, &resource.method)?;
-                    let contract = hellas_rpc::FetchContract::http()?;
-                    GrantPolicy {
-                        resource: resource_id,
-                        account,
-                        revision,
-                        name: resource.name.clone(),
-                        invocation_policy: InvocationPolicy {
-                            admissions: vec![Admission::Fetch {
-                                admission: FetchAdmission {
-                                    route,
-                                    contract,
-                                    limits: FetchLimits {
-                                        max_request_body_bytes: 64 << 10,
-                                        max_output_events: 4096,
-                                        max_spool_bytes: 8 << 20,
-                                        max_encoded_result_frame: 4 << 20,
-                                        max_encoded_prepared_input: 128 << 10,
-                                    },
-                                },
-                            }],
-                            limits: Limits {
-                                max_upload_bytes: 128 << 10,
-                                max_output_bytes: 4 << 20,
-                                max_steps: 1,
-                                execution_timeout_ms: 300_000,
-                            },
-                        },
-                        https: Some(https),
-                        responses: None,
-                        pricing,
-                    }
                 }
-            };
-            policy.name = resource.name.clone();
-            policy.validate()?;
+            }
+            policy.revision = revision;
+            document::policy(&policy).validate()?;
             policies.push(policy);
         }
         Ok(policies)
@@ -714,17 +781,8 @@ impl Composition {
         control: NodeControl,
     ) -> anyhow::Result<hellas_sdk::ProviderHandle> {
         let config = self.snapshot()?;
-        let policies = self.validate(&config)?;
-        use hellas_authority::model::grant::configuration::{ConfiguredBudget, NodeConfiguration};
-        let budget = ConfiguredBudget {
-            max_in_flight: std::num::NonZeroU16::new(128).context("invalid capacity")?,
-            limits: vec![],
-        };
-        let accounts = policies
-            .iter()
-            .map(|policy| (policy.account, budget.clone()))
-            .collect();
-        let configuration = NodeConfiguration::new(Some(budget), accounts, policies)?;
+        let doc = document::read(&self.config_path)?;
+        let grants = doc.grants(Some(&self.directory))?;
         let bound = local
             .coordinator
             .provider()
@@ -740,62 +798,61 @@ impl Composition {
             identity.enrollment == bound,
             "bound provider differs from factory identity"
         );
+        let accounts = hellas_providers::account::AccountRegistry::new(&doc.upstream_accounts)?;
         let mut routes = FetchRouteRegistry::new();
-        for endpoint in config.endpoints.values() {
-            let resource = config
-                .resources
-                .iter()
-                .find(|r| r.service == endpoint.service && r.method == endpoint.method);
-            let entry = if let Some(ResourceInput {
-                resource: ResourceKind::OpenAi { credential, .. },
-                ..
-            }) = resource
-            {
-                let key = endpoint
-                    .keys
-                    .get(credential)
-                    .context("upstream key missing")?;
-                let bearer = self.vault.source(&key.reference, "").resolve().await?;
-                let driver: Arc<dyn hellas_executor::FetchProvider> = Arc::new(
-                    hellas_reseller::OpenAiResponsesFetchProvider::with_bearer(bearer)?,
-                );
-                #[cfg(test)]
-                let driver = match self.responses_origin.lock().unwrap().as_ref() {
-                    Some(origin) => crate::responses_fixture::provider(origin),
-                    None => driver,
-                };
-                FetchRouteEntry::new(
-                    crate::usage::track(
-                        driver,
-                        self.clone(),
-                        crate::usage::Key::Fixed(key.reference.clone(), key.fingerprint.clone()),
-                    ),
-                    Arc::new(hellas_reseller::OpenAiResponsesAdaptorFactory::new()?),
-                    FetchRoutePolicy::default(),
-                )?
-            } else {
-                FetchRouteEntry::new(
-                    crate::usage::track(
-                        Arc::new(self.http(endpoint)?),
-                        self.clone(),
+        for route in &doc.routes {
+            let entry = route
+                .destination
+                .clone()
+                .into_entry(route.capabilities.clone().into_policy()?)?;
+            #[cfg(test)]
+            let entry = match (
+                &route.destination,
+                self.responses_origin
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("response fixture lock failed"))?
+                    .as_ref(),
+            ) {
+                (hellas_sdk::serve_config::Destination::OpenAiResponses { .. }, Some(origin)) => {
+                    FetchRouteEntry::new(
+                        crate::responses_fixture::provider(origin),
+                        Arc::new(hellas_providers::OpenAiResponsesAdaptorFactory::new()?),
+                        route.capabilities.clone().into_policy()?,
+                    )?
+                }
+                _ => entry,
+            };
+            let accounting = match &route.destination {
+                hellas_sdk::serve_config::Destination::OpenAiResponses {
+                    credential: credential_name,
+                    ..
+                } => config
+                    .endpoints
+                    .get(&route_id(&route.service, &route.method))
+                    .and_then(|e| e.keys.get(credential_name))
+                    .map(|k| crate::usage::Key::Fixed(k.reference.clone(), k.fingerprint.clone())),
+                hellas_sdk::serve_config::Destination::Http { .. } => config
+                    .endpoints
+                    .get(&route_id(&route.service, &route.method))
+                    .map(|e| {
                         crate::usage::Key::Http(
-                            endpoint
-                                .keys
+                            e.keys
                                 .iter()
-                                .map(|(alias, key)| {
-                                    (
-                                        alias.clone(),
-                                        (key.reference.clone(), key.fingerprint.clone()),
-                                    )
+                                .map(|(alias, k)| {
+                                    (alias.clone(), (k.reference.clone(), k.fingerprint.clone()))
                                 })
                                 .collect(),
-                        ),
-                    ),
-                    Arc::new(HttpFetchAdaptorFactory::new()?),
-                    FetchRoutePolicy::default(),
-                )?
+                        )
+                    }),
+                _ => None,
             };
-            routes.register(FetchRoute::new(&endpoint.service, &endpoint.method), entry)?;
+            let entry = if let Some(key) = accounting {
+                entry.map_provider(|driver| crate::usage::track(driver, self.clone(), key))?
+            } else {
+                entry
+            };
+            let entry = route.bind_accounts(entry, &accounts)?;
+            routes.register(FetchRoute::new(&route.service, &route.method), entry)?;
         }
         let options = hellas_sdk::FetchProviderOptions {
             port: None,
@@ -803,24 +860,27 @@ impl Composition {
             enrollment: identity.enrollment,
             root: identity.root,
             state_directory: self.directory.join("provider"),
-            grants: Some(hellas_sdk::GrantProviderOptions {
-                configuration,
-                max_job_millis: NonZeroU64::new(300_000).context("invalid job duration")?,
+            grants: grants.map(|g| hellas_sdk::GrantProviderOptions {
+                configuration: g.configuration,
+                max_job_millis: g.max_job_millis,
             }),
             routes,
             fetch_max_in_flight: hellas_rpc::DEFAULT_FETCH_MAX_IN_FLIGHT,
             fetch_queue_capacity: hellas_rpc::DEFAULT_FETCH_QUEUE_CAPACITY,
-            paid_work: if let Some(input) = &config.paid {
+            paid_work: if let Some(terms) = &doc.paid {
                 let policy = local
                     .coordinator
                     .paid_policy()
                     .await?
                     .context("approve the standing paid policy before starting paid Serve")?;
                 ensure!(
-                    policy.policy == crate::paid::standing_policy(&input.policy)?,
+                    policy.policy == terms.policy()?,
                     "standing paid settings differ from the owner-approved policy"
                 );
-                let paid = crate::paid::serve_config(&self.directory, input)?;
+                let paid = match &terms.chain {
+                    Some(c) => c.clone().into_config()?,
+                    None => hellas_sdk::client_chain::devnet(&self.directory.join("provider"))?,
+                };
                 let node = local.chain.get(&paid).await?;
                 Some(hellas_sdk::PaidProviderOptions::new(paid, node)?)
             } else {
@@ -1280,12 +1340,238 @@ impl Composition {
 }
 
 #[cfg(test)]
+pub(crate) fn declare_test_account(
+    directory: &Path,
+    service: &str,
+    method: &str,
+    aliases: &[&str],
+    quota_url: &str,
+) {
+    let path = directory.join("serve.json");
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    doc["upstream_accounts"] = serde_json::json!({"fixture":{
+        "ledger":directory.join("account-budget.sqlite"),"window_seconds":86400,"max_requests":10000,
+        "max_tokens":1000000,"max_concurrency":8,"max_request_bytes":65536,"max_output_tokens":256,
+        "accounting":"openai-responses","quota":{"url":quota_url,"provider":"fixture",
+            "upstream":"openai","account":"personal","max_age_seconds":600,
+            "reserve":{"type":"remaining-ratio","minimum":0.2,"scope":"all","windows":["seven_day"]}}
+    }});
+    let route = doc["routes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|r| r["service"] == service && r["method"] == method)
+        .unwrap();
+    route["credential_accounts"] = serde_json::to_value(
+        aliases
+            .iter()
+            .map(|alias| (*alias, "fixture"))
+            .collect::<BTreeMap<_, _>>(),
+    )
+    .unwrap();
+    route["capabilities"] = serde_json::json!({"max_output_tokens":256});
+    vault::write(&path, &doc).unwrap();
+    hellas_sdk::serve_config::ServeConfig::load(&path).unwrap();
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::control::work;
     use crate::state::AppState;
     use hellas_authority::model::grant::admin::{WorkControlCommand, WorkControlReply};
     use hellas_rpc::pb::host::*;
+    #[test]
+    fn canonical_resource_edit_preserves_security_fields_and_untouched_limits() {
+        use hellas_authority::model::grant::resource::{AccountingProfile, PathModelPolicy};
+        let directory = tempfile::tempdir().unwrap();
+        let secrets = tempfile::tempdir().unwrap();
+        let path = directory.path().join("serve.json");
+        vault::write(&path, &serde_json::json!({"version":1,"routes":[{
+            "service":"api","method":"request","destination":{"type":"http","config":{"allowed_hosts":["example.com"]}}
+        }]})).unwrap();
+        let gate = Composition::open(directory.path(), Vault::fixture(secrets.path())).unwrap();
+        let input = ResourceInput {
+            name: "locked".into(),
+            service: "api".into(),
+            method: "request".into(),
+            resource: ResourceKind::Https {
+                origin: "https://example.com".into(),
+                paths: vec!["/chat".into()],
+                methods: vec!["POST".into()],
+                credential: None,
+                max_response_bytes: 4096,
+                tls_roots: vec![],
+            },
+        };
+        gate.catalogue_many(0, vec![input], &[]).unwrap();
+        let mut doc = document::read(&path).unwrap();
+        let resource = &mut doc.grants.as_mut().unwrap().resources[0];
+        resource.resource = ResourceId(Digest::hash(b"imported resource"));
+        resource.account = ResourceId(Digest::hash(b"imported account"));
+        resource.revision = Revision(17);
+        resource.pricing.revision = Revision(17);
+        let imported_ids = (resource.resource, resource.account);
+        let https = resource.https.as_mut().unwrap();
+        https.tls.spki_sha256 = vec!["ab".repeat(32)];
+        https.accounting = AccountingProfile::OpenaiChat;
+        https.max_output_tokens = 16;
+        https.model_policy = Some(vec![PathModelPolicy {
+            path: "/chat".into(),
+            models: vec!["reviewed-model".into()],
+        }]);
+        let mut expected = https.clone();
+        expected.max_response_bytes = 8192;
+        resource.invocation_policy.limits.execution_timeout_ms = 120000;
+        resource.invocation_policy.limits.max_output_bytes = 65536;
+        let expected_policy = resource.invocation_policy.clone();
+        doc.grants.as_mut().unwrap().accounts[0].account = imported_ids.1;
+        doc.routes[0].capabilities.models = vec!["reviewed-model".into()];
+        doc.routes[0].capabilities.max_output_tokens = Some(16);
+        vault::write(&path, &doc).unwrap();
+        let mut edited = gate.snapshot().unwrap().resources.remove(0);
+        let ResourceKind::Https {
+            max_response_bytes, ..
+        } = &mut edited.resource
+        else {
+            panic!("HTTPS")
+        };
+        *max_response_bytes = 8192;
+        gate.catalogue_many(1, vec![edited], &[gate.policy("locked").unwrap()])
+            .unwrap();
+        let saved = document::read(&path).unwrap();
+        let resource = &saved.grants.as_ref().unwrap().resources[0];
+        assert_eq!(resource.https.as_ref(), Some(&expected));
+        assert_eq!((resource.resource, resource.account), imported_ids);
+        assert_eq!(resource.revision, Revision(18));
+        assert_eq!(resource.pricing.revision, Revision(17));
+        assert_eq!(resource.invocation_policy, expected_policy);
+        assert_eq!(
+            saved.routes[0].capabilities.models,
+            doc.routes[0].capabilities.models
+        );
+        assert_eq!(saved.routes[0].capabilities.max_output_tokens, Some(16));
+    }
+    #[test]
+    fn metadata_edit_preserves_a_sealed_destination_without_grant_resources() {
+        let directory = tempfile::tempdir().unwrap();
+        let secrets = tempfile::tempdir().unwrap();
+        let path = directory.path().join("serve.json");
+        vault::write(
+            &path,
+            &serde_json::json!({"version":1,"routes":[{
+                "service":"openai","method":"responses","destination":{"type":"http","config":{}}
+            }]}),
+        )
+        .unwrap();
+        declare_test_account(
+            directory.path(),
+            "openai",
+            "responses",
+            &["personal"],
+            "http://127.0.0.1:9/metrics",
+        );
+        let mut doc = document::read(&path).unwrap();
+        doc.routes[0].destination = serde_json::from_value(serde_json::json!({"type":"open-ai-responses",
+            "credential":"personal","credentials":{"personal":{"secret_env":"GATE_TEST_UNUSED_TOKEN","prefix":"sk-"}}})).unwrap();
+        vault::write(&path, &doc).unwrap();
+        let gate = Composition::open(directory.path(), Vault::fixture(secrets.path())).unwrap();
+        let mut view = gate.snapshot().unwrap();
+        view.endpoints
+            .get_mut("openai/responses")
+            .unwrap()
+            .keys
+            .get_mut("personal")
+            .unwrap()
+            .last_use = Some(42);
+        view.revision += 1;
+        gate.publish(0, view).unwrap();
+        let saved = document::read(&path).unwrap();
+        assert_eq!(
+            serde_json::to_value(&saved.routes[0].destination).unwrap(),
+            serde_json::to_value(&doc.routes[0].destination).unwrap()
+        );
+        assert_eq!(
+            saved.routes[0].credential_metadata["personal"].last_use,
+            Some(42)
+        );
+    }
+    #[test]
+    fn canonical_cli_config_drives_gate_and_external_edits_are_reloaded() {
+        let directory = tempfile::tempdir().unwrap();
+        let secrets = tempfile::tempdir().unwrap();
+        let path = directory.path().join("serve.json");
+        let bytes = br#"{
+            "version":1,"revision":23,"port":18444,
+            "routes":[{"service":"shared","method":"request","destination":{"type":"http","config":{}}}]
+        }"#;
+        // This is the exact SDK loader called by hellas serve --config.
+        let cli = hellas_sdk::serve_config::ServeConfig::from_bytes(bytes).unwrap();
+        vault::write(&path, &cli).unwrap();
+        let gate = Composition::open(directory.path(), Vault::fixture(secrets.path())).unwrap();
+        assert_eq!(gate.listen_port().unwrap(), Some(18444));
+        assert_eq!(gate.snapshot().unwrap().revision, 23);
+        assert_eq!(gate.snapshot().unwrap().endpoints.len(), 1);
+        // A CLI/operator edit to the shared document is visible without a UI
+        // composition export, second loader or application restart.
+        let mut edited = hellas_sdk::serve_config::ServeConfig::load(&path).unwrap();
+        edited.revision = 24;
+        edited.port = Some(18445);
+        vault::write(&path, &edited).unwrap();
+        assert_eq!(gate.listen_port().unwrap(), Some(18445));
+        assert_eq!(gate.snapshot().unwrap().revision, 24);
+    }
+    #[test]
+    fn editing_shared_config_preserves_explicit_credential_trust_roots() {
+        use base64::Engine as _;
+        let directory = tempfile::tempdir().unwrap();
+        let secrets = tempfile::tempdir().unwrap();
+        let roots = hellas_rpc::http_fetch::HttpTrustRoots::Certificates {
+            der_base64: vec![
+                base64::engine::general_purpose::STANDARD
+                    .encode(hellas_attestation::apple_app_attest_root_ca()),
+            ],
+        };
+        // Public certificate bytes only; the environment credential is a
+        // reference and is never resolved by this configuration edit.
+        let value = serde_json::json!({"version":1,"revision":0,"routes":[{
+            "service":"private","method":"request","destination":{"type":"http","config":{
+                "credentials":{"account":{
+                    "allowed_origins":["https://example.com"],"allowed_paths":["/"],
+                    "allowed_methods":["POST"],"header_name":"authorization",
+                    "trust_roots":roots,"secret_env":"GATE_TEST_UNUSED_TOKEN","prefix":"Bearer "
+                }}
+            }}
+        }]});
+        vault::write(&directory.path().join("serve.json"), &value).unwrap();
+        declare_test_account(
+            directory.path(),
+            "private",
+            "request",
+            &["account"],
+            "http://127.0.0.1:9/metrics",
+        );
+        let gate = Composition::open(directory.path(), Vault::fixture(secrets.path())).unwrap();
+        let mut view = gate.snapshot().unwrap();
+        view.revision = 1;
+        gate.publish(0, view).unwrap();
+        let saved =
+            hellas_sdk::serve_config::ServeConfig::load(&directory.path().join("serve.json"))
+                .unwrap();
+        let hellas_sdk::serve_config::Destination::Http { config } = &saved.routes[0].destination
+        else {
+            panic!("HTTP route changed driver")
+        };
+        assert_eq!(
+            config.credentials["account"].trust_roots.as_ref(),
+            Some(&roots)
+        );
+        assert_eq!(
+            config.credentials["account"].source.secret_env.as_deref(),
+            Some("GATE_TEST_UNUSED_TOKEN")
+        );
+    }
     #[tokio::test(flavor = "multi_thread")]
     async fn one_host_mounts_openai_and_https_and_refuses_updates_before_stopping() {
         let directory = tempfile::tempdir().unwrap();
@@ -1330,6 +1616,13 @@ mod tests {
                 .unwrap_err()
                 .code(),
             hellas_wire::WireCode::PermissionDenied
+        );
+        declare_test_account(
+            directory.path(),
+            "openai",
+            "responses",
+            &["account"],
+            "http://127.0.0.1:9/metrics",
         );
         app.configure_provider(
             1,
@@ -1434,8 +1727,7 @@ mod tests {
         assert_eq!(policies.len(), 2);
         assert!(policies.iter().any(|p| p.responses.is_some()));
         assert!(policies.iter().any(|p| p.https.is_some()));
-        let metadata =
-            std::fs::read_to_string(directory.path().join("provider-configuration.json")).unwrap();
+        let metadata = std::fs::read_to_string(directory.path().join("serve.json")).unwrap();
         assert!(!metadata.contains("fixture-upstream-secret"));
         app.shutdown().await.unwrap();
         drop(daily);
@@ -1446,4 +1738,10 @@ mod tests {
         app.set_provider(true).await.unwrap();
         app.shutdown().await.unwrap();
     }
+}
+
+mod document;
+
+pub(crate) fn configuration_path(directory: &Path) -> anyhow::Result<PathBuf> {
+    document::path(directory)
 }

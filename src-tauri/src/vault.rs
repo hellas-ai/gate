@@ -22,6 +22,28 @@ impl Vault {
             SecretStore::headless_files(directory.to_owned(), "gate-test").unwrap(),
         ))
     }
+    pub fn secret_config(&self, key: &str, prefix: &str) -> hellas_providers::HttpSecretConfig {
+        let service = self.0.service().to_owned();
+        let source = match self.0.file_directory() {
+            Some(directory) => hellas_providers::HttpSecretStore::HeadlessFiles {
+                directory: directory.to_owned(),
+                service,
+                key: key.to_owned(),
+            },
+            None => hellas_providers::HttpSecretStore::Native {
+                service,
+                key: key.to_owned(),
+            },
+        };
+        hellas_providers::HttpSecretConfig {
+            secret_env: None,
+            secret_store: Some(source),
+            secret_file: None,
+            secret_field: None,
+            refresh: None,
+            prefix: prefix.to_owned(),
+        }
+    }
     pub fn source(&self, key: &str, prefix: &str) -> hellas_providers::HttpSecret {
         hellas_providers::HttpSecret::Store {
             store: (*self.0).clone(),

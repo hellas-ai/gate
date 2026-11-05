@@ -685,7 +685,7 @@ mod tests {
     #[test]
     fn presentation_refuses_unsupported_or_ambiguous_fetch_admissions() {
         let http = hellas_rpc::FetchContract::http().unwrap();
-        let responses = hellas_reseller::responses_contract().unwrap();
+        let responses = hellas_providers::responses_contract().unwrap();
         for (contract, presentation) in [
             (http.clone(), FetchPresentation::Http),
             (responses, FetchPresentation::Responses),
