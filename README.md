@@ -46,6 +46,7 @@ application pipeline.
 ## Identity, control and custody
 
 First launch creates a system passkey on a signed, domain-associated macOS app.
+Setup then requests one owner assertion to initialize the node. Signing a contact card is a separate, explicit Settings action for when you want to share your identity; successful exports are saved and reused without another approval. Cancelling that action leaves the initialized node usable. Gateway listener access is provisioned only when you explicitly enable Gateway, using that operation's owner-approved session; mounting or reopening Gate never asks for listener approval.
 A separate development option explicitly selects a software identity on any
 platform. Native prompt errors never fall back to software. Interrupted setup
 reuses the saved native credential when retried. Restart uses
@@ -56,6 +57,13 @@ access after fresh owner approval. Offline owner recovery uses the installation'
 owner authenticator, is explicit, advances
 the authority generation and invalidates earlier credentials. A failed service
 open can be retried without recovering or replacing the owner.
+
+This version uses the Hellas PR 115 node journal format. Existing journals that
+contain legacy Work resource or capacity mutations may not replay; keep the
+original data and matching Gate/Hellas build. If opening fails, Gate reports the
+error without offering owner recovery or resetting the store. Use a separate
+data directory for a fresh installation; no automatic migration is provided.
+The provider/daemon serving a configured node must use the matching Hellas version.
 
 All private material uses the SDK OS secret store. An unavailable or locked store
 is an error. Private files are used only by isolated headless tests. Public
@@ -134,3 +142,9 @@ forms. Preview captures the configuration revision; stale previews refuse.
 Applies are sequential: failures report acknowledged effects, unapplied work
 and any uncertain operation separately. Reapplying converges without resetting
 budgets, credentials or journal history.
+
+Gate's application-menu Quit (Cmd-Q on macOS) and tray Quit wait for the local
+host to shut down before exiting. macOS Dock Quit and OS termination can bypass
+this asynchronous shutdown path, as can a force quit. On relaunch, the local
+control listener safely recovers a stale socket while refusing an active listener;
+the identity and other persisted state are retained.

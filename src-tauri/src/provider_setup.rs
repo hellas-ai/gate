@@ -715,6 +715,16 @@ impl Composition {
     ) -> anyhow::Result<hellas_sdk::ProviderHandle> {
         let config = self.snapshot()?;
         let policies = self.validate(&config)?;
+        use hellas_authority::model::grant::configuration::{ConfiguredBudget, NodeConfiguration};
+        let budget = ConfiguredBudget {
+            max_in_flight: std::num::NonZeroU16::new(128).context("invalid capacity")?,
+            limits: vec![],
+        };
+        let accounts = policies
+            .iter()
+            .map(|policy| (policy.account, budget.clone()))
+            .collect();
+        let configuration = NodeConfiguration::new(Some(budget), accounts, policies)?;
         let bound = local
             .coordinator
             .provider()
@@ -794,7 +804,7 @@ impl Composition {
             root: identity.root,
             state_directory: self.directory.join("provider"),
             grants: Some(hellas_sdk::GrantProviderOptions {
-                policies,
+                configuration,
                 max_job_millis: NonZeroU64::new(300_000).context("invalid job duration")?,
             }),
             routes,
@@ -933,7 +943,7 @@ pub async fn configure_resources(
     expected: u64,
     inputs: Vec<ResourceInput>,
 ) -> anyhow::Result<ProviderView> {
-    use hellas_rpc::pb::host::{GetHostStatusRequest, SetMachineCapacityRequest};
+    use hellas_rpc::pb::host::GetHostStatusRequest;
     anyhow::ensure!(
         local.composition.view()?.revision == expected,
         "provider revision conflict"
@@ -968,55 +978,6 @@ pub async fn configure_resources(
         .provider_state(true)
         .await
         .context("restarting provider with the prepared resource catalogue")?;
-    if status.machine.as_ref().is_none_or(|m| m.max_in_flight == 0) {
-        session
-            .track(
-                "Configure machine capacity".into(),
-                true,
-                client.set_machine_capacity(SetMachineCapacityRequest {
-                    authorization: local.authorization(),
-                    expected_revision: status.machine.map_or(0, |m| m.revision),
-                    max_in_flight: 128,
-                    limits: hellas_rpc::protocol::value::canonical_dag_cbor(&Vec::<
-                        hellas_authority::model::grant::budget::Limit,
-                    >::new(
-                    ))?,
-                }),
-            )
-            .await?;
-    }
-    for name in names {
-        let policy = local.composition.policy(&name)?;
-        use hellas_authority::model::grant::{admin::*, budget::*};
-        let account = BudgetNode::Account(policy.account);
-        if session
-            .work(WorkControlCommand::InspectBudget { node: account })
-            .await
-            .is_err()
-        {
-            session
-                .work(WorkControlCommand::ConfigureBudget {
-                    definition: BudgetDef {
-                        node: account,
-                        parent: BudgetNode::Machine,
-                        revision: hellas_auth::authority::Revision(1),
-                        limits: vec![],
-                        max_in_flight: std::num::NonZeroU16::new(128)
-                            .context("invalid account capacity")?,
-                    },
-                })
-                .await
-                .context("configuring the upstream account budget")?;
-        }
-        let configured = session.work(WorkControlCommand::Catalogue).await?;
-        if !matches!(configured, WorkControlReply::Catalogue(ref entries) if entries.contains(&policy))
-        {
-            session
-                .work(WorkControlCommand::ConfigureResource { policy: name })
-                .await
-                .context("activating the resource in Work authority")?;
-        }
-    }
     local.composition.view()
 }
 

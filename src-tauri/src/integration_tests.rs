@@ -133,7 +133,8 @@ async fn real_authorized_fetch_recovers_issuance_preserves_live_composition_quot
         .await
         .unwrap();
     alice.initialize_software("Alice".into()).await.unwrap();
-    let bs = bob.initialize_software("Bob".into()).await.unwrap();
+    bob.initialize_software("Bob".into()).await.unwrap();
+    let bs = bob.export_contact_card().await.unwrap();
     alice.bind_provider(true).await.unwrap();
     alice
         .configure_provider(
@@ -553,7 +554,8 @@ async fn gateway_admits_only_current_named_credentials_and_zdr_does_not_archive(
         .await
         .unwrap();
     alice.initialize_software("Alice".into()).await.unwrap();
-    let bs = bob.initialize_software("Bob".into()).await.unwrap();
+    bob.initialize_software("Bob".into()).await.unwrap();
+    let bs = bob.export_contact_card().await.unwrap();
     alice.bind_provider(true).await.unwrap();
     alice
         .configure_provider(
@@ -1003,7 +1005,7 @@ async fn grant_https(
         )
         .await
         .unwrap();
-    let recipient_status = recipient.status().await.unwrap();
+    let recipient_status = recipient.export_contact_card().await.unwrap();
     let contact = provider
         .add_contact(ContactInput {
             card: recipient_status.identity.contact_card,
@@ -2444,7 +2446,8 @@ async fn late_auth_refusal_reports_committed_share_budgets_and_allowance_exactly
         .unwrap();
     alice.initialize_software("Alice".into()).await.unwrap();
     bob.initialize_software("Bob".into()).await.unwrap();
-    let carol_status = carol.initialize_software("Carol".into()).await.unwrap();
+    carol.initialize_software("Carol".into()).await.unwrap();
+    let carol_status = carol.export_contact_card().await.unwrap();
     grant_https(&alice, &bob, &upstream, "alice", 130).await;
     let contact = alice
         .add_contact(ContactInput {
@@ -2562,7 +2565,7 @@ async fn late_auth_refusal_reports_committed_share_budgets_and_allowance_exactly
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn late_resource_refusal_reports_catalogue_and_restart_then_reapply_activates_authority() {
+async fn provider_restart_publishes_configured_resource_without_runtime_catalogue_mutation() {
     use hellas_authority::model::grant::admin::{WorkControlCommand, WorkControlReply};
     let upstream = Upstream::start().await;
     let a = tempfile::tempdir().unwrap();
@@ -2600,31 +2603,7 @@ async fn late_resource_refusal_reports_catalogue_and_restart_then_reapply_activa
     let report = crate::apply::execute_session(&local, plan, &limited)
         .await
         .unwrap();
-    assert!(report.error.is_some());
-    assert!(
-        report
-            .applied
-            .iter()
-            .any(|operation| operation.contains("Publish resource catalogue"))
-    );
-    assert!(
-        report
-            .applied
-            .iter()
-            .any(|operation| operation.contains("Set provider enabled=false"))
-    );
-    assert!(
-        report
-            .applied
-            .iter()
-            .any(|operation| operation.contains("Set provider enabled=true"))
-    );
-    assert!(
-        report
-            .unapplied
-            .iter()
-            .any(|operation| operation.contains("Work ConfigureResource"))
-    );
+    assert!(report.error.is_none(), "{:?}", report.error);
     assert!(report.uncertain.is_empty());
     let WorkControlReply::Catalogue(active) = local
         .session(false)
@@ -2634,10 +2613,10 @@ async fn late_resource_refusal_reports_catalogue_and_restart_then_reapply_activa
         .await
         .unwrap()
     else {
-        panic!("authority catalogue");
+        panic!("authority catalogue")
     };
-    assert!(active.contains(&original));
-    assert_ne!(local.composition.policy("page").unwrap(), original);
+    assert!(!active.contains(&original));
+    assert!(active.contains(&local.composition.policy("page").unwrap()));
     desired.expected_provider_revision = alice.provider_view().await.unwrap().revision;
     if let ResourceKind::Https {
         max_response_bytes, ..
@@ -2661,8 +2640,8 @@ async fn late_resource_refusal_reports_catalogue_and_restart_then_reapply_activa
     assert!(active.contains(&local.composition.policy("page").unwrap()));
     let policy = local.composition.policy("page").unwrap();
     assert_eq!(
-        policy.revision.0, 2,
-        "failed activation must not consume an authority revision"
+        policy.revision.0, 3,
+        "both successfully published configurations advance the revision"
     );
     assert_eq!(policy.https.as_ref().unwrap().max_response_bytes, 16384);
     let preview = alice.preview_apply(desired).await.unwrap();
@@ -3217,7 +3196,7 @@ async fn grant_responses(
         )
         .await
         .unwrap();
-    let recipient_status = recipient.status().await.unwrap();
+    let recipient_status = recipient.export_contact_card().await.unwrap();
     let contact = provider
         .add_contact(ContactInput {
             card: recipient_status.identity.contact_card,

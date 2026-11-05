@@ -63,6 +63,7 @@ impl Imported {
     }
 }
 fn named(directory: &Path, category: &str, id: &str) -> anyhow::Result<PathBuf> {
+    let id = id.strip_prefix("p256:").unwrap_or(id);
     ensure!(
         !id.is_empty() && id.len() <= 128 && id.bytes().all(|b| b.is_ascii_hexdigit()),
         "invalid record identifier"
@@ -295,12 +296,6 @@ pub async fn share_session(
             "requests per day must be positive"
         );
         for (node, parent, limits, max) in [
-            (
-                account,
-                BudgetNode::Machine,
-                vec![],
-                NonZeroU16::new(128).context("invalid account capacity")?,
-            ),
             (
                 BudgetNode::Pool(pool),
                 account,
@@ -672,6 +667,15 @@ pub async fn set_quota(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn typed_principal_keeps_hex_filename_and_rejects_path_traversal() {
+        let directory = std::path::Path::new("/tmp/gate-test");
+        assert_eq!(
+            super::named(directory, "contacts", "p256:abcd").unwrap(),
+            super::named(directory, "contacts", "abcd").unwrap()
+        );
+        assert!(super::named(directory, "contacts", "p256:../abcd").is_err());
+    }
     use super::*;
     use crate::{state::AppState, vault::Vault};
     use hellas_authority::node::SessionKey;
@@ -689,7 +693,8 @@ mod tests {
             .await
             .unwrap();
         alice.initialize_software("Alice".into()).await.unwrap();
-        let bob_status = bob.initialize_software("Bob".into()).await.unwrap();
+        bob.initialize_software("Bob".into()).await.unwrap();
+        let bob_status = bob.export_contact_card().await.unwrap();
         alice.bind_provider(true).await.unwrap();
         for (i, name) in ["a", "b"].into_iter().enumerate() {
             alice

@@ -160,12 +160,12 @@ impl PreparedIssue {
         Ok(())
     }
 }
-pub async fn gateway_anchor(
+async fn prepare_gateway_anchor(
     directory: &Path,
     node: &NodeCoordinator,
     identity: &Identity,
     vault: &Vault,
-) -> anyhow::Result<hellas_gateway::GatewayAccess> {
+) -> anyhow::Result<PreparedIssue> {
     let path = directory.join("gateway-listener-credential.json");
     let held = match vault::read::<PreparedIssue>(&path)? {
         Some(held) => held,
@@ -207,13 +207,61 @@ pub async fn gateway_anchor(
             .await?
         }
     };
-    held.reconcile(node, identity, vault)
-        .await
-        .context("reconciling gateway listener authority")?;
-    Ok(
-        hellas_gateway::GatewayAccess::new(node.clone(), held.id, held.secret(vault).await?)
-            .await?,
+    validate_gateway_anchor(&held, identity)?;
+    Ok(held)
+}
+
+fn validate_gateway_anchor(held: &PreparedIssue, identity: &Identity) -> anyhow::Result<()> {
+    let scope = held.credential.scope();
+    let permission =
+        hellas_authority::operations::Operation::named(hellas_authority::node::GATEWAY_INVOKE)?
+            .permission(identity.public.authority, None)?;
+    ensure!(
+        held.intent == hellas_auth::Digest::hash(b"hellas.gate.gateway-listener.v1")
+            && held.generation == identity.public.generation
+            && held.credential.holder() == CredentialHolder::Bearer
+            && scope.authority == identity.public.authority
+            && scope.subject == identity.public.owner
+            && scope.permissions == [permission].into()
+            && scope.delegation_depth == 0
+            && scope.issuance.is_none()
+            && scope.expires <= identity.public.owner_scope.expires,
+        "listener credential differs from the scoped gateway intent"
+    );
+    Ok(())
+}
+
+/// Read existing authority only; host startup and restart must never prompt.
+pub async fn load_gateway_anchor(
+    local: &crate::control::LocalNode,
+) -> anyhow::Result<hellas_gateway::GatewayAccess> {
+    let held =
+        vault::read::<PreparedIssue>(&local.directory.join("gateway-listener-credential.json"))?
+            .context("enable Gateway to provision its listener credential")?;
+    validate_gateway_anchor(&held, &local.identity)?;
+    Ok(hellas_gateway::GatewayAccess::new(
+        local.coordinator.clone(),
+        held.id,
+        held.secret(&local.vault).await?,
     )
+    .await?)
+}
+
+/// Reuse the one explicitly approved control session for grant and credential.
+pub async fn provision_gateway_anchor(
+    local: &crate::control::LocalNode,
+    session: &crate::control::Session,
+) -> anyhow::Result<()> {
+    let held = prepare_gateway_anchor(
+        &local.directory,
+        &local.coordinator,
+        &local.identity,
+        &local.vault,
+    )
+    .await?;
+    held.reconcile_session(session, &local.vault).await?;
+    load_gateway_anchor(local).await?;
+    Ok(())
 }
 
 impl PreparedIssue {

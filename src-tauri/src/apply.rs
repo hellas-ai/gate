@@ -317,7 +317,14 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
         !work_needed || running || document.provider_enabled == Some(true),
         "Work administration requires a mounted provider; enable it explicitly"
     );
-    let requires_passkey = paid_changed && paid_change.as_ref().is_some_and(Option::is_some)
+    let requires_passkey = document.gateway_enabled == Some(true)
+        || (document.gateway.is_some()
+            && document.gateway_enabled != Some(false)
+            && status
+                .gateway
+                .as_ref()
+                .is_some_and(|gateway| gateway.state == 2))
+        || paid_changed && paid_change.as_ref().is_some_and(Option::is_some)
         || changes
             .iter()
             .any(|s| !matches!(s.change, ProviderChange::AddKey { .. }))
@@ -564,16 +571,7 @@ pub async fn execute_session(
                     gateway::configure(local, session, enabled, Some(config)).await?;
                 }
                 Step::GatewayState(enabled) => {
-                    session.gateway_state(enabled).await?;
-                    if !enabled {
-                        session
-                            .track(
-                                "Drain and release gateway clients".into(),
-                                false,
-                                local.clients.reset(),
-                            )
-                            .await?;
-                    }
+                    gateway::configure(local, session, enabled, None).await?;
                 }
             }
             Ok(())

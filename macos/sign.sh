@@ -49,9 +49,11 @@ with open(path, "rb") as source:
     entitlements = plistlib.load(source)
 key = "com.apple.developer.associated-domains"
 allowed = entitlements.get(key)
-if not isinstance(allowed, list) or not any(
-    entry in ("*", "webcredentials:hellas.ai") for entry in allowed
-):
+if not (allowed == "*" or (
+    isinstance(allowed, list) and any(
+        entry in ("*", "webcredentials:hellas.ai") for entry in allowed
+    )
+)):
     raise SystemExit("error: profile does not authorize webcredentials:hellas.ai")
 entitlements[key] = ["webcredentials:hellas.ai"]
 with open(path, "wb") as output:

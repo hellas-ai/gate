@@ -64,13 +64,6 @@ impl LocalNode {
             hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::Minimal);
         #[cfg(not(test))]
         let endpoint = hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::N0);
-        let access = crate::credentials::gateway_anchor(
-            directory,
-            &local.coordinator,
-            &local.identity,
-            &local.vault,
-        )
-        .await?;
         let settings = crate::settings::load(directory)?;
         let endpoint = if let Some(port) = settings.listen_port {
             endpoint.bind_addr(std::net::SocketAddrV4::new(
@@ -91,20 +84,34 @@ impl LocalNode {
                 .map(ToString::to_string)
                 .collect(),
         );
-        let host = HostHandle::start(HostOptions {
-            transport: Some(transport),
-            start_provider: false,
-            control: Some((
-                coordinator,
-                hellas_sdk::ProviderControl {
-                    socket,
-                    tls: server,
-                    remote: Default::default(),
-                },
-            )),
-            provider: Some(local.composition.factory(local.clone())),
-            gateway: Some((access, crate::gateway::factory(local.clone()))),
-        })
+        let host = HostHandle::start_with_deferred_gateway(
+            HostOptions {
+                transport: Some(transport),
+                start_provider: false,
+                control: Some((
+                    coordinator,
+                    hellas_sdk::ProviderControl {
+                        socket,
+                        tls: server,
+                        remote: Default::default(),
+                    },
+                )),
+                provider: Some(local.composition.factory(local.clone())),
+                gateway: None,
+            },
+            crate::gateway::factory(local.clone()),
+            Arc::new({
+                let local = local.clone();
+                move || {
+                    let local = local.clone();
+                    Box::pin(async move {
+                        crate::credentials::load_gateway_anchor(&local)
+                            .await
+                            .map_err(Into::into)
+                    })
+                }
+            }),
+        )
         .await?;
         // A committed initialization must authenticate using precisely its prepared ID.
         let status = local

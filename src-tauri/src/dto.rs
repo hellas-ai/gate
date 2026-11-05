@@ -9,6 +9,7 @@ use ts_rs::TS;
 pub struct IdentityStatus {
     pub initialized: bool,
     pub recovery_available: bool,
+    pub journal_error: bool,
     pub principal: String,
     pub fingerprint: String,
     pub node_key: String,

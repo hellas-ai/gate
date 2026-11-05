@@ -51,7 +51,7 @@ jobs:
       - name: Generate and check TypeScript bindings
         run: |
           rm -f -- ui/src/generated/*.ts
-          nix develop --no-update-lock-file --command make bindings
+          nix develop --no-update-lock-file --command cargo test --locked -p hellas-gate --lib --all-features export_bindings
           changes=$(git status --porcelain --untracked-files=all -- ui/src/generated)
           if [[ -n "$changes" ]]; then
             printf '%s\n' "$changes"

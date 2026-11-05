@@ -1,5 +1,5 @@
 import "./style.css";
-import { api } from "./api.ts";
+import { api, debug } from "./api.ts";
 import type * as T from "./types.ts";
 import { escapeHtml as e, field, area, select, text, lines, number, checked, requestId, periodPicker, period, keyInput, targetFields, client, approve, paidFields, paidPool, paidServeFields, paidServe, id } from "./forms.ts";
 const element=document.querySelector<HTMLDivElement>("#app");if(!element)throw new Error("missing app");const root=element;
@@ -8,8 +8,8 @@ type View="run"|"serve"|"contacts"|"gateway"|"trust"|"history"|"settings";
 let view:View="settings";
 let status:T.AppStatus|null=null;
 let provider:T.ProviderView={revision:0,upstreams:[],resources:[],paid:null};
-let output="";let activeRun="";
-function error(value:unknown):void {const message=value&&typeof value==="object"&&"message" in value?value.message:value;let node=document.querySelector("#error");if(!node){node=document.createElement("p");node.id="error";node.setAttribute("role","alert");root.append(node);}node.textContent=String(message);}
+let output="";let activeRun="";let setupPending=false;
+function error(value:unknown):void {debug("uiError");const message=value&&typeof value==="object"&&"message" in value?value.message:value;let node=document.querySelector("#error");if(!node){node=document.createElement("p");node.id="error";node.setAttribute("role","alert");root.append(node);}node.textContent=String(message);}
 function message(value:string):void {const node=document.querySelector("#message");if(node)node.textContent=value;}
 function secret(value:string,title:string):void {const dialog=document.createElement("dialog");dialog.innerHTML=`<h2>${e(title)}</h2><p>Copy this handoff through a private channel. It is not saved in browser storage.</p><textarea readonly></textarea><form method="dialog"><button>Close</button></form>`;const node=dialog.querySelector("textarea");if(node)node.value=value;document.body.append(dialog);dialog.addEventListener("close",()=>dialog.remove(),{once:true});dialog.showModal();}
 async function render():Promise<void>{
@@ -30,9 +30,10 @@ async function render():Promise<void>{
 }
 function settings():string{
   if(!status)return "";const i=status.identity;
+  if(!i.initialized&&i.journalError)return `<h1>Gate could not open</h1><p>${e(i.detail)}</p><button data-action="retry-open">Retry opening existing data</button>`;
   if(!i.initialized&&i.recoveryAvailable)return `<h1>Gate could not open</h1><p>${e(i.detail)}</p>${transportSettings()}<button data-action="retry-open">Retry existing identity and local control</button><p>Offline owner recovery uses the existing owner passkey, advances authority generation and invalidates existing credentials. Reissue device access afterwards.</p><button data-action="recover-owner">Approve offline owner recovery</button>`;
   if(!i.initialized)return `<h1>Set up Gate</h1><p>${e(i.detail)}</p><form id="initialize">${field("name","Your name")}<label><input name="software" type="checkbox">Use a software identity for development instead of a system passkey.</label><button>Create identity</button></form>`;
-  return `<h1>Settings</h1><p>${e(i.detail)}</p><dl><dt>Person fingerprint</dt><dd>${e(i.fingerprint)}</dd><dt>Principal</dt><dd>${e(i.principal)}</dd><dt>This device's node key</dt><dd>${e(i.nodeKey)}</dd><dt>Transport</dt><dd>${e(i.transportId)}</dd><dt>Authority / generation</dt><dd>${e(i.authority)} / ${i.generation}</dd><dt>Provider address</dt><dd>${e(i.providerAddress)}</dd><dt>Provider assurance</dt><dd>${e(i.attestation)}</dd><dt>Local control</dt><dd>${e(status.socketPath)} (pinned TLS and device credential required)</dd><dt>Version</dt><dd>${e(status.version)}</dd></dl><label>Signed person contact card<textarea readonly>${e(i.contactCard)}</textarea></label><p>Share the card and confirm the device node key separately. The card identifies a person.</p>${transportSettings()}<h2>CLI device access</h2><form id="admin-access">${requestId()}${field("label","CLI device label")}${field("holder","Confirmed CLI device node key")}${periodPicker()}<button>Approve device-bound administrative credential</button></form><h2>Apply desired settings</h2><p>Import a typed document with vault references for existing upstream secrets. Review every operation before applying. Applied operations remain committed if a later one fails.</p><form id="desired"><label>Desired settings document<input name="document" type="file" accept=".json,application/json" required></label><button>Preview changes</button></form><pre id="apply-report"></pre><p>System passkeys use macOS verification prompts. Provider attestation is configured separately.</p>`;
+  return `<h1>Settings</h1><p>${e(i.detail)}</p><dl><dt>Person fingerprint</dt><dd>${e(i.fingerprint)}</dd><dt>Principal</dt><dd>${e(i.principal)}</dd><dt>This device's node key</dt><dd>${e(i.nodeKey)}</dd><dt>Transport</dt><dd>${e(i.transportId)}</dd><dt>Authority / generation</dt><dd>${e(i.authority)} / ${i.generation}</dd><dt>Provider address</dt><dd>${e(i.providerAddress)}</dd><dt>Provider assurance</dt><dd>${e(i.attestation)}</dd><dt>Local control</dt><dd>${e(status.socketPath)} (pinned TLS and device credential required)</dd><dt>Version</dt><dd>${e(status.version)}</dd></dl>${i.contactCard?`<label>Signed person contact card<textarea readonly>${e(i.contactCard)}</textarea></label><p>Share the card and confirm the device node key separately. The card identifies a person.</p>`:`<p>Create a signed contact card when you want to share your identity with someone. This requires one owner approval.</p><button data-action="export-contact-card">Create contact card</button>`}${transportSettings()}<h2>CLI device access</h2><form id="admin-access">${requestId()}${field("label","CLI device label")}${field("holder","Confirmed CLI device node key")}${periodPicker()}<button>Approve device-bound administrative credential</button></form><h2>Apply desired settings</h2><p>Import a typed document with vault references for existing upstream secrets. Review every operation before applying. Applied operations remain committed if a later one fails.</p><form id="desired"><label>Desired settings document<input name="document" type="file" accept=".json,application/json" required></label><button>Preview changes</button></form><pre id="apply-report"></pre><p>System passkeys use macOS verification prompts. Provider attestation is configured separately.</p>`;
 }
 function transportSettings():string {return `<h2>Host UDP port</h2><p>Active sockets: ${e(status?.boundAddresses?.join(", ")||"not bound")}. Saving affects the next start; restart drains the host and Run clients first.</p><form id="listen-port">${field("port","Port (0 selects automatically)",String(status?.listenPort??0),"number")}<button>Save for next start</button></form><button data-action="restart">Drain and restart Gate</button>`;}
 function serve():string{
@@ -58,10 +59,11 @@ function updateFunding():void {
   root.querySelectorAll<HTMLFormElement>("#run,#gateway").forEach(form=>{const funding=form.querySelector<HTMLSelectElement>('[name="funding"]')?.value;for(const name of ["accessId","allowance","resource"]){const input=form.querySelector<HTMLInputElement>(`[name="${name}"]`);if(input){input.disabled=funding==="paid";input.required=funding!=="paid";}}for(const name of ["poolId","provider","service","method"]){const input=form.querySelector<HTMLInputElement>(`[name="${name}"]`);if(input){input.disabled=funding!=="paid";input.required=funding==="paid";}}});
 }
 root.addEventListener("change",updateFunding);
-root.addEventListener("click",event=>{const button=(event.target as Element).closest<HTMLButtonElement>("button");if(!button)return;if(button.dataset.view){view=button.dataset.view as View;void render().catch(error);return;}if(button.dataset.action)void action(button).catch(error);});
+root.addEventListener("click",event=>{const button=(event.target as Element).closest<HTMLButtonElement>("button");if(!button)return;if(button.form?.id==="initialize")debug("setupClicked");if(button.dataset.view){view=button.dataset.view as View;void render().catch(error);return;}if(button.dataset.action)void action(button).catch(error);});
 async function action(button:HTMLButtonElement):Promise<void>{
   const action=button.dataset.action;const record=button.dataset.id??"";
   if(action==="disable-paid-serve"){if(!await approve("Disable paid Serve and drain accepted paid work.",false))return;await api.configurePaidServe(provider.revision,null);}
+  else if(action==="export-contact-card"){if(button.disabled)return;button.disabled=true;try{if(!await approve("Sign a contact card containing your identity and display name for sharing. This grants no access."))return;button.textContent="Waiting for owner approval…";await api.exportContactCard();}finally{button.disabled=false;button.textContent="Create contact card";}}
   else if(action==="retry-open")await api.retryOpen();
   else if(action==="restart"){if(!await approve("Drain the host and accepted Run work, then restart Gate with the saved UDP port.",false))return;await api.restart();return;}
   else if(action==="retry"){await render();return;}
@@ -85,10 +87,14 @@ async function action(button:HTMLButtonElement):Promise<void>{
   else if(action==="clear-history")await api.clearHistory();
   await render();
 }
-root.addEventListener("submit",event=>{const form=event.target as HTMLFormElement;if(!form.id)return;event.preventDefault();void submit(form).catch(error);});
+root.addEventListener("invalid",event=>{
+  const input=event.target as HTMLInputElement;
+  if(input.form?.id==="initialize") { debug("setupInvalid"); error("Enter your name to create an identity."); }
+},true);
+root.addEventListener("submit",event=>{const form=event.target as HTMLFormElement;if(!form.id)return;event.preventDefault();if(form.id==="initialize"){if(setupPending)return;setupPending=true;const button=form.querySelector<HTMLButtonElement>("button[type=submit],button:not([type])");if(button){button.disabled=true;button.textContent="Setting up identity…";}void submit(form).catch(error).finally(()=>{setupPending=false;if(button){button.disabled=false;button.textContent="Create identity";}});return;}void submit(form).catch(error);});
 async function submit(form:HTMLFormElement):Promise<void>{
   const data=new FormData(form);const operation=form.id;
-  if(operation==="initialize"){const software=data.has("software");if(!await approve(`Create ${software?"development software":"system passkey"} owner ${text(data,"name")} and initialize this node. ${software?"Software assertions claim user presence only.":"macOS will request passkey creation and owner approvals."}`))return;await (software?api.initializeSoftware:api.initializeNative)(text(data,"name"));}
+  if(operation==="initialize"){debug("setupSubmitted");const software=data.has("software");if(!await approve(`Create ${software?"development software":"system passkey"} owner ${text(data,"name")} and initialize this node. ${software?"Software assertions claim user presence only.":"macOS will create a passkey, then request one owner approval to initialize this node. A contact card can be signed later when you choose to share it."}`))return;if(!software)debug("nativeRequested");await (software?api.initializeSoftware:api.initializeNative)(text(data,"name"));if(!software)debug("nativeSucceeded");}
   else if(operation==="desired"){
     const file=data.get("document");if(!(file instanceof File)||file.size>4*1024*1024)throw new Error("Choose a settings document no larger than 4 MiB");
     const preview=await api.previewApply(JSON.parse(await file.text(),(_key,value:unknown)=>{if(typeof value==="number"&&!Number.isSafeInteger(value))throw new Error("Settings require exact integer values within the supported numeric range");return value;}) as T.DesiredState);
@@ -105,7 +111,7 @@ async function submit(form:HTMLFormElement):Promise<void>{
   else if(operation==="access")await api.importAccess(text(data,"bundle"));
   else if(operation==="trust")await api.approveTrust({id:text(data,"id"),expectedRevision:number(data,"revision"),genesis:text(data,"genesis"),apple:checked(data,"apple"),appId:text(data,"appId"),cdHashes:lines(data,"cdHashes"),reason:text(data,"reason")});
   else if(operation==="gateway-key"){if(!await approve(`Issue gateway.invoke-only key ${text(data,"label")} for ${period(data)}.`))return;const [key,bearer]=await api.issueGatewayKey({requestId:text(data,"requestId"),label:text(data,"label"),period:period(data)});secret(bearer,`Gateway key ${key.id}, expires ${new Date(key.expires).toLocaleString()}`);}
-  else if(operation==="gateway"){const httpRoutes:T.HttpRouteInput[]=text(data,"mode")==="http"?[{path:text(data,"path"),method:text(data,"httpMethod"),url:text(data,"url"),credential:text(data,"credential")||null,maxResponseBytes:number(data,"bytes"),tlsRoots:[]}]:[];await api.setGateway(true,{client:client(data),httpRoutes,port:number(data,"port"),zdr:checked(data,"zdr")});}
+  else if(operation==="gateway"){if(!await approve("Enable Gateway using a listener credential scoped only to gateway.invoke. One owner approval provisions its access if needed."))return;const httpRoutes:T.HttpRouteInput[]=text(data,"mode")==="http"?[{path:text(data,"path"),method:text(data,"httpMethod"),url:text(data,"url"),credential:text(data,"credential")||null,maxResponseBytes:number(data,"bytes"),tlsRoots:[]}]:[];await api.setGateway(true,{client:client(data),httpRoutes,port:number(data,"port"),zdr:checked(data,"zdr")});}
   else if(operation==="listen-port")await api.saveListenPort(number(data,"port")||null);
   else if(operation==="paid-serve"){
     const input=paidServe(data),p=input.policy;

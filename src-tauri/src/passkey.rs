@@ -95,6 +95,7 @@ fn field<'a>(
 }
 impl NativePasskey {
     pub async fn register(name: &str) -> anyhow::Result<Self> {
+        tracing::debug!("requesting native passkey registration");
         let challenge = Digest::from_bytes(crate::identity::random()?);
         let reply = request(serde_json::json!({
             "kind": "register", "name": name,
@@ -189,6 +190,7 @@ impl Authenticator for NativePasskey {
         PublicKey::from_sec1(&self.public_key).map_err(|_| AuthorityError::Credential)
     }
     async fn assert(&self, challenge: Digest) -> Result<PasskeyAssertion, AuthorityError> {
+        tracing::debug!("requesting native passkey assertion");
         let reply = request(serde_json::json!({
             "kind": "assert", "challenge": STANDARD.encode(challenge.as_bytes()),
             "credential_id": STANDARD.encode(&self.credential_id),
@@ -198,8 +200,10 @@ impl Authenticator for NativePasskey {
             tracing::warn!(%error, "native passkey approval failed");
             AuthorityError::Credential
         })?;
-        self.assertion(reply, challenge)
-            .map_err(|_| AuthorityError::Credential)
+        self.assertion(reply, challenge).map_err(|error| {
+            tracing::warn!(%error, "native passkey assertion rejected");
+            AuthorityError::Credential
+        })
     }
 }
 /// Stop pending prompts before shutdown waits for an operation holding a lock.

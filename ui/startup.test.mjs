@@ -29,6 +29,7 @@ test("a rejected first status call displays its cause on an existing error surfa
     window: { __TAURI__: { core: {
       Channel: class {},
       async invoke(command) {
+        if (command === "frontend_debug") return;
         assert.equal(command, "get_status");
         requests++;
         errorSurfacePrecededRequest = nodes.has("#error");
@@ -72,6 +73,7 @@ test("Gateway renders issued and pending keys with recovery actions", async () =
     window: { __TAURI__: { core: {
       Channel: class {},
       async invoke(command) {
+        if (command === "frontend_debug") return;
         if (command === "get_status") return {
           identity: { initialized: true }, provider: { state: "stopped" }, gateway: { state: "stopped" },
         };
@@ -139,6 +141,7 @@ test("Paid Serve publishes standing terms only after owner approval", async () =
     window: { __TAURI__: { core: {
       Channel: class {},
       async invoke(command, args) {
+        if (command === "frontend_debug") return;
         if (command === "get_status") return { identity: { initialized: true },
           provider: { state: "running" }, gateway: { state: "stopped" }, minOmitResponseBlocks: 16 };
         if (command === "provider_view") return { revision: 7, resources: [], upstreams: [], paid: null };
@@ -204,6 +207,7 @@ test("setup defaults to native passkeys and never falls back after a cancelled p
     window: { __TAURI__: { core: {
       Channel: class {},
       async invoke(command) {
+        if (command === "frontend_debug") return;
         if (command === "get_status") return { identity: { initialized: false, detail: "Set up Gate" },
           provider: { state: "stopped" }, gateway: { state: "stopped" }, boundAddresses: [] };
         calls.push(command);
@@ -218,13 +222,90 @@ test("setup defaults to native passkeys and never falls back after a cancelled p
   vm.runInContext(await readFile(new URL("../target/ui-dist/main.js", import.meta.url), "utf8"), context);
   await flush();
   assert.match(nodes.get("#content").innerHTML, /name="software" type="checkbox">/);
-  const submit = () => listeners.get("submit")({ target: { id: "initialize" }, preventDefault() {} });
-  submit(); await flush();
+  listeners.get("invalid")({ target: { form: { id: "initialize" }, name: "name" } });
+  await flush();
+  assert.equal(nodes.get("#error").textContent, "Enter your name to create an identity.");
+  assert.equal(dialogs.length, 0, "invalid setup must not open owner approval");
+  assert.deepEqual(calls, [], "invalid setup must not request identity creation");
+  const button = { disabled: false };
+  const form = { id: "initialize", querySelector() { return button; } };
+  const submit = () => listeners.get("submit")({ target: form, preventDefault() {} });
+  submit(); submit(); await flush();
+  assert.equal(button.disabled, true);
+  assert.equal(dialogs.length, 1, "duplicate setup must not open another approval");
   dialogs[0].returnValue = "approve"; dialogs[0].close(); await flush();
   assert.deepEqual(calls, ["initialize_native"]);
+  assert.equal(button.disabled, false);
   assert.equal(nodes.get("#error").textContent, "Passkey authorization cancelled");
   values.software = "on";
   submit(); await flush();
   dialogs[1].returnValue = "approve"; dialogs[1].close(); await flush();
   assert.deepEqual(calls, ["initialize_native", "initialize_software"]);
+});
+
+test("contact card is created only after explicit approval and cancellation preserves setup", async () => {
+  const nodes = new Map(), listeners = new Map(), dialogs = [], calls = [];
+  let card = "", reject = true;
+  const root = {
+    set innerHTML(value) {
+      for (const id of ["error", "content", "rail-status", "message"])
+        if (value.includes(`id="${id}"`)) nodes.set(`#${id}`, { innerHTML: "", textContent: "" });
+    },
+    addEventListener(name, handler) { listeners.set(name, handler); },
+    querySelectorAll() { return []; },
+    append(node) { nodes.set(`#${node.id}`, node); },
+  };
+  nodes.set("#app", root);
+  const context = vm.createContext({
+    crypto: { getRandomValues(value) { value.fill(1); return value; } },
+    document: {
+      querySelector(selector) { return nodes.get(selector) ?? null; },
+      body: { append() {} },
+      createElement() { return {
+        querySelector() { return { textContent: "" }; }, showModal() { dialogs.push(this); },
+        addEventListener(_name, handler) { this.close = handler; }, remove() {},
+      }; },
+    },
+    window: { __TAURI__: { core: {
+      Channel: class {},
+      async invoke(command) {
+        if (command === "frontend_debug") return;
+        if (command === "get_status") return { identity: { initialized: true, contactCard: card },
+          provider: { state: "running" }, gateway: { state: "stopped" }, boundAddresses: [] };
+        calls.push(command);
+        if (command === "export_contact_card") {
+          if (reject) throw { message: "Owner approval cancelled" };
+          card = "signed-card"; return {};
+        }
+        throw new Error(`unexpected command ${command}`);
+      },
+    } } },
+    setInterval() { return 0; },
+  });
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  vm.runInContext(await readFile(new URL("../target/ui-dist/main.js", import.meta.url), "utf8"), context);
+  await flush();
+  assert.match(nodes.get("#content").innerHTML, /Create contact card/);
+  assert.deepEqual(calls, [], "status does not sign a card");
+  const button = { dataset: { action: "export-contact-card" }, disabled: false };
+  const click = () => listeners.get("click")({ target: { closest() { return button; } } });
+  click(); await flush();
+  assert.equal(button.disabled, true);
+  click(); await flush();
+  assert.equal(dialogs.length, 1, "repeated clicks do not queue approvals");
+  assert.deepEqual(calls, []);
+  dialogs[0].returnValue = "cancel"; dialogs[0].close(); await flush();
+  assert.equal(button.disabled, false);
+  assert.deepEqual(calls, [], "cancelled intent never requests a signature");
+  click(); await flush();
+  dialogs[1].returnValue = "approve"; dialogs[1].close(); await flush();
+  assert.equal(nodes.get("#error").textContent, "Owner approval cancelled");
+  assert.match(nodes.get("#content").innerHTML, /Create contact card/);
+  assert.equal(button.disabled, false);
+  reject = false;
+  click(); await flush();
+  dialogs[2].returnValue = "approve"; dialogs[2].close(); await flush();
+  assert.deepEqual(calls, ["export_contact_card", "export_contact_card"]);
+  assert.match(nodes.get("#content").innerHTML, /signed-card/);
+  assert.doesNotMatch(nodes.get("#content").innerHTML, /data-action="export-contact-card"/);
 });

@@ -1,7 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![recursion_limit = "256"]
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, Ordering},
+};
 
 use hellas_gate::commands;
 use hellas_gate::state::AppState;
@@ -19,16 +22,29 @@ fn main() {
 
     let result = tauri::Builder::default()
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
+            let data_dir = match std::env::var_os("HELLAS_GATE_DATA_DIR") {
+                Some(path) => {
+                    let path = std::path::PathBuf::from(path);
+                    if !path.is_absolute() {
+                        return Err("HELLAS_GATE_DATA_DIR must be an absolute path".into());
+                    }
+                    path
+                }
+                None => app.path().app_data_dir()?,
+            };
             create_private_directory(&data_dir)?;
             let state = Arc::new(AppState::open(&data_dir)?);
             app.manage(state.clone());
 
+            #[cfg(target_os = "macos")]
+            install_macos_menu(app)?;
             install_tray(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
+            commands::export_contact_card,
+            commands::frontend_debug,
             commands::save_listen_port,
             commands::retry_open,
             commands::restart_gate,
@@ -80,11 +96,96 @@ fn main() {
                 }
             }
         })
-        .run(tauri::generate_context!());
-    if let Err(error) = result {
-        tracing::error!(%error, "Gate failed");
-        std::process::exit(1);
+        .build(tauri::generate_context!());
+    let app = match result {
+        Ok(app) => app,
+        Err(error) => {
+            tracing::error!(%error, "Gate failed");
+            std::process::exit(1);
+        }
+    };
+    // Tauri exit requests (including our Cmd-Q menu and tray) drain the host.
+    // The second exit request, emitted after draining, is allowed through.
+    let exit = Arc::new(AtomicU8::new(0));
+    app.run(move |app, event| {
+        #[cfg(target_os = "macos")]
+        if matches!(&event, tauri::RunEvent::Reopen { .. }) && exit.load(Ordering::SeqCst) == 0 {
+            show_main_window(app);
+        }
+        if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+            // Tauri cannot prevent restart. restart_gate drains state before
+            // requesting it; keep that ordering in every restart call site.
+            if code == Some(tauri::RESTART_EXIT_CODE) || exit.load(Ordering::SeqCst) == 2 {
+                return;
+            }
+            api.prevent_exit();
+            if exit
+                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return;
+            }
+            tracing::info!("Gate graceful shutdown requested");
+            let app = app.clone();
+            let state = app.state::<Arc<AppState>>().inner().clone();
+            let exit = exit.clone();
+            tauri::async_runtime::spawn(async move {
+                let code = match state.shutdown().await {
+                    Ok(_) => {
+                        tracing::info!("Gate graceful shutdown completed");
+                        code.unwrap_or(0)
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "Gate shutdown failed");
+                        1
+                    }
+                };
+                exit.store(2, Ordering::SeqCst);
+                app.exit(code);
+            });
+        }
+    });
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
     }
+}
+
+/// Muda's predefined macOS Quit calls NSApplication.terminate directly,
+/// bypassing Tauri ExitRequested. Use an ordinary action to enter our drain.
+#[cfg(target_os = "macos")]
+fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{PredefinedMenuItem, Submenu};
+    let menu = Menu::default(app.handle())?;
+    // Keep Tauri's Edit/View/Window/Help menus and replace its application menu.
+    menu.remove_at(0)?;
+    let application = Submenu::with_items(
+        app,
+        "Hellas Gate",
+        true,
+        &[
+            &PredefinedMenuItem::about(app, Some("About Hellas Gate"), None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "gate-quit", "Quit Hellas Gate", true, Some("Cmd+Q"))?,
+        ],
+    )?;
+    menu.insert(&application, 0)?;
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, event| {
+        if event.id().as_ref() == "gate-quit" {
+            app.exit(0);
+        }
+    });
+    Ok(())
 }
 
 fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
@@ -95,26 +196,8 @@ fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .menu(&menu)
         .tooltip("Hellas Gate")
         .on_menu_event(|app, event| match event.id().as_ref() {
-            "open" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            }
-            "quit" => {
-                let app = app.clone();
-                let state = app.state::<Arc<AppState>>().inner().clone();
-                tauri::async_runtime::spawn(async move {
-                    match state.shutdown().await {
-                        Ok(false) => {}
-                        Ok(true) => app.exit(0),
-                        Err(error) => {
-                            tracing::error!(%error, "Gate shutdown failed");
-                            app.exit(1);
-                        }
-                    }
-                });
-            }
+            "open" => show_main_window(app),
+            "quit" => app.exit(0),
             _ => {}
         });
     if let Some(icon) = app.default_window_icon() {

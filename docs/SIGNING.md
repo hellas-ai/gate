@@ -65,6 +65,24 @@ and [associated domains documentation](https://developer.apple.com/documentation
 
 ## Native acceptance
 
+Install the signed app under `~/Applications` or `/Applications` and launch it
+through LaunchServices before testing passkeys. Directly running a build under
+`/tmp` can leave the app absent from macOS's associated-domain database even
+when its signature and the website association are correct.
+
+Use a fresh data directory to keep an acceptance identity separate from an
+existing Gate installation. For example:
+
+```sh
+open -n "$HOME/Applications/Hellas Gate Native Acceptance.app" \
+  --env "HELLAS_GATE_DATA_DIR=$TMPDIR/gate-native-acceptance" \
+  --env RUST_LOG=hellas_gate=debug
+```
+
+Keep the same directory for restart and recovery checks. The directory also
+scopes the SDK secret-store namespace; the default app data is not migrated or
+removed. Do not run two Gate processes against the same data directory.
+
 Platform compilation does not prove a provisioned App Attest enrollment or a
 native passkey prompt. On a signed and associated macOS app, register a passkey,
 confirm user verification, restart, and approve an assertion for the same owner;
@@ -81,3 +99,11 @@ CDHash, environment, provider genesis or replayed assertion must refuse without
 software fallback. Keep the signed application's logs and exact provisioning
 metadata with the acceptance evidence; no external API request is implied by
 binding alone.
+
+## Debugging the setup flow
+
+Launch the installed app with `RUST_LOG=hellas_gate=debug` to log setup button
+clicks, validation failures, submission, approval-dialog decisions and native
+registration results. Frontend diagnostics contain fixed event labels only,
+without form values, private keys or passkey assertion bytes. Capture stdout and
+stderr to a private file alongside the isolated acceptance directory.

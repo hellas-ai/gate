@@ -10,6 +10,9 @@ async function call<R>(command: string, args?: Record<string, unknown>): Promise
     throw { code: "internal", message: String(error) } satisfies T.ApiError;
   }
 }
+export function debug(event: "setupClicked"|"setupInvalid"|"setupSubmitted"|"approvalShown"|"approvalAccepted"|"approvalCancelled"|"nativeRequested"|"nativeSucceeded"|"uiError"): void {
+  void invoke("frontend_debug", {event}).catch(()=>{});
+}
 export const api = {
   previewApply: (document:T.DesiredState):Promise<T.ApplyPreview> => call("preview_apply",{document}),
   applyDocument: (id:string):Promise<T.ApplyReport> => call("apply_document",{id}),
@@ -17,6 +20,7 @@ export const api = {
   quota: (id:string):Promise<T.QuotaView> => call("get_quota",{id}),
   setQuota: (input:T.QuotaInput):Promise<void> => call("set_quota",{input}),
   status: (): Promise<T.AppStatus> => call("get_status"),
+  exportContactCard: (): Promise<T.AppStatus> => call("export_contact_card"),
   initializeNative: (name: string): Promise<T.AppStatus> => call("initialize_native", { name }),
   initializeSoftware: (name: string): Promise<T.AppStatus> => call("initialize_software", { name }),
   recoverOwner: (): Promise<T.AppStatus> => call("recover_owner"),

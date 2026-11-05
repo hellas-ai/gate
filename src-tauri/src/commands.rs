@@ -5,10 +5,35 @@ use crate::{
 };
 use std::sync::Arc;
 use tauri::State;
+/// Fixed diagnostic labels only: never accept form values, keys or assertions.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FrontendEvent {
+    SetupClicked,
+    SetupInvalid,
+    SetupSubmitted,
+    ApprovalShown,
+    ApprovalAccepted,
+    ApprovalCancelled,
+    NativeRequested,
+    NativeSucceeded,
+    UiError,
+}
+#[tauri::command]
+pub fn frontend_debug(event: FrontendEvent) {
+    tracing::debug!(target: "hellas_gate::ui", ?event, "frontend event");
+}
 #[tauri::command]
 pub async fn get_status(state: State<'_, Arc<AppState>>) -> ApiResult<AppStatus> {
     state.open_existing().await.map_err(ApiError::internal)?;
     state.status().await.map_err(ApiError::internal)
+}
+#[tauri::command]
+pub async fn export_contact_card(state: State<'_, Arc<AppState>>) -> ApiResult<AppStatus> {
+    state
+        .export_contact_card()
+        .await
+        .map_err(ApiError::internal)
 }
 #[tauri::command]
 pub async fn initialize_software(
@@ -25,9 +50,11 @@ pub async fn initialize_native(
     state: State<'_, Arc<AppState>>,
     name: String,
 ) -> ApiResult<AppStatus> {
+    tracing::debug!("native identity setup requested");
     state
         .initialize_native(name)
         .await
+        .inspect_err(|error| tracing::warn!(%error, "native identity setup failed"))
         .map_err(ApiError::internal)
 }
 #[tauri::command]
