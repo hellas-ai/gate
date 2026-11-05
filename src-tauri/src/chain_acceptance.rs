@@ -253,8 +253,14 @@ async fn funded_setup(
     let bl = bob.local().await.unwrap();
     al.chain.fixture(devnet.full_node(0).clone()).unwrap();
     bl.chain.fixture(devnet.full_node(1).clone()).unwrap();
-    assert_eq!(ast.identity.principal, hex::encode(ALICE.key().to_bytes()));
-    assert_eq!(bst.identity.principal, hex::encode(BOB.key().to_bytes()));
+    assert_eq!(
+        ast.identity.principal,
+        format!("p256:{}", hex::encode(ALICE.key().to_bytes()))
+    );
+    assert_eq!(
+        bst.identity.principal,
+        format!("p256:{}", hex::encode(BOB.key().to_bytes()))
+    );
     let native = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(NATIVE.scalar()).unwrap();
     let mut policy = policy(&devnet);
     let upstream = Upstream::start().await;
