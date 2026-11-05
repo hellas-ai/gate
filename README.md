@@ -1,5 +1,8 @@
 # Hellas Gate
 
+Read [How do I know this is private?](PRIVACY.md) for the API sharing trust
+model, the plaintext boundary, and the live App Attest validation gaps.
+
 Gate is a Tauri desktop application for Fetch work. One SDK `HostHandle` owns
 local control, provider and gateway lifecycles. Run and gateway requests share
 SDK clients and their durable channels; paid roles share one lazy chain node.
