@@ -169,11 +169,11 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1793974088,
+        "lastModified": 1793981663,
         "narHash": "sha256-bX0h6dVERNR9NM6ucAhEDha5e7DCKup7UcPKoDOyif4=",
         "owner": "hellas-ai",
         "repo": "hellas",
-        "rev": "bf15fc56c64c74bbc02e22cb2e08909ec08b21be",
+        "rev": "5930d72afc9aaaabfdeba781ddd8842cff2befba",
         "type": "github"
       },
       "original": {
