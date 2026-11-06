@@ -6,22 +6,23 @@
       url = "github:hellas-ai/hellas/5859c3900bdbb24e449953dba1b4e0de59f0050e";
       flake = false;
     };
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    rust-overlay = {
-      url = "github:oxalica/rust-overlay";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    # Nix pins and flake helpers come from Hellas, separately from the SDK
+    # revision above, so build tooling can be updated on its own:
+    #   nix flake update hellas-build
+    hellas-build.url = "github:hellas-ai/hellas";
+    nixpkgs.follows = "hellas-build/nixpkgs";
+    rust-overlay.follows = "hellas-build/rust-overlay";
   };
 
-  outputs = { nixpkgs, rust-overlay, hellas, ... }:
+  outputs = { nixpkgs, rust-overlay, hellas, hellas-build, ... }:
     let
-      perSystem = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (system:
+      perSystem = hellas-build.lib.forAllSystems (system:
       let
         pkgs = import nixpkgs {
           inherit system;
           overlays = [ (import rust-overlay) ];
         };
-        rust = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+        rust = hellas-build.lib.rustToolchain pkgs;
       in
       {
         formatter = pkgs.nixpkgs-fmt;
