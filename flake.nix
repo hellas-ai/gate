@@ -11,11 +11,11 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { nixpkgs, rust-overlay, flake-utils, hellas, ... }:
-    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (system:
+  outputs = { nixpkgs, rust-overlay, hellas, ... }:
+    let
+      perSystem = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (system:
       let
         pkgs = import nixpkgs {
           inherit system;
@@ -66,4 +66,8 @@
           windows-cross = import ./nix/windows-cross.nix { inherit pkgs rust; };
         };
       });
+    in {
+      formatter = nixpkgs.lib.mapAttrs (_: config: config.formatter) perSystem;
+      devShells = nixpkgs.lib.mapAttrs (_: config: config.devShells) perSystem;
+    };
 }
