@@ -22,7 +22,7 @@
           inherit system;
           overlays = [ (import rust-overlay) ];
         };
-        rust = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+        rust = hellas-build.lib.rustToolchain pkgs;
       in
       {
         formatter = pkgs.nixpkgs-fmt;
