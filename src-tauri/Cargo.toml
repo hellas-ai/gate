@@ -23,7 +23,7 @@ required-features = ["desktop"]
 [dependencies]
 hellas-webauthn = { git = "https://github.com/hellas-ai/hellas", rev = "5859c3900bdbb24e449953dba1b4e0de59f0050e", features = ["der"] }
 ciborium = "0.2"
-sha2 = "0.10"
+sha2 = "0.11"
 hellas-chain = { git = "https://github.com/hellas-ai/hellas", rev = "5859c3900bdbb24e449953dba1b4e0de59f0050e" }
 hellas-authority = { git = "https://github.com/hellas-ai/hellas", rev = "5859c3900bdbb24e449953dba1b4e0de59f0050e" }
 hellas-channel = { git = "https://github.com/hellas-ai/hellas", rev = "5859c3900bdbb24e449953dba1b4e0de59f0050e" }
@@ -35,7 +35,7 @@ hex = "0.4"
 rcgen = "0.14"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 zeroize = "1"
-base64 = "0.22"
+base64 = "0.23"
 futures = "0.3"
 hellas-genesis = { git = "https://github.com/hellas-ai/hellas", rev = "5859c3900bdbb24e449953dba1b4e0de59f0050e" }
 hellas-auth = { git = "https://github.com/hellas-ai/hellas", rev = "5859c3900bdbb24e449953dba1b4e0de59f0050e" }
