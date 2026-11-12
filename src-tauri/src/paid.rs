@@ -83,15 +83,7 @@ pub fn standing_policy(input: &PaidPolicyInput) -> anyhow::Result<PaidPolicy> {
 pub fn profile(input: &ChainInput) -> anyhow::Result<hellas_genesis::ChainProfile> {
     Ok(match input {
         ChainInput::Devnet => hellas_genesis::ChainProfile::known(hellas_genesis::Chain::Devnet),
-        ChainInput::Custom {
-            trust,
-            validators,
-            genesis_json,
-        } => hellas_genesis::ChainProfile::custom(hellas_genesis::CustomChainFile {
-            trust: trust.clone(),
-            validators: validators.clone(),
-            genesis_json: genesis_json.clone(),
-        })?,
+        ChainInput::Custom(file) => hellas_genesis::ChainProfile::custom(file.clone())?,
     })
 }
 
@@ -193,31 +185,11 @@ pub(crate) fn pool_snapshot(
 
 impl ProviderSnapshot {
     pub async fn options(&self) -> anyhow::Result<hellas_sdk::paid_client::PaidWorkOptions> {
-        use hellas_store::content::{DiskStore, IndexMode, Reservations};
         let input = &self.input;
         let config = WorkConfig::for_chain(self.profile.clone(), &self.home)?;
-        let root = hellas_sdk::paid_client::PaidJournalKind::Gateway
-            .journal_root(&config.chain, self.provider);
-        let content = DiskStore::open(
-            root.child("content"),
-            vec![],
-            IndexMode::Resume,
-            None,
-            Reservations::ram(hellas_channel::content::DEFAULT_MAX_STAGING_BYTES),
-            false,
-        )
-        .await?;
-        let recovered: anyhow::Result<()> = async {
-            hellas_sdk::paid_client::recover_content(&root, config.network(), &content).await?;
-            content.finish_recovery().await?;
-            Ok(())
-        }
-        .await;
-        if let Err(error) = recovered {
-            content.close().await;
-            return Err(error);
-        }
-        let args = hellas_sdk::paid_client::PaidWorkOptions {
+        let content =
+            hellas_sdk::chain_home::open_gateway_content(&config.chain, self.provider).await?;
+        Ok(hellas_sdk::paid_client::PaidWorkOptions {
             config,
             journal_kind: hellas_sdk::paid_client::PaidJournalKind::Gateway,
             content,
@@ -232,12 +204,7 @@ impl ProviderSnapshot {
             terminal_blocks: input.terminal_blocks,
             payment_blocks: input.payment_blocks,
             timeout: Some(Duration::from_secs(input.timeout_seconds)),
-        };
-        if let Err(error) = args.validate() {
-            args.content.close().await;
-            return Err(error.into());
-        }
-        Ok(args)
+        })
     }
 }
 fn validate_assignments(

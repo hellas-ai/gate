@@ -1380,26 +1380,15 @@ fn client_policy(policy: &PaidPolicyInput) -> PaidClientPolicyInput {
         fixed_price: policy.fixed_price,
     }
 }
-fn chain_input(directory: &std::path::Path, profile: &hellas_genesis::ChainProfile) -> ChainInput {
-    let file = directory.join("chain-profile.json");
-    std::fs::write(&file, serde_json::to_vec(&serde_json::json!({
-        "trust": profile.trust(), "validators": profile.validators(), "genesis_json": profile.genesis_json(),
-    })).unwrap()).unwrap();
-    let imported = hellas_sdk::work_config::load_chain_profile(&file)
-        .unwrap()
-        .to_file();
-    ChainInput::Custom {
-        trust: imported.trust,
-        validators: imported.validators,
-        genesis_json: imported.genesis_json,
-    }
+fn chain_input(profile: &hellas_genesis::ChainProfile) -> ChainInput {
+    ChainInput::Custom(profile.to_file())
 }
-async fn paid_policy_fixture(directory: &std::path::Path) -> PaidPolicyInput {
+fn paid_policy_fixture() -> PaidPolicyInput {
     let profile = hellas_genesis::ChainProfile::known(hellas_genesis::Chain::Devnet)
         .with_validators(vec!["ws://127.0.0.1:9".into()])
         .unwrap();
     PaidPolicyInput {
-        chain: chain_input(directory, &profile),
+        chain: chain_input(&profile),
         service: "openai".into(),
         method: "responses".into(),
         presentation: FetchPresentation::Responses,
@@ -1419,10 +1408,9 @@ async fn paid_policy_fixture(directory: &std::path::Path) -> PaidPolicyInput {
     }
 }
 
-#[tokio::test]
-async fn standing_paid_policy_checks_capacity_limits_and_chain_bounds() {
-    let directory = tempfile::tempdir().unwrap();
-    let input = paid_policy_fixture(directory.path()).await;
+#[test]
+fn standing_paid_policy_checks_capacity_limits_and_chain_bounds() {
+    let input = paid_policy_fixture();
     let policy = crate::paid::standing_policy(&input).unwrap();
     assert_eq!(
         policy.expected_payment_values.value(),
@@ -1451,7 +1439,7 @@ async fn standing_paid_policy_checks_capacity_limits_and_chain_bounds() {
 #[tokio::test]
 async fn paid_apple_approvals_bind_the_address_and_keep_node_journals_across_enrollments() {
     let directory = tempfile::tempdir().unwrap();
-    let policy = paid_policy_fixture(directory.path()).await;
+    let policy = paid_policy_fixture();
     let approve = |revision, enrollment| {
         trust::approve(
             directory.path(),
@@ -1541,7 +1529,7 @@ async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channe
         .await
         .unwrap();
     app.initialize_software("Paid client".into()).await.unwrap();
-    let policy = paid_policy_fixture(directory.path()).await;
+    let policy = paid_policy_fixture();
     trust::approve(
         directory.path(),
         TrustInput {
@@ -1594,28 +1582,6 @@ async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channe
     assert!(applied.error.is_none(), "{:?}", applied.error);
     let local = app.local().await.unwrap();
     let bytes = std::fs::read(crate::paid::pool_path(directory.path(), &pool.id).unwrap()).unwrap();
-    let saved: PaidPoolInput = serde_json::from_slice(&bytes).unwrap();
-    let saved_profile = crate::paid::profile(&saved.providers[0].policy.chain).unwrap();
-    // The saved document owns the authenticated profile, not its import path.
-    let source = directory.path().join("chain-profile.json");
-    std::fs::write(&source, b"replaced profile").unwrap();
-    assert_eq!(
-        crate::paid::pool_snapshot(directory.path(), &saved)
-            .unwrap()
-            .providers[0]
-            .profile
-            .state_key(),
-        saved_profile.state_key()
-    );
-    std::fs::remove_file(source).unwrap();
-    assert_eq!(
-        crate::paid::pool_snapshot(directory.path(), &saved)
-            .unwrap()
-            .providers[0]
-            .profile
-            .genesis_json(),
-        saved_profile.genesis_json()
-    );
     assert!(
         !directory.path().join("chains").exists(),
         "preview, save and resolution must not open chain homes"
@@ -2077,7 +2043,7 @@ async fn shutdown_closes_opening_for_an_admitted_run_before_paid_target_start() 
             .unwrap(),
     );
     app.initialize_software("Client".into()).await.unwrap();
-    let policy = paid_policy_fixture(directory.path()).await;
+    let policy = paid_policy_fixture();
     trust::approve(
         directory.path(),
         TrustInput {
@@ -3042,7 +3008,7 @@ async fn openai_https_and_paid_share_one_host_and_invalid_paid_settings_preserve
         )
         .await
         .unwrap();
-    let mut policy = paid_policy_fixture(a.path()).await;
+    let mut policy = paid_policy_fixture();
     policy.service = "web".into();
     policy.method = "get".into();
     policy.presentation = FetchPresentation::Http;
@@ -3136,10 +3102,10 @@ async fn openai_https_and_paid_share_one_host_and_invalid_paid_settings_preserve
     upstream.started.notified().await;
     let metadata = std::fs::read(a.path().join("provider-configuration.json")).unwrap();
     let mut invalid = paid.clone();
-    let ChainInput::Custom { genesis_json, .. } = &mut invalid.policy.chain else {
+    let ChainInput::Custom(file) = &mut invalid.policy.chain else {
         panic!("custom profile")
     };
-    *genesis_json = "invalid genesis".into();
+    file.genesis_json = "invalid genesis".into();
     let mut duplicate = paid.clone();
     duplicate.policy.max_open_offers = 0;
     let mut missing = paid.clone();
@@ -3499,7 +3465,7 @@ async fn refused_gateway_presentation_keeps_the_live_listener_and_targets() {
     let (request, _) = grant_responses(&alice, &bob, &origin, 239).await;
     let local = bob.local().await.unwrap();
     let provider = alice.status().await.unwrap().identity.provider_address;
-    let policy_b = paid_policy_fixture(b.path()).await;
+    let policy_b = paid_policy_fixture();
     let mut policy_a = policy_b.clone();
     policy_a.presentation = FetchPresentation::Http;
     policy_a.service = "web".into();

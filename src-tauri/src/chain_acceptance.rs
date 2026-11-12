@@ -9,12 +9,9 @@ use hellas_gateway::WorkExecutionBackend as _;
 use hellas_sdk::kernel::{CoinId, Key};
 use std::time::Duration;
 
-#[path = "recovery_fixture.rs"]
-mod recovery_fixture;
-
-fn policy(devnet: &Devnet, directory: &std::path::Path) -> PaidPolicyInput {
+fn policy(devnet: &Devnet) -> PaidPolicyInput {
     PaidPolicyInput {
-        chain: chain_input(directory, &devnet.profile(0)),
+        chain: chain_input(&devnet.profile(0)),
         service: "web".into(),
         method: "get".into(),
         presentation: FetchPresentation::Http,
@@ -229,7 +226,7 @@ async fn funded_setup(
         format!("p256:{}", hex::encode(BOB.key().to_bytes()))
     );
     let native = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(NATIVE.scalar()).unwrap();
-    let mut policy = policy(&devnet, a.path());
+    let mut policy = policy(&devnet);
     let upstream = Upstream::start().await;
     let origin = if responses {
         Some(crate::responses_fixture::Origin::start().await)
@@ -771,40 +768,22 @@ async fn funded_listener(case: FundedGateway) {
             .await
             .is_err()
     );
-    let local = alice.local().await.unwrap();
-    let paid = alice.provider_view().await.unwrap().paid.unwrap();
-    let config = crate::paid::config(&paid.policy.chain, a.path()).unwrap();
-    let retained = recovery_fixture::Retained::seed(&local, &config).await;
-    retained.assert_recovered(&local.content).await;
-    retained.remove_pins(&local.content).await;
     alice.shutdown().await.unwrap();
-    drop(local);
     drop(alice);
-    std::fs::remove_file(a.path().join("chain-profile.json")).unwrap();
-    // Offline recovery must republish the journal's pin before startup cleanup.
     let reopened = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
         .await
         .unwrap();
-    let local = reopened.local().await.unwrap();
-    retained.assert_recovered(&local.content).await;
     assert!(reopened.provider_view().await.unwrap().paid.is_some());
     reopened.set_provider(true).await.unwrap();
-    // Live Serve discovers the same journal again after the global barrier.
-    retained.assert_recovered(&local.content).await;
     let revision = reopened.provider_view().await.unwrap().revision;
     reopened.configure_paid_serve(revision, None).await.unwrap();
-    retained.remove_pins(&local.content).await;
     reopened.shutdown().await.unwrap();
-    drop(local);
     drop(reopened);
     let disabled = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
         .await
         .unwrap();
-    let local = disabled.local().await.unwrap();
     assert!(disabled.provider_view().await.unwrap().paid.is_none());
-    retained.assert_recovered(&local.content).await;
     disabled.set_provider(true).await.unwrap();
-    retained.assert_recovered(&local.content).await;
     disabled.shutdown().await.unwrap();
     devnet.shutdown().await;
 }

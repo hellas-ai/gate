@@ -320,12 +320,13 @@ pub struct AccessView {
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum ChainInput {
     Devnet,
-    Custom {
-        #[cfg_attr(feature = "desktop", ts(type = "unknown"))]
-        trust: hellas_genesis::TrustDocument,
-        validators: Vec<String>,
-        genesis_json: String,
-    },
+    Custom(
+        #[cfg_attr(
+            feature = "desktop",
+            ts(type = "{ trust: unknown, validators: Array<string>, genesis_json: string }")
+        )]
+        hellas_genesis::CustomChainFile,
+    ),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
