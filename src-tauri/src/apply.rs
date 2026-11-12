@@ -211,14 +211,10 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
     let paid_change = document
         .paid_serve
         .as_ref()
-        .map(|input| {
-            input
-                .configuration
-                .clone()
-                .map(|input| crate::paid::canonical_serve(&local.directory, input))
-                .transpose()
-        })
-        .transpose()?;
+        .map(|input| input.configuration.clone());
+    if let Some(Some(input)) = &paid_change {
+        crate::paid::serve_config(&local.directory, input)?;
+    }
     let paid_changed = if let Some(wanted) = &paid_change {
         serde_json::to_vec(wanted)? != serde_json::to_vec(&current.paid)?
     } else {
@@ -240,7 +236,7 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
             );
         }
         crate::paid::pool_path(&local.directory, &pool.id)?;
-        crate::paid::pool_options(&local.directory, pool)?;
+        crate::paid::pool_snapshot(&local.directory, pool)?;
     }
     let changes = local
         .composition

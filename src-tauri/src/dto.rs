@@ -42,7 +42,6 @@ pub struct AppStatus {
     pub socket_path: String,
     pub listen_port: Option<u16>,
     pub bound_addresses: Vec<String>,
-    pub min_omit_response_blocks: u64,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
@@ -318,30 +317,10 @@ pub struct AccessView {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
 #[cfg_attr(feature = "desktop", ts(export))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GenesisValidatorInput {
-    pub public_key: String,
-    pub label: String,
-}
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GenesisAllocationInput {
-    pub address: String,
-    pub balance: u64,
-}
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChainInput {
-    pub network: String,
-    pub genesis_digest: String,
-    pub threshold_identity: String,
-    pub validators: Vec<String>,
-    pub committee: Vec<GenesisValidatorInput>,
-    pub allocations: Vec<GenesisAllocationInput>,
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ChainInput {
+    Devnet,
+    Custom { file: String },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
@@ -373,9 +352,6 @@ pub struct PaidPolicyInput {
     pub bond_lifetime_blocks: u64,
     pub redelegate_payout: bool,
     pub limits: PaidFetchLimitsInput,
-    pub min_omit_response_blocks: u64,
-    pub poll_ms: u64,
-    pub max_observation_age_ms: u64,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
@@ -400,8 +376,6 @@ pub struct PaidClientPolicyInput {
     pub method: String,
     pub presentation: FetchPresentation,
     pub fixed_price: u64,
-    pub poll_ms: u64,
-    pub max_observation_age_ms: u64,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
@@ -424,7 +398,6 @@ pub struct PaidProviderInput {
 pub struct PaidPoolInput {
     pub id: String,
     pub providers: Vec<PaidProviderInput>,
-    pub max_pending_requests: usize,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]

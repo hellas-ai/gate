@@ -107,3 +107,43 @@ clicks, validation failures, submission, approval-dialog decisions and native
 registration results. Frontend diagnostics contain fixed event labels only,
 without form values, private keys or passkey assertion bytes. Capture stdout and
 stderr to a private file alongside the isolated acceptance directory.
+
+## Hardware probe without UI interaction
+
+**Hardware execution UNTESTED.** With the provisioning described above, this ignored
+probe checks enrollment, key reload, counters and wrong-challenge rejection.
+Its test executable has its own CDHash; it does not test paid sharing. Set
+`APP_ID_PREFIX` from the profile application identifier, which may differ from
+the Team ID, and replace the example Developer ID label.
+
+```sh
+GATE_DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer nix develop
+cargo test --locked --lib --no-run --message-format=json > target/native-artifacts.json
+probe="$PWD/target/app-attest-probe/Hellas Gate Tests.app"
+mkdir -p "$probe/Contents/MacOS"
+python3 - "$probe" <<'PY'
+import json, pathlib, plistlib, shutil, sys
+artifacts = [json.loads(line) for line in open('target/native-artifacts.json')]
+binaries = [a['executable'] for a in artifacts
+            if a.get('reason') == 'compiler-artifact' and a.get('executable')
+            and a.get('profile', {}).get('test')]
+assert len(binaries) == 1, binaries
+probe = pathlib.Path(sys.argv[1])
+shutil.copy2(binaries[0], probe / 'Contents/MacOS/hellas-gate')
+(probe / 'Contents/Info.plist').write_bytes(plistlib.dumps({
+    'CFBundleIdentifier': 'ai.hellas.gate', 'CFBundleExecutable': 'hellas-gate',
+    'CFBundleName': 'Hellas Gate Tests', 'CFBundlePackageType': 'APPL',
+    'CFBundleVersion': '1', 'LSMinimumSystemVersion': '27.0',
+}))
+PY
+SIGN_IDENTITY='Developer ID Application: YOUR NAME (TEAMID)' \
+./macos/sign.sh /path/to/gate.provisionprofile "$probe"
+cdhash=$(codesign --display --verbose=4 "$probe" 2>&1 \
+  | sed -n 's/^CandidateCDHashFull sha256=//p')
+HELLAS_GATE_TEST_APP_ID="${APP_ID_PREFIX:?set the profile App ID prefix}.ai.hellas.gate" \
+HELLAS_GATE_TEST_CDHASH="$cdhash" \
+"$probe/Contents/MacOS/hellas-gate" \
+  provisioned_apple_root_verifies_live_assertions_after_reload --ignored --nocapture
+```
+
+The requester’s trust policy must pin the shipping executable, never this test hash.

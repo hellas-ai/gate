@@ -22,7 +22,7 @@ pub struct LocalNode {
     pub composition: crate::provider_setup::Composition,
     pub directory: PathBuf,
     pub clients: crate::clients::Clients,
-    pub chain: Arc<crate::chain::ChainNode>,
+    pub content: hellas_store::content::DiskStore,
     pub gateway: crate::gateway::Configuration,
     tls: Arc<rustls::ClientConfig>,
     pub bound_addresses: std::sync::OnceLock<Vec<String>>,
@@ -45,15 +45,31 @@ impl LocalNode {
         )?;
         let (tls, _) = node_control::profile::local_trust(certificate, "localhost".into())?;
         let socket = directory.join("gate.sock");
-        let chain = Arc::new(crate::chain::ChainNode::new(directory.join("chain")));
+        let content = hellas_store::content::DiskStore::open(
+            crate::paid::home(directory).child("content"),
+            vec![],
+            hellas_store::content::IndexMode::Resume,
+            None,
+            hellas_store::content::Reservations::ram(
+                hellas_channel::content::DEFAULT_MAX_STAGING_BYTES,
+            ),
+            false,
+        )
+        .await?;
+        if let Err(error) =
+            crate::paid::recover_provider_content(directory, &identity, &content).await
+        {
+            content.close().await;
+            return Err(error);
+        }
         let local = Arc::new(Self {
             identity: Arc::new(identity),
             coordinator: coordinator.clone(),
             socket: socket.clone(),
             composition: crate::provider_setup::Composition::open(directory, vault.clone())?,
             directory: directory.to_owned(),
-            clients: crate::clients::Clients::new(directory, chain.clone()),
-            chain,
+            clients: crate::clients::Clients::new(directory),
+            content,
             gateway: crate::gateway::Configuration::open(directory)?,
             vault,
             tls,
@@ -86,6 +102,7 @@ impl LocalNode {
         );
         let host = HostHandle::start_with_deferred_gateway(
             HostOptions {
+                content: local.content.clone(),
                 transport: Some(transport),
                 start_provider: false,
                 control: Some((

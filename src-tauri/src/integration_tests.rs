@@ -1378,57 +1378,42 @@ fn client_policy(policy: &PaidPolicyInput) -> PaidClientPolicyInput {
         method: policy.method.clone(),
         presentation: policy.presentation,
         fixed_price: policy.fixed_price,
-        poll_ms: policy.poll_ms,
-        max_observation_age_ms: policy.max_observation_age_ms,
+    }
+}
+fn chain_input(directory: &std::path::Path, profile: &hellas_genesis::ChainProfile) -> ChainInput {
+    let file = directory.join("chain-profile.json");
+    std::fs::write(&file, serde_json::to_vec(&serde_json::json!({
+        "trust": profile.trust(), "validators": profile.validators(), "genesis_json": profile.genesis_json(),
+    })).unwrap()).unwrap();
+    ChainInput::Custom {
+        file: file.to_str().unwrap().into(),
     }
 }
 async fn paid_policy_fixture(directory: &std::path::Path) -> PaidPolicyInput {
-    use commonware_codec::DecodeExt as _;
-    use commonware_cryptography::Digestible as _;
-    use commonware_runtime::Runner as _;
-    let mut genesis: hellas_genesis::Genesis =
-        serde_json::from_str(hellas_genesis::HELLAS_DEVNET_1_JSON).unwrap();
-    genesis.network_id = "gate-paid-cache-test".into();
-    genesis.allocations.clear();
-    let leader = genesis
-        .validators
-        .iter()
-        .map(|validator| {
-            hellas_chain::domain::PublicKey::decode(
-                hex::decode(&validator.public_key).unwrap().as_slice(),
-            )
-            .unwrap()
-        })
-        .min()
+    let profile = hellas_genesis::ChainProfile::known(hellas_genesis::Chain::Devnet)
+        .with_validators(vec!["ws://127.0.0.1:9".into()])
         .unwrap();
-    let network = hellas_sdk::kernel::NetworkId::new(&genesis.network_id).unwrap();
-    let genesis_document = hellas_chain::genesis_digest(&genesis);
-    let directory = directory.join("genesis-probe");
-    let digest = tokio::task::spawn_blocking(move || {
-        let runtime = commonware_runtime::tokio::Runner::new(
-            commonware_runtime::tokio::Config::new().with_storage_directory(directory),
-        );
-        runtime.start(move |context| async move {
-            let application = hellas_chain::Application::new(
-                context,
-                network,
-                genesis_document,
-                leader,
-                vec![],
-                "probe",
-                Default::default(),
-            )
-            .await;
-            application.genesis_block().digest()
-        })
-    })
-    .await
-    .unwrap();
     PaidPolicyInput {
-        chain:ChainInput {network:genesis.network_id,genesis_digest:hellas_auth::Digest::from(digest.0).to_string(),threshold_identity:"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb".into(),validators:(1..=6).map(|port|format!("ws://127.0.0.1:{}",10000+port)).collect(),committee:genesis.validators.into_iter().map(|v|GenesisValidatorInput {public_key:v.public_key,label:v.label}).collect(),allocations:vec![]},
-        service:"openai".into(),method:"responses".into(),presentation:FetchPresentation::Responses,compute_credit_limit:40,delivery_credit_limit:40,fixed_price:10,dispatch_blocks:1,delivery_blocks:1,oracle_blocks:1,jobs_per_channel:10,omission_bond:101,max_stake_per_client:10000,max_open_offers:16,bond_lifetime_blocks:2000,redelegate_payout:true,limits:paid_limits(),min_omit_response_blocks:hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS,poll_ms:25,max_observation_age_ms:5000,
+        chain: chain_input(directory, &profile),
+        service: "openai".into(),
+        method: "responses".into(),
+        presentation: FetchPresentation::Responses,
+        compute_credit_limit: 40,
+        delivery_credit_limit: 40,
+        fixed_price: 10,
+        dispatch_blocks: 1,
+        delivery_blocks: 1,
+        oracle_blocks: 1,
+        jobs_per_channel: 10,
+        omission_bond: 101,
+        max_stake_per_client: 10000,
+        max_open_offers: 16,
+        bond_lifetime_blocks: 2000,
+        redelegate_payout: true,
+        limits: paid_limits(),
     }
 }
+
 #[tokio::test]
 async fn standing_paid_policy_checks_capacity_limits_and_chain_bounds() {
     let directory = tempfile::tempdir().unwrap();
@@ -1456,7 +1441,6 @@ async fn standing_paid_policy_checks_capacity_limits_and_chain_bounds() {
     for invalid in [collateral, offers, limits, lifetime, overflow] {
         assert!(crate::paid::standing_policy(&invalid).is_err());
     }
-    assert!(!directory.path().join("paid-provider").exists());
 }
 
 #[tokio::test]
@@ -1491,15 +1475,20 @@ async fn paid_apple_approvals_bind_the_address_and_keep_node_journals_across_enr
             timeout_seconds: 1,
             policy: client_policy(&policy),
         }],
-        max_pending_requests: 4,
     };
-    let original = crate::paid::pool_options(directory.path(), &pool)
+    let original = crate::paid::pool_snapshot(directory.path(), &pool)
         .unwrap()
         .providers
         .remove(0);
-    let anchor = original.trust().unwrap();
-    assert_eq!(original.assurance, hellas_rpc::Assurance::AppleAppAttest);
-    assert_eq!(anchor.expected_genesis, original.provider.enrollment);
+    let anchor = original.trust.anchor.clone();
+    assert_eq!(
+        original.trust.anchor.required_assurance,
+        hellas_rpc::Assurance::AppleAppAttest
+    );
+    assert_eq!(
+        anchor.expected_genesis,
+        original.trust.anchor.expected_genesis
+    );
     assert_eq!(
         anchor.apple_app_attest.as_ref().unwrap().allowed_cd_hashes,
         vec![[7; 32]]
@@ -1512,28 +1501,27 @@ async fn paid_apple_approvals_bind_the_address_and_keep_node_journals_across_enr
         .advance(&[9; 33], 10)
         .unwrap();
     approve(1, 5);
-    assert!(crate::paid::pool_options(directory.path(), &pool).is_err());
+    assert!(crate::paid::pool_snapshot(directory.path(), &pool).is_err());
     pool.providers[0].provider = paid_address(5, 3);
-    let replacement = crate::paid::pool_options(directory.path(), &pool)
+    let replacement = crate::paid::pool_snapshot(directory.path(), &pool)
         .unwrap()
         .providers
         .remove(0);
-    assert_eq!(original.journal_root, replacement.journal_root);
+    assert_eq!(original.journal_root(), replacement.journal_root());
     assert_ne!(
-        original.provider.enrollment,
-        replacement.provider.enrollment
+        original.trust.anchor.expected_genesis,
+        replacement.trust.anchor.expected_genesis
     );
     assert_eq!(
         replacement
-            .trust()
-            .unwrap()
+            .trust
+            .anchor
             .apple_app_attest
             .unwrap()
             .counter_store
             .advance(&[9; 33], 10),
         Err(hellas_attestation::AttestationError::Counter)
     );
-    assert!(!directory.path().join("paid-channels").exists());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1571,7 +1559,6 @@ async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channe
             timeout_seconds: 1,
             policy: client_policy(&policy),
         }],
-        max_pending_requests: 4,
     };
     let mut desired = desired_https(app.provider_view().await.unwrap());
     desired.upstreams.clear();
@@ -1599,7 +1586,7 @@ async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channe
     let local = app.local().await.unwrap();
     let bytes = std::fs::read(crate::paid::pool_path(directory.path(), &pool.id).unwrap()).unwrap();
     let mut zero = pool.clone();
-    zero.max_pending_requests = 0;
+    zero.providers[0].policy.fixed_price = 0;
     let mut duplicate = pool.clone();
     duplicate.providers.push(pool.providers[0].clone());
     let mut node_only = pool.clone();
@@ -1612,18 +1599,18 @@ async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channe
     let mut wrong_enrollment = pool.clone();
     wrong_enrollment.providers[0].provider = paid_address(5, 3);
     assert!(
-        crate::paid::pool_options(directory.path(), &wrong_enrollment)
+        crate::paid::pool_snapshot(directory.path(), &wrong_enrollment)
             .err()
             .unwrap()
             .to_string()
             .contains("approved enrollment")
     );
-    let options = crate::paid::pool_options(directory.path(), &pool).unwrap();
+    let options = crate::paid::pool_snapshot(directory.path(), &pool).unwrap();
     assert_eq!(
-        options.providers[0].trust().unwrap().expected_genesis,
+        options.providers[0].trust.anchor.expected_genesis,
         hellas_rpc::ContentId::from_bytes([4; 32])
     );
-    assert!(options.providers[0].apple_trust.is_none());
+    assert!(options.providers[0].trust.anchor.apple_app_attest.is_none());
     for invalid in [zero, duplicate, node_only, wrong_enrollment] {
         assert!(app.save_paid_pool(invalid).await.is_err());
         assert_eq!(
@@ -1650,9 +1637,16 @@ async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channe
             .to_string()
             .contains("already assigned")
     );
-    assert!(!directory.path().join("paid-channels").exists());
-    let first = local.clients.funding_owner(&local).await.unwrap();
-    let second = local.clients.funding_owner(&local).await.unwrap();
+    let first = local
+        .clients
+        .funding_owner(&local, &options.providers[0].config.chain)
+        .await
+        .unwrap();
+    let second = local
+        .clients
+        .funding_owner(&local, &options.providers[0].config.chain)
+        .await
+        .unwrap();
     assert!(
         Arc::ptr_eq(&first, &second),
         "one funding owner serializes all pools"
@@ -1679,24 +1673,38 @@ async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channe
     resume.notify_one();
     let error = pending.await.unwrap().err().unwrap();
     assert!(error.to_string().contains("paid pool changed"), "{error:#}");
-    assert!(!directory.path().join("paid-channels").exists());
-    let retained = directory.path().join("paid-channels/same-pool").join(
-        pool.providers[0]
-            .provider
-            .parse::<hellas_sdk::client::ProviderAddress>()
-            .unwrap()
-            .node
-            .to_string(),
+    let retained = options.providers[0].journal_root();
+    assert!(
+        !retained.exists(),
+        "validation and refused opening cannot create journals"
     );
-    std::fs::create_dir_all(&retained).unwrap();
+    let transport = local
+        .clients
+        .paid_transport(
+            &local,
+            &options.providers[0].config.chain,
+            options.providers[0].provider.node,
+        )
+        .await
+        .unwrap();
     pool.providers[0].provider = paid_address(4, 4);
     app.save_paid_pool(pool).await.unwrap();
-    assert!(
-        app.save_paid_pool(overlapping)
+    // Journals are addressed by chain and provider, independently of the UI group.
+    app.save_paid_pool(overlapping.clone()).await.unwrap();
+    let reassigned = crate::paid::pool_snapshot(directory.path(), &overlapping).unwrap();
+    assert_eq!(reassigned.providers[0].journal_root(), retained);
+    assert_eq!(
+        local
+            .clients
+            .paid_transport(
+                &local,
+                &reassigned.providers[0].config.chain,
+                reassigned.providers[0].provider.node
+            )
             .await
-            .unwrap_err()
-            .to_string()
-            .contains("retained channel")
+            .unwrap()
+            .public(),
+        transport.public()
     );
     drop(first);
     drop(second);
@@ -2017,7 +2025,7 @@ async fn revocation_during_real_upstream_work_prevents_verified_delivery_and_fut
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn shutdown_closes_opening_for_an_admitted_run_before_lazy_paid_chain_start() {
+async fn shutdown_closes_opening_for_an_admitted_run_before_paid_target_start() {
     let directory = tempfile::tempdir().unwrap();
     let secrets = tempfile::tempdir().unwrap();
     let app = Arc::new(
@@ -2053,7 +2061,6 @@ async fn shutdown_closes_opening_for_an_admitted_run_before_lazy_paid_chain_star
             timeout_seconds: 1,
             policy: client_policy(&policy),
         }],
-        max_pending_requests: 4,
     })
     .await
     .unwrap();
@@ -2075,7 +2082,6 @@ async fn shutdown_closes_opening_for_an_admitted_run_before_lazy_paid_chain_star
         },
     };
     let local = app.local().await.unwrap();
-    assert!(!local.clients.chain_initialized());
     let barrier = Arc::new(std::sync::Barrier::new(2));
     let pause = barrier.clone();
     let (started, mut waiting) = tokio::sync::mpsc::unbounded_channel();
@@ -2103,7 +2109,6 @@ async fn shutdown_closes_opening_for_an_admitted_run_before_lazy_paid_chain_star
         !shutdown.is_finished(),
         "Quit still owns the admitted run's permit"
     );
-    assert!(!local.clients.chain_initialized());
     barrier.wait();
     let id = tokio::time::timeout(std::time::Duration::from_secs(5), run)
         .await
@@ -2117,13 +2122,8 @@ async fn shutdown_closes_opening_for_an_admitted_run_before_lazy_paid_chain_star
             .unwrap()
             .unwrap()
     );
-    assert!(
-        !local.clients.chain_initialized(),
-        "no lazy chain may start after its only drain"
-    );
+    assert_eq!(local.clients.cached_targets().await, 0);
     assert!(!local.socket.exists());
-    assert!(!directory.path().join("chain").exists());
-    assert!(!directory.path().join("paid-channels").exists());
     assert!(local.clients.target(&local, &request.client).await.is_err());
     let history = app.history.list(10).unwrap();
     assert_eq!(
@@ -3083,7 +3083,6 @@ async fn openai_https_and_paid_share_one_host_and_invalid_paid_settings_preserve
         local.coordinator.paid_policy().await.unwrap().unwrap(),
         approved
     );
-    assert!(local.chain.initialized());
     let peer = alice.status().await.unwrap().identity.transport_id;
     assert_eq!(alice.status().await.unwrap().provider.state, "running");
     assert_eq!(alice.provider_view().await.unwrap().resources.len(), 2);
@@ -3094,7 +3093,9 @@ async fn openai_https_and_paid_share_one_host_and_invalid_paid_settings_preserve
     upstream.started.notified().await;
     let metadata = std::fs::read(a.path().join("provider-configuration.json")).unwrap();
     let mut invalid = paid.clone();
-    invalid.policy.max_observation_age_ms = invalid.policy.poll_ms;
+    invalid.policy.chain = ChainInput::Custom {
+        file: a.path().join("missing-chain.json").display().to_string(),
+    };
     let mut duplicate = paid.clone();
     duplicate.policy.max_open_offers = 0;
     let mut missing = paid.clone();
@@ -3125,7 +3126,6 @@ async fn openai_https_and_paid_share_one_host_and_invalid_paid_settings_preserve
         .await
         .unwrap();
     assert!(reopened.provider_view().await.unwrap().paid.is_some());
-    assert!(!reopened.local().await.unwrap().chain.initialized());
     reopened.set_provider(true).await.unwrap();
     assert_eq!(reopened.status().await.unwrap().identity.transport_id, peer);
     assert_eq!(reopened.provider_view().await.unwrap().resources.len(), 2);
@@ -3438,143 +3438,7 @@ async fn authorized_responses_gateway_enforces_keys_zdr_archive_revocation_and_s
 mod chain_acceptance;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn refused_first_paid_policy_cannot_select_the_shared_chain() {
-    let upstream = Upstream::start().await;
-    let a = tempfile::tempdir().unwrap();
-    let b = tempfile::tempdir().unwrap();
-    let sa = tempfile::tempdir().unwrap();
-    let sb = tempfile::tempdir().unwrap();
-    let alice = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
-        .await
-        .unwrap();
-    let bob = AppState::with_vault(b.path(), Vault::fixture(sb.path()))
-        .await
-        .unwrap();
-    alice.initialize_software("Alice".into()).await.unwrap();
-    bob.initialize_software("Bob".into()).await.unwrap();
-    let (request, _) = grant_https(&alice, &bob, &upstream, "unselected-chain", 238).await;
-    let local = alice.local().await.unwrap();
-    assert!(!local.chain.initialized());
-    assert!(!a.path().join("chain").exists());
-    let mut chain_a = paid_policy_fixture(a.path()).await;
-    chain_a.service = "web".into();
-    chain_a.method = "get".into();
-    chain_a.presentation = FetchPresentation::Http;
-    let mut chain_b = chain_a.clone();
-    chain_b.chain.validators = chain_b
-        .chain
-        .validators
-        .iter()
-        .map(|url| format!(" \t{}\n", url.replacen("ws://", "WS://", 1)))
-        .collect();
-    // The opposite valid BLS generator is an independently pinned finality
-    // identity for a distinct chain definition on this same network.
-    chain_b.chain.threshold_identity.replace_range(..2, "b7");
-    let mut input = PaidServeInput {
-        policy: chain_a.clone(),
-    };
-    input.policy.max_open_offers = 0;
-    upstream.hold.store(true, Ordering::SeqCst);
-    let recipient = bob.local().await.unwrap();
-    let pending =
-        tokio::spawn(async move { execute(&recipient.clients, &recipient, &request).await });
-    upstream.started.notified().await;
-    let metadata = std::fs::read(a.path().join("provider-configuration.json")).unwrap();
-    let mut http = chain_a.clone();
-    http.chain.validators[0] = http.chain.validators[0].replace("ws://", "http://");
-    let mut duplicate = chain_a.clone();
-    duplicate.chain.validators[1] = format!(" {}/", duplicate.chain.validators[0]);
-    let mut count = chain_a.clone();
-    count.chain.validators.pop();
-    let mut threshold = chain_a.clone();
-    threshold.chain.threshold_identity = hex::encode([0; 48]);
-    let mut window = chain_a.clone();
-    window.min_omit_response_blocks = hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS - 1;
-    let mut timing = chain_a.clone();
-    timing.poll_ms = 0;
-    for policy in [http, duplicate, count, threshold, window, timing] {
-        let error = alice
-            .configure_paid_serve(2, Some(PaidServeInput { policy }))
-            .await
-            .unwrap_err();
-        assert!(!error.to_string().is_empty());
-        assert!(!local.chain.initialized());
-        assert!(!a.path().join("chain").exists());
-        assert_eq!(
-            std::fs::read(a.path().join("provider-configuration.json")).unwrap(),
-            metadata
-        );
-        assert_eq!(alice.status().await.unwrap().provider.state, "running");
-        assert!(!pending.is_finished());
-    }
-    let refusal = alice
-        .configure_paid_serve(2, Some(input))
-        .await
-        .unwrap_err();
-    assert!(
-        refusal.to_string().contains("offer policy bounds"),
-        "{refusal:#}"
-    );
-    assert!(!local.chain.initialized());
-    assert!(!a.path().join("chain").exists());
-    assert_eq!(
-        std::fs::read(a.path().join("provider-configuration.json")).unwrap(),
-        metadata
-    );
-    assert_eq!(alice.status().await.unwrap().provider.state, "running");
-    assert!(!pending.is_finished());
-    upstream.release.notify_one();
-    assert!(finished(&pending.await.unwrap().unwrap()));
-    alice
-        .configure_paid_serve(
-            2,
-            Some(PaidServeInput {
-                policy: chain_b.clone(),
-            }),
-        )
-        .await
-        .unwrap();
-    let config_b = crate::paid::config(
-        &chain_b.chain,
-        chain_b.poll_ms,
-        chain_b.max_observation_age_ms,
-        a.path().join("unused-b"),
-    )
-    .unwrap();
-    assert_eq!(
-        config_b.validators,
-        chain_a
-            .chain
-            .validators
-            .iter()
-            .map(|url| format!("{url}/"))
-            .collect::<Vec<_>>()
-    );
-    let node = local.chain.get(&config_b).await.unwrap();
-    assert_eq!(node.config().validators, config_b.validators);
-    config_b.check_node(&node).unwrap();
-    assert!(
-        crate::paid::config(
-            &chain_a.chain,
-            chain_a.poll_ms,
-            chain_a.max_observation_age_ms,
-            a.path().join("unused-a")
-        )
-        .unwrap()
-        .check_node(&node)
-        .is_err()
-    );
-    assert_eq!(
-        node.config().threshold_identity,
-        hex::decode(chain_b.chain.threshold_identity).unwrap()
-    );
-    assert_eq!(alice.status().await.unwrap().provider.state, "running");
-    bob.shutdown().await.unwrap();
-    alice.shutdown().await.unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn refused_gateway_presentation_keeps_the_live_listener_and_first_chain_unselected() {
+async fn refused_gateway_presentation_keeps_the_live_listener_and_targets() {
     let a = tempfile::tempdir().unwrap();
     let b = tempfile::tempdir().unwrap();
     let sa = tempfile::tempdir().unwrap();
@@ -3591,10 +3455,8 @@ async fn refused_gateway_presentation_keeps_the_live_listener_and_first_chain_un
     let (request, _) = grant_responses(&alice, &bob, &origin, 239).await;
     let local = bob.local().await.unwrap();
     let provider = alice.status().await.unwrap().identity.provider_address;
-    let mut policy_b = paid_policy_fixture(b.path()).await;
-    policy_b.chain.threshold_identity.replace_range(..2, "b7");
+    let policy_b = paid_policy_fixture(b.path()).await;
     let mut policy_a = policy_b.clone();
-    policy_a.chain.threshold_identity.replace_range(..2, "97");
     policy_a.presentation = FetchPresentation::Http;
     policy_a.service = "web".into();
     policy_a.method = "get".into();
@@ -3634,7 +3496,6 @@ async fn refused_gateway_presentation_keeps_the_live_listener_and_first_chain_un
                 timeout_seconds: 60,
                 policy: client_policy(&policy),
             }],
-            max_pending_requests: 8,
         })
         .await
         .unwrap();
@@ -3734,9 +3595,6 @@ async fn refused_gateway_presentation_keeps_the_live_listener_and_first_chain_un
             refusal.to_string().contains("gateway requires"),
             "{refusal:#}"
         );
-        assert!(!local.chain.initialized());
-        assert!(!b.path().join("chain").exists());
-        assert!(!b.path().join("paid-channels").exists());
         assert_eq!(local.clients.cached_targets().await, count);
         assert!(Arc::ptr_eq(
             &original,
@@ -3752,7 +3610,6 @@ async fn refused_gateway_presentation_keeps_the_live_listener_and_first_chain_un
     }
     origin.release.notify_one();
     assert!(held.await.unwrap().contains("hello"));
-    assert!(!local.chain.initialized());
     assert_eq!(bob.gateway_address().await.unwrap(), address);
     bob.shutdown().await.unwrap();
     alice.shutdown().await.unwrap();

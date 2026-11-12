@@ -21,8 +21,6 @@ export type { AllowanceInput } from "./generated/AllowanceInput.ts";
 export type { ShareInput } from "./generated/ShareInput.ts";
 export type { ShareView } from "./generated/ShareView.ts";
 export type { AccessView } from "./generated/AccessView.ts";
-export type { GenesisValidatorInput } from "./generated/GenesisValidatorInput.ts";
-export type { GenesisAllocationInput } from "./generated/GenesisAllocationInput.ts";
 export type { ChainInput } from "./generated/ChainInput.ts";
 export type { FetchPresentation } from "./generated/FetchPresentation.ts";
 export type { PaidPolicyInput } from "./generated/PaidPolicyInput.ts";

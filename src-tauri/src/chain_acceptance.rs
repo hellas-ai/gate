@@ -9,35 +9,9 @@ use hellas_gateway::WorkExecutionBackend as _;
 use hellas_sdk::kernel::{CoinId, Key};
 use std::time::Duration;
 
-fn policy(devnet: &Devnet) -> PaidPolicyInput {
-    let genesis = devnet.genesis();
+fn policy(devnet: &Devnet, directory: &std::path::Path) -> PaidPolicyInput {
     PaidPolicyInput {
-        chain: ChainInput {
-            network: genesis.network_id.clone(),
-            genesis_digest: hellas_auth::Digest::from(devnet.genesis_payload().0).to_string(),
-            threshold_identity: hex::encode(&devnet.consensus_info().threshold_identity),
-            validators: devnet
-                .light_client_urls()
-                .into_iter()
-                .map(|url| format!(" \t{}\n", url.replacen("ws://", "WS://", 1)))
-                .collect(),
-            committee: genesis
-                .validators
-                .iter()
-                .map(|v| GenesisValidatorInput {
-                    public_key: v.public_key.clone(),
-                    label: v.label.clone(),
-                })
-                .collect(),
-            allocations: genesis
-                .allocations
-                .iter()
-                .map(|a| GenesisAllocationInput {
-                    address: a.address.clone(),
-                    balance: a.balance,
-                })
-                .collect(),
-        },
+        chain: chain_input(directory, &devnet.profile(0)),
         service: "web".into(),
         method: "get".into(),
         presentation: FetchPresentation::Http,
@@ -54,9 +28,6 @@ fn policy(devnet: &Devnet) -> PaidPolicyInput {
         bond_lifetime_blocks: 2000,
         redelegate_payout: true,
         limits: paid_limits(),
-        min_omit_response_blocks: hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS,
-        poll_ms: 50,
-        max_observation_age_ms: 60000,
     }
 }
 async fn sealing_while<T>(devnet: &mut Devnet, work: impl std::future::Future<Output = T>) -> T {
@@ -81,26 +52,20 @@ async fn delegate(
 ) -> CoinId {
     use hellas_authority::authenticator::kernel_auth;
     use hellas_sdk::coin_owner::OwnerReshape;
-    let config = crate::paid::config(
-        &policy.chain,
-        policy.poll_ms,
-        policy.max_observation_age_ms,
-        local.directory.join("unused-plan"),
+    let config = crate::paid::config(&policy.chain, &local.directory).unwrap();
+    let client = hellas_chain::client::RemoteLightClient::connect(
+        config.chain.validators()[0].clone(),
+        Arc::new(hellas_chain::proof_verify::ProofVerifier::for_profile(&config.chain).unwrap()),
     )
+    .await
     .unwrap();
-    let node = local.chain.get(&config).await.unwrap();
-    let view = tokio::time::timeout(Duration::from_secs(90), node.wait_ready())
-        .await
-        .expect("six local validators must finalize")
-        .unwrap();
-    let client = view.client();
     let owner = native.map_or_else(
         || Key::from_bytes(*local.identity.public.owner.as_bytes()),
         |key| key.party_key(),
     );
     let listing = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            match client.get_coins_by_owner(owner.into()).await {
+            match client.get_holdings(owner.into(), None).await {
                 Ok(Some(listing)) => break listing,
                 Err(hellas_chain::QueryError::StateUnavailable(_)) | Ok(None) => {
                     tokio::time::sleep(Duration::from_millis(50)).await
@@ -111,10 +76,10 @@ async fn delegate(
     })
     .await
     .unwrap();
-    let coin = CoinId::from_bytes(listing.coins[0].0.0);
+    let coin = listing.owned_coins(owner.into())[0].0;
     let plan = OwnerReshape::prepare(
         &client,
-        config.chain.network,
+        config.network(),
         owner,
         &[coin],
         Some(Key::from_bytes(
@@ -151,12 +116,12 @@ async fn delegate(
         .unwrap();
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            match client.get_coins_by_owner(owner.into()).await {
+            match client.get_holdings(owner.into(), None).await {
                 Ok(Some(listing))
                     if listing
-                        .coins
+                        .owned_coins(owner.into())
                         .iter()
-                        .any(|(id, _)| id.0 == output.to_bytes()) =>
+                        .any(|(id, _)| *id == output) =>
                 {
                     break;
                 }
@@ -233,6 +198,7 @@ async fn funded_setup(
     )
     .await;
     devnet.seal().await;
+    devnet.keep_certifying();
     let a = tempfile::tempdir().unwrap();
     let b = tempfile::tempdir().unwrap();
     let sa = tempfile::tempdir().unwrap();
@@ -251,8 +217,6 @@ async fn funded_setup(
     let bst = bob.status().await.unwrap();
     let al = alice.local().await.unwrap();
     let bl = bob.local().await.unwrap();
-    al.chain.fixture(devnet.full_node(0).clone()).unwrap();
-    bl.chain.fixture(devnet.full_node(1).clone()).unwrap();
     assert_eq!(
         ast.identity.principal,
         format!("p256:{}", hex::encode(ALICE.key().to_bytes()))
@@ -262,7 +226,7 @@ async fn funded_setup(
         format!("p256:{}", hex::encode(BOB.key().to_bytes()))
     );
     let native = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(NATIVE.scalar()).unwrap();
-    let mut policy = policy(&devnet);
+    let mut policy = policy(&devnet, a.path());
     let upstream = Upstream::start().await;
     let origin = if responses {
         Some(crate::responses_fixture::Origin::start().await)
@@ -318,7 +282,6 @@ async fn funded_setup(
             timeout_seconds: 60,
             policy: client_policy(&policy),
         }],
-        max_pending_requests: 8,
     };
     bob.save_paid_pool(pool.clone()).await.unwrap();
     request.client.target = WorkTarget::Paid {
@@ -327,7 +290,7 @@ async fn funded_setup(
         service: policy.service.clone(),
         method: policy.method.clone(),
     };
-    let args = crate::paid::pool_options(b.path(), &pool)
+    let snapshot = crate::paid::pool_snapshot(b.path(), &pool)
         .unwrap()
         .providers
         .remove(0);
@@ -336,11 +299,11 @@ async fn funded_setup(
         .view()
         .unwrap()
         .client()
-        .get_coins_by_owner(BOB.key())
+        .get_holdings(BOB.key(), None)
         .await
         .unwrap()
         .unwrap()
-        .coins;
+        .owned_coins(BOB.key());
     // A concurrent approval replacement cannot relabel the captured quote trust.
     let old = trust::list(b.path())
         .unwrap()
@@ -394,17 +357,22 @@ async fn funded_setup(
         &bl.clients.target(&bl, &request.client).await.unwrap()
     ));
     drop(first);
-    let discovery =
-        hellas_channel::work_store::discover_setups(&args.journal_root, args.config.chain.network)
-            .await
-            .unwrap();
+    let discovery = hellas_channel::work_store::discover_setups(
+        &snapshot.journal_root(),
+        snapshot.config.network(),
+    )
+    .await
+    .unwrap();
     assert!(
         discovery.setups.is_empty() && discovery.unidentified.is_empty(),
         "quoting must not create a channel"
     );
     let provider_discovery = hellas_channel::work_store::discover_setups(
-        &a.path().join("paid-provider"),
-        args.config.chain.network,
+        &crate::paid::config(&policy.chain, a.path())
+            .unwrap()
+            .chain
+            .provider_journals(),
+        snapshot.config.network(),
     )
     .await
     .unwrap();
@@ -415,15 +383,19 @@ async fn funded_setup(
             .view()
             .unwrap()
             .client()
-            .get_coins_by_owner(BOB.key())
+            .get_holdings(BOB.key(), None)
             .await
             .unwrap()
             .unwrap()
-            .coins,
+            .owned_coins(BOB.key()),
         buyer_before,
         "quote discovery must not spend buyer funding"
     );
-    let owner = bl.clients.funding_owner(&bl).await.unwrap();
+    let owner = bl
+        .clients
+        .funding_owner(&bl, &snapshot.config.chain)
+        .await
+        .unwrap();
     let signer = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
         bl.identity.node.node_secret_bytes(),
     )
@@ -479,12 +451,19 @@ async fn funded_setup(
         .await
         .unwrap();
     assert!(!Arc::ptr_eq(&target, &replacement));
-    assert_eq!(replacement.backend.timeout(), Some(Duration::from_secs(90)));
+    let hellas_sdk::GatewayTarget::Paid { options, .. } = replacement.backend.target() else {
+        panic!("paid target")
+    };
+    assert_eq!(options.timeout, Some(Duration::from_secs(90)));
     bl.clients.reset().await.unwrap();
     drop(replacement);
     drop(target);
+    let args = snapshot.options().await.unwrap();
     let endpoint = hellas_sdk::paid_client::bind_paid_endpoint(
-        bl.clients.paid_transport(&bl, "real").await.unwrap(),
+        bl.clients
+            .paid_transport(&bl, &snapshot.config.chain, snapshot.provider.node)
+            .await
+            .unwrap(),
     )
     .await
     .unwrap();
@@ -570,8 +549,9 @@ async fn funded_setup(
     reopened.shutdown().await;
     drop(reopened);
     endpoint.close().await;
+    args.content.close().await;
     let discovery =
-        hellas_channel::work_store::discover_setups(&args.journal_root, args.config.chain.network)
+        hellas_channel::work_store::discover_setups(&args.journal_root(), args.config.network())
             .await
             .unwrap();
     assert_eq!(discovery.setups.len(), 1);
@@ -581,15 +561,15 @@ async fn funded_setup(
         .view()
         .unwrap()
         .client()
-        .get_coins_by_owner(NATIVE.key())
+        .get_holdings(NATIVE.key(), None)
         .await
         .unwrap()
         .unwrap();
     assert!(
         snapshot
-            .coins
+            .owned_coins(NATIVE.key())
             .iter()
-            .any(|(id, _)| id.0 == native_coin.to_bytes()),
+            .any(|(id, _)| *id == native_coin),
         "another owner's delegated coin must remain unspent"
     );
     assert!(
@@ -598,13 +578,13 @@ async fn funded_setup(
             .view()
             .unwrap()
             .client()
-            .get_coins_by_owner(ALICE.key())
+            .get_holdings(ALICE.key(), None)
             .await
             .unwrap()
             .unwrap()
-            .coins
+            .owned_coins(ALICE.key())
             .iter()
-            .all(|(id, _)| id.0 != stake.to_bytes())
+            .all(|(id, _)| *id != stake)
     );
     assert_eq!(
         origin.as_ref().map_or_else(
@@ -630,7 +610,7 @@ async fn funded_setup(
 
 async fn funded_listener(case: FundedGateway) {
     let FundedGateway {
-        directories: [_a, b, _sa, _sb],
+        directories: [a, b, sa, _sb],
         devnet,
         alice,
         bob,
@@ -790,7 +770,18 @@ async fn funded_listener(case: FundedGateway) {
             .await
             .is_err()
     );
+    let revision = alice.provider_view().await.unwrap().revision;
+    alice.configure_paid_serve(revision, None).await.unwrap();
     alice.shutdown().await.unwrap();
+    drop(alice);
+    // Retained paid journals must recover even when paid Serve is disabled.
+    let reopened = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+        .await
+        .unwrap();
+    reopened.local().await.unwrap();
+    assert!(reopened.provider_view().await.unwrap().paid.is_none());
+    reopened.set_provider(true).await.unwrap();
+    reopened.shutdown().await.unwrap();
     devnet.shutdown().await;
 }
 
