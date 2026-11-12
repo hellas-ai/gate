@@ -1385,8 +1385,13 @@ fn chain_input(directory: &std::path::Path, profile: &hellas_genesis::ChainProfi
     std::fs::write(&file, serde_json::to_vec(&serde_json::json!({
         "trust": profile.trust(), "validators": profile.validators(), "genesis_json": profile.genesis_json(),
     })).unwrap()).unwrap();
+    let imported = hellas_sdk::work_config::load_chain_profile(&file)
+        .unwrap()
+        .to_file();
     ChainInput::Custom {
-        file: file.to_str().unwrap().into(),
+        trust: imported.trust,
+        validators: imported.validators,
+        genesis_json: imported.genesis_json,
     }
 }
 async fn paid_policy_fixture(directory: &std::path::Path) -> PaidPolicyInput {
@@ -1480,15 +1485,13 @@ async fn paid_apple_approvals_bind_the_address_and_keep_node_journals_across_enr
         .unwrap()
         .providers
         .remove(0);
-    let anchor = original.trust.anchor.clone();
-    assert_eq!(
-        original.trust.anchor.required_assurance,
-        hellas_rpc::Assurance::AppleAppAttest
-    );
-    assert_eq!(
-        anchor.expected_genesis,
-        original.trust.anchor.expected_genesis
-    );
+    let options = original.options().await.unwrap();
+    let anchor = options.trust().unwrap();
+    assert_eq!(options.assurance, hellas_rpc::Assurance::AppleAppAttest);
+    assert_eq!(anchor.expected_genesis, options.provider.enrollment);
+    assert!(options.apple_trust.is_some());
+    let journal = options.journal_root();
+    options.content.close().await;
     assert_eq!(
         anchor.apple_app_attest.as_ref().unwrap().allowed_cd_hashes,
         vec![[7; 32]]
@@ -1507,7 +1510,13 @@ async fn paid_apple_approvals_bind_the_address_and_keep_node_journals_across_enr
         .unwrap()
         .providers
         .remove(0);
-    assert_eq!(original.journal_root(), replacement.journal_root());
+    let replaced = replacement.options().await.unwrap();
+    assert_eq!(journal, replaced.journal_root());
+    assert_eq!(
+        replaced.trust().unwrap().expected_genesis,
+        replaced.provider.enrollment
+    );
+    replaced.content.close().await;
     assert_ne!(
         original.trust.anchor.expected_genesis,
         replacement.trust.anchor.expected_genesis
@@ -1585,6 +1594,32 @@ async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channe
     assert!(applied.error.is_none(), "{:?}", applied.error);
     let local = app.local().await.unwrap();
     let bytes = std::fs::read(crate::paid::pool_path(directory.path(), &pool.id).unwrap()).unwrap();
+    let saved: PaidPoolInput = serde_json::from_slice(&bytes).unwrap();
+    let saved_profile = crate::paid::profile(&saved.providers[0].policy.chain).unwrap();
+    // The saved document owns the authenticated profile, not its import path.
+    let source = directory.path().join("chain-profile.json");
+    std::fs::write(&source, b"replaced profile").unwrap();
+    assert_eq!(
+        crate::paid::pool_snapshot(directory.path(), &saved)
+            .unwrap()
+            .providers[0]
+            .profile
+            .state_key(),
+        saved_profile.state_key()
+    );
+    std::fs::remove_file(source).unwrap();
+    assert_eq!(
+        crate::paid::pool_snapshot(directory.path(), &saved)
+            .unwrap()
+            .providers[0]
+            .profile
+            .genesis_json(),
+        saved_profile.genesis_json()
+    );
+    assert!(
+        !directory.path().join("chains").exists(),
+        "preview, save and resolution must not open chain homes"
+    );
     let mut zero = pool.clone();
     zero.providers[0].policy.fixed_price = 0;
     let mut duplicate = pool.clone();
@@ -1603,7 +1638,7 @@ async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channe
             .err()
             .unwrap()
             .to_string()
-            .contains("approved enrollment")
+            .contains("different enrollment")
     );
     let options = crate::paid::pool_snapshot(directory.path(), &pool).unwrap();
     assert_eq!(
@@ -1637,14 +1672,19 @@ async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channe
             .to_string()
             .contains("already assigned")
     );
+    assert!(
+        !directory.path().join("chains").exists(),
+        "refused pools must not create chain homes"
+    );
+    let config = crate::paid::config(&pool.providers[0].policy.chain, directory.path()).unwrap();
     let first = local
         .clients
-        .funding_owner(&local, &options.providers[0].config.chain)
+        .funding_owner(&local, &config.chain)
         .await
         .unwrap();
     let second = local
         .clients
-        .funding_owner(&local, &options.providers[0].config.chain)
+        .funding_owner(&local, &config.chain)
         .await
         .unwrap();
     assert!(
@@ -1673,18 +1713,15 @@ async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channe
     resume.notify_one();
     let error = pending.await.unwrap().err().unwrap();
     assert!(error.to_string().contains("paid pool changed"), "{error:#}");
-    let retained = options.providers[0].journal_root();
+    let retained = hellas_sdk::paid_client::PaidJournalKind::Gateway
+        .journal_root(&config.chain, options.providers[0].provider);
     assert!(
         !retained.exists(),
         "validation and refused opening cannot create journals"
     );
     let transport = local
         .clients
-        .paid_transport(
-            &local,
-            &options.providers[0].config.chain,
-            options.providers[0].provider.node,
-        )
+        .paid_transport(&local, &config.chain, options.providers[0].provider.node)
         .await
         .unwrap();
     pool.providers[0].provider = paid_address(4, 4);
@@ -1692,13 +1729,19 @@ async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channe
     // Journals are addressed by chain and provider, independently of the UI group.
     app.save_paid_pool(overlapping.clone()).await.unwrap();
     let reassigned = crate::paid::pool_snapshot(directory.path(), &overlapping).unwrap();
-    assert_eq!(reassigned.providers[0].journal_root(), retained);
+    let reopened_config =
+        crate::paid::config(&overlapping.providers[0].policy.chain, directory.path()).unwrap();
+    assert_eq!(
+        hellas_sdk::paid_client::PaidJournalKind::Gateway
+            .journal_root(&reopened_config.chain, reassigned.providers[0].provider),
+        retained
+    );
     assert_eq!(
         local
             .clients
             .paid_transport(
                 &local,
-                &reassigned.providers[0].config.chain,
+                &reopened_config.chain,
                 reassigned.providers[0].provider.node
             )
             .await
@@ -3093,9 +3136,10 @@ async fn openai_https_and_paid_share_one_host_and_invalid_paid_settings_preserve
     upstream.started.notified().await;
     let metadata = std::fs::read(a.path().join("provider-configuration.json")).unwrap();
     let mut invalid = paid.clone();
-    invalid.policy.chain = ChainInput::Custom {
-        file: a.path().join("missing-chain.json").display().to_string(),
+    let ChainInput::Custom { genesis_json, .. } = &mut invalid.policy.chain else {
+        panic!("custom profile")
     };
+    *genesis_json = "invalid genesis".into();
     let mut duplicate = paid.clone();
     duplicate.policy.max_open_offers = 0;
     let mut missing = paid.clone();

@@ -213,7 +213,7 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
         .as_ref()
         .map(|input| input.configuration.clone());
     if let Some(Some(input)) = &paid_change {
-        crate::paid::serve_config(&local.directory, input)?;
+        crate::paid::validate_serve(input)?;
     }
     let paid_changed = if let Some(wanted) = &paid_change {
         serde_json::to_vec(wanted)? != serde_json::to_vec(&current.paid)?

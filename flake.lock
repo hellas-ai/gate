@@ -18,17 +18,17 @@
     "hellas": {
       "flake": false,
       "locked": {
-        "lastModified": 1794473864,
-        "narHash": "sha256-X1CO/6YuJY8KC4/8kjduI9X55q2482XkjxNQYjOGPHo=",
+        "lastModified": 1794506482,
+        "narHash": "sha256-yRBkZEmvf2rsoSmeM1STrJ23WmtK4lxaHkxGPNR26l0=",
         "owner": "hellas-ai",
         "repo": "hellas",
-        "rev": "dd91add386aa988d7f7414c8503a9c71c35ec819",
+        "rev": "3b07fc20641d30733b373784862fc25a42dc6a22",
         "type": "github"
       },
       "original": {
         "owner": "hellas-ai",
         "repo": "hellas",
-        "rev": "dd91add386aa988d7f7414c8503a9c71c35ec819",
+        "rev": "3b07fc20641d30733b373784862fc25a42dc6a22",
         "type": "github"
       }
     },
@@ -39,11 +39,11 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1794473864,
-        "narHash": "sha256-X1CO/6YuJY8KC4/8kjduI9X55q2482XkjxNQYjOGPHo=",
+        "lastModified": 1794506482,
+        "narHash": "sha256-yRBkZEmvf2rsoSmeM1STrJ23WmtK4lxaHkxGPNR26l0=",
         "owner": "hellas-ai",
         "repo": "hellas",
-        "rev": "dd91add386aa988d7f7414c8503a9c71c35ec819",
+        "rev": "3b07fc20641d30733b373784862fc25a42dc6a22",
         "type": "github"
       },
       "original": {

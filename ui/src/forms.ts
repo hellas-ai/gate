@@ -29,13 +29,14 @@ export async function approve(summary: string, passkey = true): Promise<boolean>
   return new Promise(resolve=>dialog.addEventListener("close",()=>{const accepted=dialog.returnValue==="approve";debug(accepted?"approvalAccepted":"approvalCancelled");dialog.remove();resolve(accepted);},{once:true}));
 }
 function chainFields(p?:T.PaidClientPolicyInput|T.PaidPolicyInput):string {
-  return field("chainFile","Custom chain profile file (empty selects devnet)",p?.chain.kind==="custom"?p.chain.file:"","text",false)+
+  const profile=p?.chain.kind==="custom"?JSON.stringify({trust:p.chain.trust,validators:p.chain.validators,genesis_json:p.chain.genesis_json},null,2):"";
+  return area("chainProfile","Custom chain profile JSON (empty selects devnet)",profile,false)+
     field("service","Configured service",p?.service)+field("method","Configured method",p?.method)+select("presentation","Fetch presentation",p?.presentation==="http"?[["http","HTTP"],["responses","Responses"]]:[["responses","Responses"],["http","HTTP"]])+
     field("fixedPrice","Price per result",String(p?.fixedPrice??10),"number");
 }
 function clientPolicy(data:FormData):T.PaidClientPolicyInput {
-  const file=text(data,"chainFile");
-  return {chain:file?{kind:"custom",file}:{kind:"devnet"},service:text(data,"service"),method:text(data,"method"),presentation:text(data,"presentation")==="http"?"http":"responses",fixedPrice:number(data,"fixedPrice")};
+  const profile=text(data,"chainProfile");
+  return {chain:profile?{...JSON.parse(profile),kind:"custom"}:{kind:"devnet"},service:text(data,"service"),method:text(data,"method"),presentation:text(data,"presentation")==="http"?"http":"responses",fixedPrice:number(data,"fixedPrice")};
 }
 export function paidPolicyFields(p?:T.PaidPolicyInput):string {
   const f=(name:keyof T.PaidPolicyInput,label:string,fallback:number)=>field(name,label,String(p?.[name]??fallback),"number");

@@ -204,7 +204,6 @@ impl Clients {
                     *service == selected.policy.service && *method == selected.policy.method,
                     "paid route differs from selected policy"
                 );
-                let _: hellas_sdk::client::ProviderAddress = provider.parse()?;
                 Ok(Selection::Paid {
                     pool,
                     selected: Box::new(selected),
@@ -252,25 +251,13 @@ impl Clients {
         let (policy, pool_version) = match &selection {
             Selection::Authorized { trust, .. } => (&trust.record, String::new()),
             Selection::Paid {
-                pool,
-                providers,
-                approvals,
-                ..
+                pool, approvals, ..
             } => {
                 let policy = approvals
                     .iter()
                     .find(|record| record.id == input.trust_policy)
                     .context("selected approval is absent from paid snapshot")?;
-                let profiles: Vec<_> = providers
-                    .iter()
-                    .map(|provider| {
-                        (
-                            provider.config.chain.trust(),
-                            provider.config.chain.validators(),
-                        )
-                    })
-                    .collect();
-                (policy, serde_json::to_string(&(pool, approvals, profiles))?)
+                (policy, serde_json::to_string(&(pool, approvals))?)
             }
         };
         let version = serde_json::to_string(&(input, policy, pool_version.clone()))?;
@@ -368,7 +355,7 @@ impl Clients {
                             principal: access.subject,
                             signer: signer.clone(),
                             application,
-                            journal_root: paid::home(&self.directory)
+                            journal_root: crate::control::home(&self.directory)
                                 .child("work-channels")
                                 .child(access.authority.to_string())
                                 .child(allowance),
@@ -408,26 +395,29 @@ impl Clients {
                     .into_iter()
                     .find(|p| p.input.provider == *provider)
                     .context("selected provider is absent from snapshot")?;
-                let provider_id = provider
-                    .parse::<hellas_sdk::client::ProviderAddress>()?
-                    .node;
+                let provider_id = snapshot.provider.node;
                 if let Some(held) = cache.remove(&key) {
                     retire(&held.target.backend).await?;
                 }
-                let owner = self.funding_owner(local, &snapshot.config.chain).await?;
                 let settlement_key = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
                     local.identity.node.node_secret_bytes(),
                 )
                 .map_err(|_| anyhow::anyhow!("invalid requester settlement key"))?;
-                let transport = self
-                    .paid_transport(local, &snapshot.config.chain, provider_id)
-                    .await?;
                 let mut options = snapshot.options().await?;
-                let endpoint = match hellas_sdk::paid_client::bind_paid_endpoint(transport).await {
-                    Ok(endpoint) => endpoint,
+                let opened: anyhow::Result<_> = async {
+                    let owner = self.funding_owner(local, &options.config.chain).await?;
+                    let transport = self
+                        .paid_transport(local, &options.config.chain, provider_id)
+                        .await?;
+                    let endpoint = hellas_sdk::paid_client::bind_paid_endpoint(transport).await?;
+                    Ok((owner, endpoint))
+                }
+                .await;
+                let (owner, endpoint) = match opened {
+                    Ok(opened) => opened,
                     Err(error) => {
                         options.content.close().await;
-                        return Err(error.into());
+                        return Err(error);
                     }
                 };
                 let quoted: anyhow::Result<_> = async {

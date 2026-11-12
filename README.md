@@ -99,9 +99,10 @@ host UDP port takes effect on an explicit drain/restart.
 
 ## Paid setup and gateways
 
-Choose the compiled devnet profile or a local custom chain-profile JSON file
-containing `trust`, `validators` and `genesis_json`. The SDK validates the genesis
-and trust schedule and keeps each chain’s state in its own directory.
+Choose the compiled devnet profile or paste custom chain-profile JSON
+containing `trust`, `validators` and `genesis_json`. Gate saves these contents in
+the pool or Serve settings. The SDK validates the genesis and trust schedule and
+keeps each chain’s state in its own directory.
 
 Start Serve with a configured Fetch resource, then approve one standing paid
 policy with the owner passkey: price, jobs per channel, per-job limits, maximum

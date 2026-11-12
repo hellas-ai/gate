@@ -13,6 +13,10 @@ use std::{
     sync::Arc,
 };
 
+pub fn home(directory: &Path) -> hellas_private::StoreLocation {
+    hellas_private::StoreLocation::from_home(directory, hellas_private::Durability::Power)
+}
+
 pub type Client = HostControlClientImpl<hellas_wire::mux::MuxTransport>;
 pub struct LocalNode {
     pub identity: Arc<Identity>,
@@ -46,7 +50,7 @@ impl LocalNode {
         let (tls, _) = node_control::profile::local_trust(certificate, "localhost".into())?;
         let socket = directory.join("gate.sock");
         let content = hellas_store::content::DiskStore::open(
-            crate::paid::home(directory).child("content"),
+            crate::control::home(directory).child("content"),
             vec![],
             hellas_store::content::IndexMode::Resume,
             None,
@@ -56,93 +60,116 @@ impl LocalNode {
             false,
         )
         .await?;
-        if let Err(error) =
-            crate::paid::recover_provider_content(directory, &identity, &content).await
-        {
-            content.close().await;
-            return Err(error);
-        }
-        let local = Arc::new(Self {
-            identity: Arc::new(identity),
-            coordinator: coordinator.clone(),
-            socket: socket.clone(),
-            composition: crate::provider_setup::Composition::open(directory, vault.clone())?,
-            directory: directory.to_owned(),
-            clients: crate::clients::Clients::new(directory),
-            content,
-            gateway: crate::gateway::Configuration::open(directory)?,
-            vault,
-            tls,
-            bound_addresses: Default::default(),
-        });
-        #[cfg(test)]
-        let endpoint =
-            hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::Minimal);
-        #[cfg(not(test))]
-        let endpoint = hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::N0);
-        let settings = crate::settings::load(directory)?;
-        let endpoint = if let Some(port) = settings.listen_port {
-            endpoint.bind_addr(std::net::SocketAddrV4::new(
-                std::net::Ipv4Addr::UNSPECIFIED,
-                port,
-            ))?
-        } else {
-            endpoint
-        };
-        let transport = endpoint
-            .secret_key(local.identity.node.transport_key())
-            .bind()
+        let opened = async {
+            let settlement_key = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
+                identity.node.node_secret_bytes(),
+            )
+            .map_err(|_| anyhow::anyhow!("invalid provider settlement key"))?;
+            // Restore retained pins and reservations before cleanup, including inactive
+            // chains. This does not drive those chains through channel close.
+            hellas_sdk::chain_home::recover_provider_chains(
+                &home(directory),
+                &settlement_key,
+                &content,
+            )
             .await?;
-        let _ = local.bound_addresses.set(
-            transport
-                .bound_sockets()
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-        );
-        let host = HostHandle::start_with_deferred_gateway(
-            HostOptions {
-                content: local.content.clone(),
-                transport: Some(transport),
-                start_provider: false,
-                control: Some((
-                    coordinator,
-                    hellas_sdk::ProviderControl {
-                        socket,
-                        tls: server,
-                        remote: Default::default(),
-                    },
-                )),
-                provider: Some(local.composition.factory(local.clone())),
-                gateway: None,
-            },
-            crate::gateway::factory(local.clone()),
-            Arc::new({
-                let local = local.clone();
-                move || {
+            content.finish_recovery().await?;
+            let local = Arc::new(Self {
+                identity: Arc::new(identity),
+                coordinator: coordinator.clone(),
+                socket: socket.clone(),
+                composition: crate::provider_setup::Composition::open(directory, vault.clone())?,
+                directory: directory.to_owned(),
+                clients: crate::clients::Clients::new(directory),
+                content: content.clone(),
+                gateway: crate::gateway::Configuration::open(directory)?,
+                vault,
+                tls,
+                bound_addresses: Default::default(),
+            });
+            #[cfg(test)]
+            let endpoint =
+                hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::Minimal);
+            #[cfg(not(test))]
+            let endpoint =
+                hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::N0);
+            let settings = crate::settings::load(directory)?;
+            let endpoint = if let Some(port) = settings.listen_port {
+                endpoint.bind_addr(std::net::SocketAddrV4::new(
+                    std::net::Ipv4Addr::UNSPECIFIED,
+                    port,
+                ))?
+            } else {
+                endpoint
+            };
+            let transport = endpoint
+                .secret_key(local.identity.node.transport_key())
+                .bind()
+                .await?;
+            let _ = local.bound_addresses.set(
+                transport
+                    .bound_sockets()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+            );
+            let host = HostHandle::start_with_deferred_gateway(
+                HostOptions {
+                    content: local.content.clone(),
+                    transport: Some(transport),
+                    start_provider: false,
+                    control: Some((
+                        coordinator,
+                        hellas_sdk::ProviderControl {
+                            socket,
+                            tls: server,
+                            remote: Default::default(),
+                        },
+                    )),
+                    provider: Some(local.composition.factory(local.clone())),
+                    gateway: None,
+                },
+                crate::gateway::factory(local.clone()),
+                Arc::new({
                     let local = local.clone();
-                    Box::pin(async move {
-                        crate::credentials::load_gateway_anchor(&local)
-                            .await
-                            .map_err(Into::into)
-                    })
-                }
-            }),
-        )
-        .await?;
-        // A committed initialization must authenticate using precisely its prepared ID.
-        let status = local
-            .client(false)
-            .await?
-            .get_host_status(GetHostStatusRequest {
-                authorization: local.authorization(),
-            })
+                    move || {
+                        let local = local.clone();
+                        Box::pin(async move {
+                            crate::credentials::load_gateway_anchor(&local)
+                                .await
+                                .map_err(Into::into)
+                        })
+                    }
+                }),
+            )
             .await?;
-        ensure!(
-            status.authority == local.identity.public.authority.0.as_bytes(),
-            "local authority mismatch"
-        );
-        Ok((local, host))
+            let authenticated: anyhow::Result<()> = async {
+                // A committed initialization must authenticate using precisely its prepared ID.
+                let status = local
+                    .client(false)
+                    .await?
+                    .get_host_status(GetHostStatusRequest {
+                        authorization: local.authorization(),
+                    })
+                    .await?;
+                ensure!(
+                    status.authority == local.identity.public.authority.0.as_bytes(),
+                    "local authority mismatch"
+                );
+                Ok(())
+            }
+            .await;
+            if let Err(error) = authenticated {
+                let _ = host.shutdown().await;
+                return Err(error);
+            }
+            Ok((local, host))
+        }
+        .await;
+        if opened.is_err() {
+            content.close().await;
+        }
+        opened
     }
     pub fn authorization(&self) -> Vec<u8> {
         self.identity.public.root.0.to_vec()
@@ -264,6 +291,43 @@ impl Session {
 mod tests {
     use super::*;
     use crate::state::AppState;
+    #[tokio::test]
+    async fn malformed_startup_metadata_can_be_repaired_and_reopened_in_process() {
+        let directory = tempfile::tempdir().unwrap();
+        let secrets = tempfile::tempdir().unwrap();
+        let vault = Vault::fixture(secrets.path());
+        let app = AppState::with_vault(directory.path(), vault.clone())
+            .await
+            .unwrap();
+        app.initialize_software("Recovery".into()).await.unwrap();
+        app.shutdown().await.unwrap();
+        drop(app);
+        for name in [
+            "provider-configuration.json",
+            "gateway-configuration.json",
+            "settings.json",
+        ] {
+            let path = directory.path().join(name);
+            let original = std::fs::read(&path).ok();
+            std::fs::write(&path, b"malformed metadata").unwrap();
+            let failed = AppState::with_vault(directory.path(), vault.clone())
+                .await
+                .unwrap();
+            assert!(failed.local().await.is_err(), "{name} must refuse startup");
+            drop(failed);
+            if let Some(bytes) = original {
+                std::fs::write(&path, bytes).unwrap();
+            } else {
+                std::fs::remove_file(&path).unwrap();
+            }
+            let reopened = AppState::with_vault(directory.path(), vault.clone())
+                .await
+                .unwrap();
+            reopened.local().await.unwrap().client(false).await.unwrap();
+            reopened.shutdown().await.unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn real_local_control_refuses_wrong_secret_key_and_pin_and_survives_restart() {
         let directory = tempfile::tempdir().unwrap();

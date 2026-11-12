@@ -397,7 +397,7 @@ impl Composition {
             }
         }
         if let Some(input) = &config.paid {
-            crate::paid::serve_config(&self.directory, input)?;
+            crate::paid::validate_serve(input)?;
             let resource = config
                 .resources
                 .iter()
@@ -797,7 +797,7 @@ impl Composition {
             identity: local.identity.node.clone(),
             enrollment: identity.enrollment,
             root: identity.root,
-            home: crate::paid::home(&self.directory),
+            home: crate::control::home(&self.directory),
             content: local.content.clone(),
             grants: Some(hellas_sdk::GrantProviderOptions {
                 configuration,
@@ -816,8 +816,7 @@ impl Composition {
                     policy.policy == crate::paid::standing_policy(&input.policy)?,
                     "standing paid settings differ from the owner-approved policy"
                 );
-                let paid = crate::paid::serve_config(&self.directory, input)?;
-                crate::paid::retain_provider_profile(&paid)?;
+                let paid = crate::paid::config(&input.policy.chain, &self.directory)?;
                 Some(hellas_sdk::PaidProviderOptions::new(paid))
             } else {
                 None

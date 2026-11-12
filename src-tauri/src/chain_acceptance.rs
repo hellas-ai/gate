@@ -9,6 +9,9 @@ use hellas_gateway::WorkExecutionBackend as _;
 use hellas_sdk::kernel::{CoinId, Key};
 use std::time::Duration;
 
+#[path = "recovery_fixture.rs"]
+mod recovery_fixture;
+
 fn policy(devnet: &Devnet, directory: &std::path::Path) -> PaidPolicyInput {
     PaidPolicyInput {
         chain: chain_input(directory, &devnet.profile(0)),
@@ -339,7 +342,7 @@ async fn funded_setup(
     );
     let refusal = bl.clients.target(&bl, &request.client).await.err().unwrap();
     assert!(
-        refusal.to_string().contains("approved enrollment"),
+        refusal.to_string().contains("different enrollment"),
         "{refusal:#}"
     );
     assert_eq!(bl.clients.opened_paid_trust.lock().unwrap().len(), 1);
@@ -357,9 +360,11 @@ async fn funded_setup(
         &bl.clients.target(&bl, &request.client).await.unwrap()
     ));
     drop(first);
+    let config = crate::paid::config(&snapshot.input.policy.chain, b.path()).unwrap();
     let discovery = hellas_channel::work_store::discover_setups(
-        &snapshot.journal_root(),
-        snapshot.config.network(),
+        &hellas_sdk::paid_client::PaidJournalKind::Gateway
+            .journal_root(&config.chain, snapshot.provider),
+        config.network(),
     )
     .await
     .unwrap();
@@ -372,7 +377,7 @@ async fn funded_setup(
             .unwrap()
             .chain
             .provider_journals(),
-        snapshot.config.network(),
+        config.network(),
     )
     .await
     .unwrap();
@@ -391,11 +396,7 @@ async fn funded_setup(
         buyer_before,
         "quote discovery must not spend buyer funding"
     );
-    let owner = bl
-        .clients
-        .funding_owner(&bl, &snapshot.config.chain)
-        .await
-        .unwrap();
+    let owner = bl.clients.funding_owner(&bl, &config.chain).await.unwrap();
     let signer = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
         bl.identity.node.node_secret_bytes(),
     )
@@ -461,7 +462,7 @@ async fn funded_setup(
     let args = snapshot.options().await.unwrap();
     let endpoint = hellas_sdk::paid_client::bind_paid_endpoint(
         bl.clients
-            .paid_transport(&bl, &snapshot.config.chain, snapshot.provider.node)
+            .paid_transport(&bl, &config.chain, snapshot.provider.node)
             .await
             .unwrap(),
     )
@@ -770,18 +771,41 @@ async fn funded_listener(case: FundedGateway) {
             .await
             .is_err()
     );
-    let revision = alice.provider_view().await.unwrap().revision;
-    alice.configure_paid_serve(revision, None).await.unwrap();
+    let local = alice.local().await.unwrap();
+    let paid = alice.provider_view().await.unwrap().paid.unwrap();
+    let config = crate::paid::config(&paid.policy.chain, a.path()).unwrap();
+    let retained = recovery_fixture::Retained::seed(&local, &config).await;
+    retained.assert_recovered(&local.content).await;
+    retained.remove_pins(&local.content).await;
     alice.shutdown().await.unwrap();
+    drop(local);
     drop(alice);
-    // Retained paid journals must recover even when paid Serve is disabled.
+    std::fs::remove_file(a.path().join("chain-profile.json")).unwrap();
+    // Offline recovery must republish the journal's pin before startup cleanup.
     let reopened = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
         .await
         .unwrap();
-    reopened.local().await.unwrap();
-    assert!(reopened.provider_view().await.unwrap().paid.is_none());
+    let local = reopened.local().await.unwrap();
+    retained.assert_recovered(&local.content).await;
+    assert!(reopened.provider_view().await.unwrap().paid.is_some());
     reopened.set_provider(true).await.unwrap();
+    // Live Serve discovers the same journal again after the global barrier.
+    retained.assert_recovered(&local.content).await;
+    let revision = reopened.provider_view().await.unwrap().revision;
+    reopened.configure_paid_serve(revision, None).await.unwrap();
+    retained.remove_pins(&local.content).await;
     reopened.shutdown().await.unwrap();
+    drop(local);
+    drop(reopened);
+    let disabled = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
+        .await
+        .unwrap();
+    let local = disabled.local().await.unwrap();
+    assert!(disabled.provider_view().await.unwrap().paid.is_none());
+    retained.assert_recovered(&local.content).await;
+    disabled.set_provider(true).await.unwrap();
+    retained.assert_recovered(&local.content).await;
+    disabled.shutdown().await.unwrap();
     devnet.shutdown().await;
 }
 

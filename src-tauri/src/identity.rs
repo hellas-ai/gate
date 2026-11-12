@@ -270,7 +270,7 @@ impl Identity {
         }))
     }
     pub async fn open_store(&self, directory: &Path) -> anyhow::Result<NodeStore> {
-        let path = crate::paid::home(directory).child("node");
+        let path = crate::control::home(directory).child("node");
         let network = hellas_authority::model::grant::grant_network();
         let now = UnixMillis::now()?;
         let store = if path.join("authority").try_exists()? {
@@ -393,7 +393,7 @@ impl Identity {
         )?;
         let network = hellas_authority::model::grant::grant_network();
         let inspection = NodeStore::inspect_offline(
-            &crate::paid::home(directory).child("node"),
+            &crate::control::home(directory).child("node"),
             network,
             &InspectionQuery::Grant { id: public.root },
         )
@@ -412,7 +412,7 @@ impl Identity {
             ))
             .await?;
         let (record, credential) = NodeStore::recover_offline(
-            &crate::paid::home(directory).child("node"),
+            &crate::control::home(directory).child("node"),
             network,
             inspection.revision,
             OwnerApproval {

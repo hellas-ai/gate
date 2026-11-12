@@ -80,21 +80,26 @@ pub fn standing_policy(input: &PaidPolicyInput) -> anyhow::Result<PaidPolicy> {
     Ok(policy)
 }
 
-pub fn home(directory: &Path) -> hellas_private::StoreLocation {
-    hellas_private::StoreLocation::from_home(directory, hellas_private::Durability::Power)
-}
-
 pub fn profile(input: &ChainInput) -> anyhow::Result<hellas_genesis::ChainProfile> {
     Ok(match input {
         ChainInput::Devnet => hellas_genesis::ChainProfile::known(hellas_genesis::Chain::Devnet),
-        ChainInput::Custom { file } => {
-            hellas_sdk::work_config::load_chain_profile(Path::new(file))?
-        }
+        ChainInput::Custom {
+            trust,
+            validators,
+            genesis_json,
+        } => hellas_genesis::ChainProfile::custom(hellas_genesis::CustomChainFile {
+            trust: trust.clone(),
+            validators: validators.clone(),
+            genesis_json: genesis_json.clone(),
+        })?,
     })
 }
 
 pub fn config(chain: &ChainInput, directory: &Path) -> anyhow::Result<WorkConfig> {
-    Ok(WorkConfig::for_chain(profile(chain)?, &home(directory))?)
+    Ok(WorkConfig::for_chain(
+        profile(chain)?,
+        &crate::control::home(directory),
+    )?)
 }
 
 pub fn pool_path(directory: &Path, id: &str) -> anyhow::Result<std::path::PathBuf> {
@@ -111,7 +116,9 @@ pub fn pool_path(directory: &Path, id: &str) -> anyhow::Result<std::path::PathBu
 pub(crate) struct ProviderSnapshot {
     pub input: PaidProviderInput,
     pub provider: hellas_sdk::client::ProviderAddress,
-    pub config: WorkConfig,
+    pub profile: hellas_genesis::ChainProfile,
+    home: hellas_private::StoreLocation,
+    provider_addrs: Vec<std::net::SocketAddr>,
     pub trust: trust::Snapshot,
 }
 pub(crate) struct PoolSnapshot {
@@ -123,46 +130,58 @@ pub(crate) fn pool_snapshot(
     pool: &PaidPoolInput,
 ) -> anyhow::Result<PoolSnapshot> {
     pool_path(directory, &pool.id)?;
-    validate_assignments(directory, pool)?;
     ensure!(
         !pool.providers.is_empty() && pool.providers.len() <= 16,
         "select 1 to 16 paid providers"
     );
+    let addresses = pool
+        .providers
+        .iter()
+        .map(|input| {
+            input
+                .provider
+                .parse::<hellas_sdk::client::ProviderAddress>()
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let nodes = addresses
+        .iter()
+        .map(|provider| provider.node)
+        .collect::<std::collections::BTreeSet<_>>();
+    ensure!(nodes.len() == addresses.len(), "duplicate paid provider");
+    validate_assignments(directory, &pool.id, &nodes)?;
     let mut providers = Vec::new();
     let mut snapshots = std::collections::BTreeMap::<String, trust::Snapshot>::new();
     let mut approvals = Vec::new();
-    let mut nodes = std::collections::BTreeSet::new();
-    for input in &pool.providers {
-        let provider: hellas_sdk::client::ProviderAddress = input.provider.parse()?;
-        ensure!(nodes.insert(provider.node), "duplicate paid provider");
+    for (input, provider) in pool.providers.iter().zip(addresses) {
         FetchRoutePolicy::sealed_route(&input.policy.service, &input.policy.method)?;
-        let config = config(&input.policy.chain, directory)?;
+        let profile = profile(&input.policy.chain)?;
+        WorkConfig::validate_profile(&profile)?;
         let approved = match snapshots.entry(input.trust_policy.clone()) {
             std::collections::btree_map::Entry::Occupied(entry) => entry.get().clone(),
             std::collections::btree_map::Entry::Vacant(entry) => entry
                 .insert(trust::snapshot(directory, &input.trust_policy)?)
                 .clone(),
         };
-        ensure!(
-            approved.anchor.expected_genesis == provider.enrollment,
-            "paid provider address differs from the approved enrollment"
-        );
-        ensure!(
-            input.policy.fixed_price > 0
-                && input.acceptance_blocks > 0
-                && input.terminal_blocks > 0
-                && input.payment_blocks > 0
-                && input.timeout_seconds > 0,
-            "price and deadline spans must be positive"
-        );
-        for address in &input.addresses {
-            address.parse::<std::net::SocketAddr>()?;
-        }
+        provider.trust(approved.anchor.required_assurance, Some(&approved.anchor))?;
+        hellas_sdk::paid_client::validate_terms(
+            input.policy.fixed_price,
+            input.acceptance_blocks,
+            input.terminal_blocks,
+            input.payment_blocks,
+            Some(Duration::from_secs(input.timeout_seconds)),
+        )?;
+        let provider_addrs = input
+            .addresses
+            .iter()
+            .map(|address| address.parse())
+            .collect::<Result<_, _>>()?;
         approvals.push(approved.record.clone());
         providers.push(ProviderSnapshot {
             input: input.clone(),
             provider,
-            config,
+            profile,
+            home: crate::control::home(directory),
+            provider_addrs,
             trust: approved,
         });
     }
@@ -173,14 +192,12 @@ pub(crate) fn pool_snapshot(
 }
 
 impl ProviderSnapshot {
-    pub(crate) fn journal_root(&self) -> hellas_private::StoreLocation {
-        self.config.chain.gateway(&self.provider.node.to_string())
-    }
     pub async fn options(&self) -> anyhow::Result<hellas_sdk::paid_client::PaidWorkOptions> {
         use hellas_store::content::{DiskStore, IndexMode, Reservations};
         let input = &self.input;
-        let provider: hellas_sdk::client::ProviderAddress = input.provider.parse()?;
-        let root = self.journal_root();
+        let config = WorkConfig::for_chain(self.profile.clone(), &self.home)?;
+        let root = hellas_sdk::paid_client::PaidJournalKind::Gateway
+            .journal_root(&config.chain, self.provider);
         let content = DiskStore::open(
             root.child("content"),
             vec![],
@@ -191,8 +208,7 @@ impl ProviderSnapshot {
         )
         .await?;
         let recovered: anyhow::Result<()> = async {
-            hellas_sdk::paid_client::recover_content(&root, self.config.network(), &content)
-                .await?;
+            hellas_sdk::paid_client::recover_content(&root, config.network(), &content).await?;
             content.finish_recovery().await?;
             Ok(())
         }
@@ -202,15 +218,11 @@ impl ProviderSnapshot {
             return Err(error);
         }
         let args = hellas_sdk::paid_client::PaidWorkOptions {
-            config: self.config.clone(),
+            config,
             journal_kind: hellas_sdk::paid_client::PaidJournalKind::Gateway,
             content,
-            provider,
-            provider_addrs: input
-                .addresses
-                .iter()
-                .map(|a| a.parse())
-                .collect::<Result<_, _>>()?,
+            provider: self.provider,
+            provider_addrs: self.provider_addrs.clone(),
             assurance: self.trust.anchor.required_assurance,
             apple_trust: (self.trust.anchor.required_assurance
                 == hellas_rpc::Assurance::AppleAppAttest)
@@ -228,22 +240,16 @@ impl ProviderSnapshot {
         Ok(args)
     }
 }
-fn validate_assignments(directory: &Path, pool: &PaidPoolInput) -> anyhow::Result<()> {
-    let providers = pool
-        .providers
-        .iter()
-        .map(|p| {
-            p.provider
-                .parse::<hellas_sdk::client::ProviderAddress>()
-                .map(|address| address.node)
-        })
-        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+fn validate_assignments(
+    directory: &Path,
+    id: &str,
+    providers: &std::collections::BTreeSet<hellas_sdk::iroh::EndpointId>,
+) -> anyhow::Result<()> {
     let pools = directory.join("paid-pools");
     if pools.try_exists()? {
         for entry in std::fs::read_dir(pools)? {
             let path = entry?.path();
-            if path.extension().is_none_or(|ext| ext != "json")
-                || path == pool_path(directory, &pool.id)?
+            if path.extension().is_none_or(|ext| ext != "json") || path == pool_path(directory, id)?
             {
                 continue;
             }
@@ -273,65 +279,8 @@ pub fn save_pool(directory: &Path, input: PaidPoolInput) -> anyhow::Result<()> {
     vault::write(&pool_path(directory, &input.id)?, &input)
 }
 
-pub fn serve_config(directory: &Path, input: &PaidServeInput) -> anyhow::Result<WorkConfig> {
+pub fn validate_serve(input: &PaidServeInput) -> anyhow::Result<()> {
     standing_policy(&input.policy)?;
-    config(&input.policy.chain, directory)
-}
-
-/// Remember every provider chain before it can create a journal in the shared store.
-pub(crate) fn retain_provider_profile(config: &WorkConfig) -> anyhow::Result<()> {
-    let chain = &config.chain;
-    vault::write(
-        &chain.provider().join("profile.json"),
-        &serde_json::json!({
-            "trust": chain.trust(), "validators": chain.validators(), "genesis_json": chain.genesis_json(),
-        }),
-    )
-}
-
-/// Recover inactive chains too: disabling paid Serve must not discard retained work.
-pub(crate) async fn recover_provider_content(
-    directory: &Path,
-    identity: &crate::identity::Identity,
-    content: &hellas_store::content::DiskStore,
-) -> anyhow::Result<()> {
-    use hellas_sdk::paid_provider::{MountedSetup, MountedWork, WorkRunner, WorkRunnerConfig};
-    let chains = directory.join("chains");
-    if chains.try_exists()? {
-        for entry in std::fs::read_dir(chains)? {
-            let entry = entry?;
-            let path = entry.path().join("provider/profile.json");
-            if !path.try_exists()? {
-                ensure!(
-                    !entry.path().join("provider/channels").try_exists()?,
-                    "retained provider journals require their chain profile"
-                );
-                continue;
-            }
-            let profile = hellas_sdk::work_config::load_chain_profile(&path)?;
-            let config = WorkConfig::for_chain(profile, &home(directory))?;
-            ensure!(
-                config.chain.as_path() == entry.path(),
-                "provider profile does not match its chain directory"
-            );
-            let settlement_key = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
-                identity.node.node_secret_bytes(),
-            )
-            .map_err(|_| anyhow::anyhow!("invalid provider settlement key"))?;
-            // Canonical replay restores pins and reservations in the shared DiskStore.
-            // Dropping the offline runner releases journal writers before Serve opens.
-            let recovered = WorkRunner::discover(
-                WorkRunnerConfig {
-                    chain: config.chain,
-                    settlement_key,
-                },
-                MountedWork::default(),
-                MountedSetup::with_content_store(content.clone()),
-            )
-            .await?;
-            drop(recovered);
-        }
-    }
-    content.finish_recovery().await?;
+    WorkConfig::validate_profile(&profile(&input.policy.chain)?)?;
     Ok(())
 }
