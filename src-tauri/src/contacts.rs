@@ -305,11 +305,11 @@ pub async fn share_session(
             (
                 subject,
                 BudgetNode::Pool(pool),
-                vec![Limit {
-                    meter: Meter::Requests,
-                    window: Window::Day,
-                    amount: requested.requests_per_day,
-                }],
+                vec![Limit::new(
+                    Meter::Requests,
+                    Window::Day,
+                    requested.requests_per_day,
+                )],
                 concurrent,
             ),
         ] {
@@ -317,7 +317,7 @@ pub async fn share_session(
                 session,
                 BudgetDef {
                     node,
-                    parent,
+                    parent: Some(parent),
                     revision: Revision(1),
                     limits,
                     max_in_flight: max,
@@ -649,11 +649,11 @@ pub async fn set_quota(
     definition
         .limits
         .retain(|l| l.meter != Meter::Requests || l.window != Window::Day);
-    definition.limits.push(Limit {
-        meter: Meter::Requests,
-        window: Window::Day,
-        amount: input.requests_per_day,
-    });
+    definition.limits.push(Limit::new(
+        Meter::Requests,
+        Window::Day,
+        input.requests_per_day,
+    ));
     definition.max_in_flight = concurrency;
     definition.revision = definition
         .revision

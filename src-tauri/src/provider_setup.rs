@@ -260,9 +260,6 @@ impl Composition {
     ) -> anyhow::Result<ProviderView> {
         let mut next = self.snapshot()?;
         ensure!(next.revision == expected, "provider revision conflict");
-        let input = input
-            .map(|input| crate::paid::canonical_serve(&self.directory, input))
-            .transpose()?;
         next.paid = input;
         self.validate(&next)?;
         let status = session.status().await?;
@@ -276,8 +273,6 @@ impl Composition {
             );
             let policy = crate::paid::standing_policy(&input.policy)?;
             let current = local.coordinator.paid_policy().await?;
-            let config = crate::paid::serve_config(&self.directory, input)?;
-            local.chain.get(&config).await?;
             if current
                 .as_ref()
                 .is_none_or(|current| current.policy != policy)
@@ -402,7 +397,7 @@ impl Composition {
             }
         }
         if let Some(input) = &config.paid {
-            crate::paid::serve_config(&self.directory, input)?;
+            crate::paid::validate_serve(input)?;
             let resource = config
                 .resources
                 .iter()
@@ -455,20 +450,20 @@ impl Composition {
                             && key.prefix == "Bearer ",
                         "OpenAI key must be scoped to POST /v1/responses"
                     );
-                    hellas_reseller::responses_policy(
-                        resource_id,
+                    hellas_share::responses_policy(hellas_share::ResponsesPolicyOptions {
+                        resource: resource_id,
                         account,
                         revision,
-                        &resource.service,
-                        &resource.method,
-                        ResponsesResource {
+                        service: &resource.service,
+                        method: &resource.method,
+                        responses: ResponsesResource {
                             model: model.clone(),
                             max_output_tokens: *max_output_tokens,
                             settings: Default::default(),
                         },
                         pricing,
-                        NonZeroU64::new(300_000).context("invalid job duration")?,
-                    )?
+                        max_job_millis: NonZeroU64::new(300_000).context("invalid job duration")?,
+                    })?
                 }
                 ResourceKind::Https {
                     origin,
@@ -757,7 +752,7 @@ impl Composition {
                     .context("upstream key missing")?;
                 let bearer = self.vault.source(&key.reference, "").resolve().await?;
                 let driver: Arc<dyn hellas_executor::FetchProvider> = Arc::new(
-                    hellas_reseller::OpenAiResponsesFetchProvider::with_bearer(bearer)?,
+                    hellas_providers::OpenAiResponsesFetchProvider::with_bearer(bearer)?,
                 );
                 #[cfg(test)]
                 let driver = match self.responses_origin.lock().unwrap().as_ref() {
@@ -770,7 +765,7 @@ impl Composition {
                         self.clone(),
                         crate::usage::Key::Fixed(key.reference.clone(), key.fingerprint.clone()),
                     ),
-                    Arc::new(hellas_reseller::OpenAiResponsesAdaptorFactory::new()?),
+                    Arc::new(hellas_adaptors::openai::responses::fetch::OpenAiResponsesAdaptorFactory::new()?),
                     FetchRoutePolicy::default(),
                 )?
             } else {
@@ -802,7 +797,8 @@ impl Composition {
             identity: local.identity.node.clone(),
             enrollment: identity.enrollment,
             root: identity.root,
-            state_directory: self.directory.join("provider"),
+            home: crate::control::home(&self.directory),
+            content: local.content.clone(),
             grants: Some(hellas_sdk::GrantProviderOptions {
                 configuration,
                 max_job_millis: NonZeroU64::new(300_000).context("invalid job duration")?,
@@ -820,9 +816,8 @@ impl Composition {
                     policy.policy == crate::paid::standing_policy(&input.policy)?,
                     "standing paid settings differ from the owner-approved policy"
                 );
-                let paid = crate::paid::serve_config(&self.directory, input)?;
-                let node = local.chain.get(&paid).await?;
-                Some(hellas_sdk::PaidProviderOptions::new(paid, node)?)
+                let paid = crate::paid::config(&input.policy.chain, &self.directory)?;
+                Some(hellas_sdk::PaidProviderOptions::new(paid))
             } else {
                 None
             },

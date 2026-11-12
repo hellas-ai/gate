@@ -5,8 +5,8 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use hellas_auth::authority::*;
 use hellas_gateway::{WorkExecutionBackend, WorkFetchRequest};
 use hellas_sdk::{
+    ExecutorGateway, GatewayTarget,
     grant_client::{GrantSessionOptions, GrantTransport, UnpinnedOffer},
-    grant_gateway::GrantPool,
 };
 use std::{
     collections::BTreeMap,
@@ -20,7 +20,7 @@ use std::{
 use tokio::sync::Mutex;
 
 pub struct Target {
-    pub backend: Arc<RetirableBackend>,
+    pub backend: Arc<ExecutorGateway>,
     pub provider: hellas_sdk::iroh::EndpointId,
     pub resource: Option<ResourceId>,
     pub channel: Option<hellas_channel::model::grant::ChannelId>,
@@ -38,7 +38,7 @@ enum Selection {
     Paid {
         pool: PaidPoolInput,
         selected: Box<PaidProviderInput>,
-        options: hellas_sdk::paid_gateway::PaidGatewayOptions,
+        providers: Vec<paid::ProviderSnapshot>,
         approvals: Vec<hellas_sdk::trust_policy::ApprovalRecord>,
     },
 }
@@ -79,97 +79,18 @@ struct CachedTarget {
     target: Arc<Target>,
 }
 
-// Callers retain this proxy, never a journal owner. Retirement removes the owner,
-// drains its accepted work, and drops its exclusive journal before any reopen.
-pub struct RetirableBackend(
-    std::sync::Mutex<Option<Arc<dyn WorkExecutionBackend>>>,
-    Option<hellas_sdk::iroh::Endpoint>,
-);
-impl RetirableBackend {
-    fn new(backend: Arc<dyn WorkExecutionBackend>) -> Arc<Self> {
-        Arc::new(Self(std::sync::Mutex::new(Some(backend)), None))
+async fn retire(backend: &ExecutorGateway) -> anyhow::Result<()> {
+    let result = backend.drain().await;
+    if let GatewayTarget::Paid { options, .. } = backend.target() {
+        options.content.close().await;
     }
-    fn with_endpoint(
-        backend: Arc<dyn WorkExecutionBackend>,
-        endpoint: hellas_sdk::iroh::Endpoint,
-    ) -> Arc<Self> {
-        Arc::new(Self(std::sync::Mutex::new(Some(backend)), Some(endpoint)))
-    }
-    fn with_backend<R>(
-        &self,
-        use_backend: impl FnOnce(&dyn WorkExecutionBackend) -> R,
-    ) -> Result<R, hellas_gateway::WorkGatewayError> {
-        let held = self.0.lock().map_err(|_| hellas_gateway::WorkGatewayBusy)?;
-        let backend = held.as_ref().ok_or_else(|| {
-            hellas_gateway::WorkGatewayError::Rejected(Box::new(std::io::Error::other(
-                "Client settings changed; retry the request or restart the gateway listener",
-            )))
-        })?;
-        Ok(use_backend(backend.as_ref()))
-    }
-    fn is_active(&self) -> bool {
-        self.0.lock().is_ok_and(|held| held.is_some())
-    }
-    async fn retire(&self) -> Result<(), hellas_gateway::WorkShutdownError> {
-        let backend = self
-            .0
-            .lock()
-            .map_err(|_| {
-                hellas_gateway::WorkShutdownError::Recovery(Arc::new(std::io::Error::other(
-                    "client lifecycle lock failed",
-                )))
-            })?
-            .take();
-        let result = if let Some(backend) = backend {
-            backend.drain().await
-        } else {
-            Ok(())
-        };
-        if let Some(endpoint) = &self.1 {
-            endpoint.close().await;
-        }
-        result
-    }
-}
-impl WorkExecutionBackend for RetirableBackend {
-    fn fetch_routes(&self) -> Vec<hellas_gateway::FetchRoute> {
-        self.with_backend(|backend| backend.fetch_routes())
-            .unwrap_or_default()
-    }
-    fn fetch(
-        &self,
-        request: hellas_gateway::WorkFetchRequest,
-    ) -> Result<
-        hellas_gateway::WorkOutputStream<hellas_rpc::output::OutputEvent>,
-        hellas_gateway::WorkGatewayError,
-    > {
-        self.with_backend(|backend| backend.fetch(request))?
-    }
-    fn run(
-        &self,
-        request: hellas_sdk::client::model::ComputeJob,
-    ) -> Result<
-        hellas_gateway::WorkOutputStream<hellas_gateway::ComputeEvent>,
-        hellas_gateway::WorkGatewayError,
-    > {
-        self.with_backend(|backend| backend.run(request))?
-    }
-    fn timeout(&self) -> Option<Duration> {
-        self.with_backend(|backend| backend.timeout())
-            .unwrap_or_default()
-    }
-    fn drain(
-        &self,
-    ) -> futures::future::BoxFuture<'_, Result<(), hellas_gateway::WorkShutdownError>> {
-        Box::pin(self.retire())
-    }
+    Ok(result?)
 }
 pub struct Clients {
     directory: PathBuf,
-    chain: Arc<crate::chain::ChainNode>,
     closed: AtomicBool,
     transport_keys: Mutex<()>,
-    owner: Mutex<Option<Arc<hellas_sdk::client_owner::ClientOwner>>>,
+    owner: Mutex<BTreeMap<PathBuf, Arc<hellas_sdk::client_owner::ClientOwner>>>,
     #[cfg(test)]
     pub(crate) drained: tokio::sync::Notify,
     #[cfg(test)]
@@ -179,16 +100,14 @@ pub struct Clients {
     pub(crate) opened_paid_trust:
         std::sync::Mutex<Vec<Vec<hellas_sdk::client::ProviderTrustAnchor>>>,
     cache: Mutex<BTreeMap<String, CachedTarget>>,
-    paid: Mutex<BTreeMap<String, (String, Arc<RetirableBackend>)>>,
 }
 impl Clients {
-    pub fn new(directory: &Path, chain: Arc<crate::chain::ChainNode>) -> Self {
+    pub fn new(directory: &Path) -> Self {
         Self {
             directory: directory.to_owned(),
-            chain,
             closed: AtomicBool::new(false),
             transport_keys: Mutex::new(()),
-            owner: Mutex::new(None),
+            owner: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
             drained: tokio::sync::Notify::new(),
             #[cfg(test)]
@@ -196,16 +115,16 @@ impl Clients {
             #[cfg(test)]
             opened_paid_trust: Default::default(),
             cache: Mutex::new(BTreeMap::new()),
-            paid: Mutex::new(BTreeMap::new()),
         }
     }
-    #[cfg(all(test, feature = "chain-tests", target_os = "linux"))]
     pub(crate) async fn paid_transport(
         &self,
         local: &LocalNode,
-        pool_id: &str,
+        chain: &hellas_chain::chain_dir::ChainDir,
+        provider: hellas_sdk::iroh::EndpointId,
     ) -> anyhow::Result<hellas_sdk::iroh::SecretKey> {
-        self.transport(local, &format!("paid:{pool_id}")).await
+        self.transport(local, &format!("paid:{}:{provider}", chain.state_key()))
+            .await
     }
     fn selection(&self, local: &LocalNode, input: &WorkClientConfig) -> anyhow::Result<Selection> {
         match &input.target {
@@ -267,8 +186,10 @@ impl Clients {
             } => {
                 let pool: PaidPoolInput = vault::read(&paid::pool_path(&self.directory, pool_id)?)?
                     .context("configure a typed paid pool first")?;
-                let paid::PoolSnapshot { options, approvals } =
-                    paid::pool_snapshot(&self.directory, &pool)?;
+                let paid::PoolSnapshot {
+                    providers,
+                    approvals,
+                } = paid::pool_snapshot(&self.directory, &pool)?;
                 let selected = pool
                     .providers
                     .iter()
@@ -283,11 +204,10 @@ impl Clients {
                     *service == selected.policy.service && *method == selected.policy.method,
                     "paid route differs from selected policy"
                 );
-                let _: hellas_sdk::client::ProviderAddress = provider.parse()?;
                 Ok(Selection::Paid {
                     pool,
                     selected: Box::new(selected),
-                    options,
+                    providers,
                     approvals,
                 })
             }
@@ -350,7 +270,9 @@ impl Clients {
                 let access = contacts::imported(&self.directory, access_id)?;
                 format!("authorized:{}:{allowance}", access.authority)
             }
-            WorkTarget::Paid { .. } => format!("paid:{}", serde_json::to_string(&input.target)?),
+            WorkTarget::Paid {
+                pool_id, provider, ..
+            } => format!("paid:{pool_id}:{provider}"),
         };
         let mut cache = self.cache.lock().await;
         ensure!(
@@ -367,7 +289,12 @@ impl Clients {
         }
         if let Some(held) = cache.get(&key)
             && held.version == version
-            && held.target.backend.is_active()
+            && held
+                .target
+                .backend
+                .target()
+                .endpoint()
+                .is_some_and(|endpoint| !endpoint.is_closed())
         {
             return Ok(held.target.clone());
         }
@@ -375,7 +302,7 @@ impl Clients {
             WorkTarget::Authorized {
                 access_id: _,
                 allowance,
-                resource,
+                resource: _,
             } => {
                 let Selection::Authorized {
                     access,
@@ -413,32 +340,35 @@ impl Clients {
                 });
                 // Refused candidate inputs leave the existing journal owner usable.
                 if let Some(held) = cache.remove(&key) {
-                    held.target.backend.retire().await?;
+                    retire(&held.target.backend).await?;
                 }
                 // Outgoing work has its own SDK-owned transport lifetime.
                 let endpoint =
                     hellas_sdk::grant_client::bind_endpoint(self.transport(local, &key).await?)
                         .await?;
                 let transport = GrantTransport::Remote(endpoint.clone());
-                let backend = GrantPool::open(
-                    GrantSessionOptions {
-                        target: pinned,
-                        principal: access.subject,
-                        signer: Arc::new(local.identity.node.node_key().clone()),
-                        application,
-                        journal_root: self
-                            .directory
-                            .join("work-channels")
-                            .join(access.authority.to_string())
-                            .join(allowance),
-                        control_timeout: Duration::from_secs(300),
+                let signer = Arc::new(local.identity.node.node_key().clone());
+                let backend = ExecutorGateway::new(
+                    GatewayTarget::Grant {
+                        options: GrantSessionOptions {
+                            target: pinned,
+                            principal: access.subject,
+                            signer: signer.clone(),
+                            application,
+                            journal_root: crate::control::home(&self.directory)
+                                .child("work-channels")
+                                .child(access.authority.to_string())
+                                .child(allowance),
+                            control_timeout: Duration::from_secs(300),
+                        },
+                        transport,
+                        policy: *selected.clone(),
                     },
-                    transport,
-                    Some(resource.clone()),
-                )
-                .await?;
+                    None,
+                    signer,
+                );
                 Target {
-                    backend: RetirableBackend::with_endpoint(backend, endpoint),
+                    backend,
                     provider,
                     resource: Some(selected.resource),
                     channel: Some(channel),
@@ -448,62 +378,92 @@ impl Clients {
                 }
             }
             WorkTarget::Paid {
-                pool_id,
+                pool_id: _,
                 provider,
                 service,
                 method,
             } => {
                 let Selection::Paid {
-                    pool: _,
                     selected,
-                    options,
-                    approvals: _,
+                    providers,
+                    ..
                 } = selection
                 else {
                     anyhow::bail!("paid selection required");
                 };
-                let provider_id = provider
-                    .parse::<hellas_sdk::client::ProviderAddress>()?
-                    .node;
-                // Selection and all provider options are checked
-                // before retiring any backend shared by this pool's callers.
+                let snapshot = providers
+                    .into_iter()
+                    .find(|p| p.input.provider == *provider)
+                    .context("selected provider is absent from snapshot")?;
+                let provider_id = snapshot.provider.node;
                 if let Some(held) = cache.remove(&key) {
-                    held.target.backend.retire().await?;
+                    retire(&held.target.backend).await?;
                 }
-                let mut paid_cache = self.paid.lock().await;
-                if paid_cache
-                    .get(pool_id)
-                    .is_some_and(|(held, backend)| held != &pool_version || !backend.is_active())
-                    && let Some((_, backend)) = paid_cache.remove(pool_id)
-                {
-                    backend.retire().await?;
+                let settlement_key = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
+                    local.identity.node.node_secret_bytes(),
+                )
+                .map_err(|_| anyhow::anyhow!("invalid requester settlement key"))?;
+                let mut options = snapshot.options().await?;
+                let opened: anyhow::Result<_> = async {
+                    let owner = self.funding_owner(local, &options.config.chain).await?;
+                    let transport = self
+                        .paid_transport(local, &options.config.chain, provider_id)
+                        .await?;
+                    let endpoint = hellas_sdk::paid_client::bind_paid_endpoint(transport).await?;
+                    Ok((owner, endpoint))
                 }
-                let backend = if let Some((_, backend)) = paid_cache.get(pool_id) {
-                    backend.clone()
-                } else {
-                    let transport = self.transport(local, &format!("paid:{pool_id}")).await?;
-                    let identity = hellas_sdk::NodeIdentity::from_secret_bytes(
-                        transport.to_bytes(),
-                        local.identity.node.node_secret_bytes(),
-                    )?;
-                    #[cfg(test)]
-                    self.opened_paid_trust.lock().unwrap().push(
-                        options
-                            .providers
-                            .iter()
-                            .map(|provider| provider.trust())
-                            .collect::<Result<_, _>>()?,
-                    );
-                    let backend = hellas_sdk::paid_gateway::PaidGateway::open(
-                        options,
-                        identity,
-                        self.funding_owner(local).await?,
+                .await;
+                let (owner, endpoint) = match opened {
+                    Ok(opened) => opened,
+                    Err(error) => {
+                        options.content.close().await;
+                        return Err(error);
+                    }
+                };
+                let quoted: anyhow::Result<_> = async {
+                    let quote = hellas_sdk::paid_client::request_paid_quote(
+                        &options,
+                        &endpoint,
+                        &settlement_key,
+                        owner.principal(),
                     )
                     .await?;
-                    let backend = RetirableBackend::new(backend);
-                    paid_cache.insert(pool_id.clone(), (pool_version, backend.clone()));
-                    backend
+                    let (quoted_service, quoted_method, quoted_presentation, _) =
+                        route(&quote.policy.invocation_policy)?;
+                    ensure!(
+                        quoted_service == *service
+                            && quoted_method == *method
+                            && quoted_presentation == selected.policy.presentation,
+                        "quoted route differs from selected policy"
+                    );
+                    Ok(quote)
+                }
+                .await;
+                let quote = match quoted {
+                    Ok(quote) => quote,
+                    Err(error) => {
+                        endpoint.close().await;
+                        options.content.close().await;
+                        return Err(error);
+                    }
                 };
+                options.expected_price = quote.policy.payment_policy.fixed_price;
+                #[cfg(test)]
+                self.opened_paid_trust
+                    .lock()
+                    .unwrap()
+                    .push(vec![options.trust()?]);
+                let backend = ExecutorGateway::new(
+                    GatewayTarget::Paid {
+                        options,
+                        policy: quote.policy.invocation_policy,
+                        endpoint,
+                        settlement_key,
+                        owner,
+                    },
+                    None,
+                    Arc::new(local.identity.node.node_key().clone()),
+                );
                 Target {
                     backend,
                     provider: provider_id,
@@ -528,9 +488,10 @@ impl Clients {
     pub(crate) async fn funding_owner(
         &self,
         local: &LocalNode,
+        chain: &hellas_chain::chain_dir::ChainDir,
     ) -> anyhow::Result<Arc<hellas_sdk::client_owner::ClientOwner>> {
         let mut owner = self.owner.lock().await;
-        if let Some(owner) = &*owner {
+        if let Some(owner) = owner.get(chain.as_path()) {
             return Ok(owner.clone());
         }
         ensure!(
@@ -544,14 +505,14 @@ impl Clients {
         let opened = Arc::new(hellas_sdk::client_owner::ClientOwner::new(
             local.identity.passkey.clone(),
             signer.party_key(),
-            &self.directory.join("paid-funding"),
+            chain,
         )?);
-        *owner = Some(opened.clone());
+        owner.insert(chain.as_path().to_owned(), opened.clone());
         Ok(opened)
     }
     pub async fn save_pool(&self, input: PaidPoolInput) -> anyhow::Result<()> {
         paid::validate_pool(&self.directory, &input)?;
-        let _cache = self.cache.lock().await;
+        let mut cache = self.cache.lock().await;
         ensure!(
             !self.closed.load(Ordering::SeqCst),
             "client admission is closed because Gate is shutting down"
@@ -562,8 +523,16 @@ impl Clients {
         {
             return Ok(());
         }
-        if let Some((_, backend)) = self.paid.lock().await.remove(&input.id) {
-            backend.retire().await?;
+        let prefix = format!("paid:{}:", input.id);
+        let keys: Vec<_> = cache
+            .keys()
+            .filter(|key| key.starts_with(&prefix))
+            .cloned()
+            .collect();
+        for key in keys {
+            if let Some(held) = cache.remove(&key) {
+                retire(&held.target.backend).await?;
+            }
         }
         paid::save_pool(&self.directory, input)
     }
@@ -617,17 +586,10 @@ impl Clients {
         let held = std::mem::take(&mut *cache);
         let mut failure = None;
         for target in held.values() {
-            if let Err(e) = target.target.backend.retire().await {
-                failure.get_or_insert(anyhow::Error::from(e));
+            if let Err(e) = retire(&target.target.backend).await {
+                failure.get_or_insert(e);
             }
         }
-        let mut paid = self.paid.lock().await;
-        for (_, backend) in paid.values() {
-            if let Err(error) = backend.retire().await {
-                failure.get_or_insert(anyhow::Error::from(error));
-            }
-        }
-        paid.clear();
         if let Some(e) = failure {
             return Err(e);
         }
@@ -638,15 +600,10 @@ impl Clients {
         // Once closed, an admitted Run holding LocalNode can never open afterward.
         self.closed.store(true, Ordering::SeqCst);
         self.reset().await?;
-        self.owner.lock().await.take();
-        let result = self.chain.shutdown().await;
+        self.owner.lock().await.clear();
         #[cfg(test)]
         self.drained.notify_one();
-        result
-    }
-    #[cfg(test)]
-    pub(crate) fn chain_initialized(&self) -> bool {
-        self.chain.initialized()
+        Ok(())
     }
 }
 
@@ -685,7 +642,7 @@ mod tests {
     #[test]
     fn presentation_refuses_unsupported_or_ambiguous_fetch_admissions() {
         let http = hellas_rpc::FetchContract::http().unwrap();
-        let responses = hellas_reseller::responses_contract().unwrap();
+        let responses = hellas_adaptors::openai::responses::fetch::responses_contract().unwrap();
         for (contract, presentation) in [
             (http.clone(), FetchPresentation::Http),
             (responses, FetchPresentation::Responses),

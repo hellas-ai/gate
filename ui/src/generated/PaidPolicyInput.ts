@@ -3,4 +3,4 @@ import type { ChainInput } from "./ChainInput.ts";
 import type { FetchPresentation } from "./FetchPresentation.ts";
 import type { PaidFetchLimitsInput } from "./PaidFetchLimitsInput.ts";
 
-export type PaidPolicyInput = { chain: ChainInput, service: string, method: string, presentation: FetchPresentation, computeCreditLimit: number, deliveryCreditLimit: number, fixedPrice: number, dispatchBlocks: number, deliveryBlocks: number, oracleBlocks: number, jobsPerChannel: number, omissionBond: number, maxStakePerClient: number, maxOpenOffers: number, bondLifetimeBlocks: number, redelegatePayout: boolean, limits: PaidFetchLimitsInput, minOmitResponseBlocks: number, pollMs: number, maxObservationAgeMs: number, };
+export type PaidPolicyInput = { chain: ChainInput, service: string, method: string, presentation: FetchPresentation, computeCreditLimit: number, deliveryCreditLimit: number, fixedPrice: number, dispatchBlocks: number, deliveryBlocks: number, oracleBlocks: number, jobsPerChannel: number, omissionBond: number, maxStakePerClient: number, maxOpenOffers: number, bondLifetimeBlocks: number, redelegatePayout: boolean, limits: PaidFetchLimitsInput, };
