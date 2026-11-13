@@ -18,17 +18,17 @@
     "hellas": {
       "flake": false,
       "locked": {
-        "lastModified": 1794572858,
-        "narHash": "sha256-rHEzx3+xL4xfoagFqtV8OiX6YBSyZJ7drpMgfrTznLA=",
+        "lastModified": 1794573103,
+        "narHash": "sha256-bHwt5knt0BndsW5I2VJ+rdNzRcVX0e0696qkv2lmG/4=",
         "owner": "hellas-ai",
         "repo": "hellas",
-        "rev": "5506e0bdae13689af66df7d40fad7f4ce5a0e8d4",
+        "rev": "404b071c7fee917b81afa49fce61e85417e1c372",
         "type": "github"
       },
       "original": {
         "owner": "hellas-ai",
         "repo": "hellas",
-        "rev": "5506e0bdae13689af66df7d40fad7f4ce5a0e8d4",
+        "rev": "404b071c7fee917b81afa49fce61e85417e1c372",
         "type": "github"
       }
     },
