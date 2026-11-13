@@ -421,7 +421,7 @@ async fn funded_setup(runtime: commonware_runtime::tokio::Context) -> FundedGate
         panic!("paid target")
     };
     assert_eq!(paid.options.timeout, Some(Duration::from_secs(90)));
-    let args = options.clone();
+    let args = paid.options.clone();
     bl.session(true)
         .await
         .unwrap()
