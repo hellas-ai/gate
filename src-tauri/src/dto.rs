@@ -159,7 +159,6 @@ pub enum ResourceKind {
     OpenAi {
         model: String,
         max_output_tokens: u32,
-        credential: String,
     },
     Https {
         origin: String,
@@ -205,6 +204,11 @@ pub struct UpstreamKeyInput {
     deny_unknown_fields
 )]
 pub enum ProviderChange {
+    OpenAi {
+        service: String,
+        method: String,
+        secret: Option<String>,
+    },
     Endpoint {
         service: String,
         method: String,
@@ -215,10 +219,7 @@ pub enum ProviderChange {
         service: String,
         method: String,
     },
-    AddKey {
-        key: UpstreamKeyInput,
-    },
-    ReplaceKey {
+    SetKey {
         key: UpstreamKeyInput,
     },
     RemoveKey {
@@ -235,7 +236,7 @@ pub struct UpstreamView {
     pub service: String,
     pub method: String,
     pub hosts: Vec<String>,
-    pub keys: Vec<UpstreamKeyView>,
+    pub keys: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
@@ -245,7 +246,6 @@ pub struct ProviderView {
     pub revision: u64,
     pub upstreams: Vec<UpstreamView>,
     pub resources: Vec<ResourceInput>,
-    pub paid: Option<PaidServeInput>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -458,17 +458,6 @@ pub enum GatewayKeyState {
     Expired,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export))]
-#[serde(rename_all = "camelCase")]
-pub struct UpstreamKeyView {
-    pub secret_reference: String,
-    pub name: String,
-    pub fingerprint: String,
-    pub last_use: Option<u64>,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
 #[cfg_attr(feature = "desktop", ts(export))]
@@ -505,7 +494,7 @@ pub struct DesiredKey {
     pub methods: Vec<String>,
     pub header: String,
     pub prefix: String,
-    pub secret_reference: String,
+    pub secret: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
@@ -547,7 +536,7 @@ pub struct DesiredState {
     pub gateway: Option<GatewayConfig>,
     pub gateway_enabled: Option<bool>,
     #[serde(default)]
-    pub paid_serve: Option<DesiredPaidServe>,
+    pub paid_serve: Option<PaidServeInput>,
     #[serde(default)]
     pub paid_pools: Vec<PaidPoolInput>,
 }
@@ -590,12 +579,4 @@ pub struct QuotaView {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PaidServeInput {
     pub policy: PaidPolicyInput,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DesiredPaidServe {
-    pub configuration: Option<PaidServeInput>,
 }

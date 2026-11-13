@@ -430,14 +430,6 @@ impl Identity {
         public.owner_scope = administrator;
         public.generation = record.generation;
         vault::write(&directory.join("installation.json"), &public)?;
-        let anchor = directory.join("gateway-listener-credential.json");
-        if let Some(old) = vault::read::<crate::credentials::PreparedIssue>(&anchor)? {
-            vault
-                .delete(&crate::credentials::PreparedIssue::key(old.credential.id()))
-                .await?;
-            std::fs::remove_file(anchor)?;
-            hellas_private::sync_directory(directory)?;
-        }
         Ok(Self {
             public,
             node,
@@ -579,54 +571,13 @@ mod tests {
             1,
             "complete setup has only the bootstrap assertion"
         );
-        let path = directory.path().join("gateway-listener-credential.json");
-        assert!(!path.exists(), "mount must not provision a listener");
         signer.cancel.store(true, Ordering::SeqCst);
         assert!(app.set_gateway(true, None).await.is_err());
-        assert!(
-            !path.exists(),
-            "rejected owner approval must not prepare or issue listener access"
-        );
         signer.cancel.store(false, Ordering::SeqCst);
 
-        {
-            let local = app.local().await.unwrap();
-            let daily = local.session(false).await.unwrap();
-            assert!(
-                crate::credentials::provision_gateway_anchor(&local, &daily)
-                    .await
-                    .is_err(),
-                "daily sessions cannot issue listener credentials"
-            );
-            assert!(
-                crate::credentials::load_gateway_anchor(&local)
-                    .await
-                    .is_err()
-            );
-        }
-        // No gateway configuration exists yet: enable fails, but issuance still
-        // must use exactly the one owner session, never a second hidden prompt.
+        // A later explicit Configure gets its own owner approval.
         assert!(app.set_gateway(true, None).await.is_err());
         assert_eq!(signer.calls.load(Ordering::SeqCst), 3);
-        {
-            let local = app.local().await.unwrap();
-            crate::credentials::load_gateway_anchor(&local)
-                .await
-                .unwrap()
-                .validate()
-                .await
-                .unwrap();
-            let held = vault::read::<crate::credentials::PreparedIssue>(&path)
-                .unwrap()
-                .unwrap();
-            let permissions = &held.credential.scope().permissions;
-            assert_eq!(permissions.len(), 1);
-            assert_eq!(
-                permissions.iter().next().unwrap().operation.as_str(),
-                hellas_authority::node::GATEWAY_INVOKE
-            );
-            assert_eq!(held.credential.holder(), CredentialHolder::Bearer);
-        }
         app.shutdown().await.unwrap();
         drop(app);
         let reopened = crate::state::AppState::prepare(directory.path(), vault.clone()).unwrap();

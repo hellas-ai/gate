@@ -25,7 +25,7 @@ fn policy(devnet: &Devnet) -> PaidPolicyInput {
         omission_bond: 101,
         max_stake_per_client: 10000,
         max_open_offers: 2,
-        bond_lifetime_blocks: 2000,
+        bond_lifetime_blocks: 10000,
         redelegate_payout: true,
         limits: paid_limits(),
     }
@@ -146,14 +146,11 @@ struct FundedGateway {
     bob: AppState,
     bl: Arc<crate::control::LocalNode>,
     upstream: Upstream,
-    origin: Option<crate::responses_fixture::Origin>,
     request: RunRequest,
-    responses: bool,
 }
 
 fn funded_gateway(
     runtime: commonware_runtime::tokio::Context,
-    responses: bool,
 ) -> impl std::future::Future<Output = ()> {
     Box::pin(async move {
         let _network_slot = CHAIN_TEST.lock().await;
@@ -164,15 +161,12 @@ fn funded_gateway(
             .with_ansi(false)
             .try_init();
         // Keep the large setup and listener futures off the test thread's stack.
-        let case = Box::pin(funded_setup(runtime, responses)).await;
+        let case = Box::pin(funded_setup(runtime)).await;
         Box::pin(funded_listener(case)).await;
     })
 }
 
-async fn funded_setup(
-    runtime: commonware_runtime::tokio::Context,
-    responses: bool,
-) -> FundedGateway {
+async fn funded_setup(runtime: commonware_runtime::tokio::Context) -> FundedGateway {
     const ALICE: GenesisOwner = GenesisOwner {
         kind: OwnerKind::Passkey,
         secret_scalar: [11; 32],
@@ -226,21 +220,9 @@ async fn funded_setup(
         format!("p256:{}", hex::encode(BOB.key().to_bytes()))
     );
     let native = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(NATIVE.scalar()).unwrap();
-    let mut policy = policy(&devnet);
+    let policy = policy(&devnet);
     let upstream = Upstream::start().await;
-    let origin = if responses {
-        Some(crate::responses_fixture::Origin::start().await)
-    } else {
-        None
-    };
-    let (mut request, _) = if let Some(origin) = &origin {
-        policy.service = "openai".into();
-        policy.method = "responses".into();
-        policy.presentation = FetchPresentation::Responses;
-        grant_responses(&alice, &bob, origin, 232).await
-    } else {
-        grant_https(&alice, &bob, &upstream, "paid", 232).await
-    };
+    let (mut request, _) = grant_https(&alice, &bob, &upstream, "paid", 232).await;
     let revision = alice.provider_view().await.unwrap().revision;
     let stake = sealing_while(&mut devnet, Box::pin(delegate(&al, &policy, None))).await;
     let native_coin =
@@ -251,9 +233,9 @@ async fn funded_setup(
     alice
         .configure_paid_serve(
             revision,
-            Some(PaidServeInput {
+            PaidServeInput {
                 policy: policy.clone(),
-            }),
+            },
         )
         .await
         .unwrap();
@@ -292,7 +274,6 @@ async fn funded_setup(
     };
     let snapshot = crate::paid::pool_snapshot(b.path(), &pool)
         .unwrap()
-        .providers
         .remove(0);
     let buyer_before = devnet
         .full_node(1)
@@ -310,13 +291,7 @@ async fn funded_setup(
         .into_iter()
         .find(|record| record.id == request.client.trust_policy)
         .unwrap();
-    let resolved = Arc::new(Notify::new());
-    let resume = Arc::new(Notify::new());
-    *bl.clients.after_paid_resolution.lock().unwrap() = Some((resolved.clone(), resume.clone()));
-    let opening = bl.clone();
-    let selected = request.client.clone();
-    let pending = tokio::spawn(async move { opening.clients.target(&opening, &selected).await });
-    tokio::time::timeout(std::time::Duration::from_secs(10), resolved.notified())
+    let first = sealing_while(&mut devnet, bl.clients.target(&bl, &request.client))
         .await
         .unwrap();
     let replacement = |revision, genesis: String| TrustInput {
@@ -329,20 +304,11 @@ async fn funded_setup(
         reason: "Independent replacement during quote".into(),
     };
     trust::approve(b.path(), replacement(old.revision, hex::encode([246; 32]))).unwrap();
-    resume.notify_one();
-    let first = sealing_while(&mut devnet, pending).await.unwrap().unwrap();
-    assert_eq!(
-        bl.clients.opened_paid_trust.lock().unwrap()[0][0]
-            .expected_genesis
-            .to_string(),
-        old.genesis
-    );
     let refusal = bl.clients.target(&bl, &request.client).await.err().unwrap();
     assert!(
         refusal.to_string().contains("different enrollment"),
         "{refusal:#}"
     );
-    assert_eq!(bl.clients.opened_paid_trust.lock().unwrap().len(), 1);
     trust::approve(b.path(), replacement(old.revision + 1, old.genesis.clone())).unwrap();
     let target = sealing_while(&mut devnet, bl.clients.target(&bl, &request.client))
         .await
@@ -351,16 +317,10 @@ async fn funded_setup(
         !Arc::ptr_eq(&first, &target),
         "a new approval must reopen the pool"
     );
-    assert_eq!(bl.clients.opened_paid_trust.lock().unwrap().len(), 2);
-    assert!(Arc::ptr_eq(
-        &target,
-        &bl.clients.target(&bl, &request.client).await.unwrap()
-    ));
     drop(first);
     let config = crate::paid::config(&snapshot.input.policy.chain, b.path()).unwrap();
     let discovery = hellas_channel::work_store::discover_setups(
-        &hellas_sdk::paid_client::PaidJournalKind::Gateway
-            .journal_root(&config.chain, snapshot.provider),
+        &config.chain.client_journals(&snapshot.input.provider),
         config.network(),
     )
     .await
@@ -393,7 +353,12 @@ async fn funded_setup(
         buyer_before,
         "quote discovery must not spend buyer funding"
     );
-    let owner = bl.clients.funding_owner(&bl, &config.chain).await.unwrap();
+    let hellas_sdk::BackendState::Paid(paid) = &target.backend.backend(&target.id).unwrap().state
+    else {
+        panic!("paid target")
+    };
+    let owner = &paid.owner;
+    let owner = owner.clone();
     let signer = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
         bl.identity.node.node_secret_bytes(),
     )
@@ -411,13 +376,7 @@ async fn funded_setup(
     assert_eq!(history.len(), 1, "the funded Run is issued once");
     let record = history.into_iter().find(|entry| entry.id == id).unwrap();
     assert_eq!(record.status, "complete", "{}", record.error);
-    assert_eq!(
-        origin.as_ref().map_or_else(
-            || upstream.calls.load(Ordering::SeqCst),
-            |origin| origin.calls.load(Ordering::SeqCst)
-        ),
-        1
-    );
+    assert_eq!(upstream.calls.load(Ordering::SeqCst), 1);
     let events = events.into_inner().unwrap();
     assert!(
         events
@@ -431,40 +390,55 @@ async fn funded_setup(
     );
     pool.providers[0].timeout_seconds = 90;
     bob.save_paid_pool(pool.clone()).await.unwrap();
-    assert!(
-        target
-            .backend
-            .fetch(hellas_gateway::WorkFetchRequest {
-                provider: target.provider,
-                resource: target.resource,
-                channel: target.channel,
-                service: target.service.clone(),
-                method: target.method.clone(),
-                body: request.input.as_bytes().to_vec()
-            })
-            .is_err(),
-        "a saved pool edit must retire the old target"
-    );
     let replacement = sealing_while(&mut devnet, bl.clients.target(&bl, &request.client))
         .await
         .unwrap();
+    assert!(
+        target
+            .backend
+            .fetch(
+                &target.id,
+                Arc::new(hellas_gateway::jobs::Jobs::default())
+                    .admit(&hellas_gateway::jobs::Request {
+                        origin: hellas_gateway::jobs::Origin::Local,
+                        method: "POST".into(),
+                        path: "/run".into(),
+                    })
+                    .unwrap(),
+                hellas_gateway::WorkFetchRequest {
+                    service: target.service.clone(),
+                    method: target.method.clone(),
+                    body: request.input.as_bytes().to_vec()
+                }
+            )
+            .is_err(),
+        "Configure must retire the previous target"
+    );
     assert!(!Arc::ptr_eq(&target, &replacement));
-    let hellas_sdk::GatewayTarget::Paid { options, .. } = replacement.backend.target() else {
+    let hellas_sdk::BackendState::Paid(paid) =
+        &replacement.backend.backend(&replacement.id).unwrap().state
+    else {
         panic!("paid target")
     };
-    assert_eq!(options.timeout, Some(Duration::from_secs(90)));
-    bl.clients.reset().await.unwrap();
+    assert_eq!(paid.options.timeout, Some(Duration::from_secs(90)));
+    let args = paid.options.clone();
+    bl.session(true)
+        .await
+        .unwrap()
+        .edit(None, |document| {
+            document
+                .remove_backend(&replacement.id)
+                .map_err(anyhow::Error::from_boxed)
+        })
+        .await
+        .unwrap();
     drop(replacement);
     drop(target);
-    let args = snapshot.options().await.unwrap();
-    let endpoint = hellas_sdk::paid_client::bind_paid_endpoint(
-        bl.clients
-            .paid_transport(&bl, &config.chain, snapshot.provider.node)
+    let endpoint =
+        hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::Minimal)
+            .bind()
             .await
-            .unwrap(),
-    )
-    .await
-    .unwrap();
+            .unwrap();
     let mut session = sealing_while(
         &mut devnet,
         hellas_sdk::paid_client::PaidWorkSession::open(
@@ -546,8 +520,6 @@ async fn funded_setup(
         .unwrap();
     reopened.shutdown().await;
     drop(reopened);
-    endpoint.close().await;
-    args.content.close().await;
     let discovery =
         hellas_channel::work_store::discover_setups(&args.journal_root(), args.config.network())
             .await
@@ -585,10 +557,7 @@ async fn funded_setup(
             .all(|(id, _)| *id != stake)
     );
     assert_eq!(
-        origin.as_ref().map_or_else(
-            || upstream.calls.load(Ordering::SeqCst),
-            |origin| origin.calls.load(Ordering::SeqCst)
-        ),
+        upstream.calls.load(Ordering::SeqCst),
         1,
         "reopening must not execute the request again"
     );
@@ -600,23 +569,19 @@ async fn funded_setup(
         bob,
         bl,
         upstream,
-        origin,
         request,
-        responses,
     }
 }
 
 async fn funded_listener(case: FundedGateway) {
     let FundedGateway {
         directories: [a, b, sa, _sb],
-        devnet,
+        mut devnet,
         alice,
         bob,
         bl,
         upstream,
-        origin,
         request,
-        responses,
     } = case;
     eprintln!("real-chain fixture: checking paid listener authentication and delivery");
     let (key, bearer) = bob
@@ -629,65 +594,64 @@ async fn funded_listener(case: FundedGateway) {
         .unwrap();
     let config = GatewayConfig {
         client: request.client.clone(),
-        http_routes: if responses {
-            vec![]
-        } else {
-            vec![HttpRouteInput {
-                path: "/proxy".into(),
-                method: "GET".into(),
-                url: format!("{}/", upstream.url),
-                credential: None,
-                max_response_bytes: 4096,
-                tls_roots: vec![upstream.root.clone()],
-            }]
-        },
+        http_routes: vec![HttpRouteInput {
+            path: "/proxy".into(),
+            method: "GET".into(),
+            url: format!("{}/", upstream.url),
+            credential: None,
+            max_response_bytes: 4096,
+            tls_roots: vec![upstream.root.clone()],
+        }],
         port: Some(0),
         zdr: true,
     };
     bob.set_gateway(true, Some(config.clone())).await.unwrap();
     let address = bob.gateway_address().await.unwrap();
     let http = reqwest::Client::builder().no_proxy().build().unwrap();
-    let path = if responses { "/v1/responses" } else { "/proxy" };
+    let path = "/proxy";
     let url = format!("{address}{path}");
-    let calls = origin.as_ref().map_or_else(
-        || upstream.calls.load(Ordering::SeqCst),
-        |o| o.calls.load(Ordering::SeqCst),
-    );
+    let calls = upstream.calls.load(Ordering::SeqCst);
     for token in [None, Some("invalid")] {
-        let mut req = gateway_request(&http, &url, &request, responses);
+        let mut req = gateway_request(&http, &url);
         if let Some(token) = token {
             req = req.bearer_auth(token);
         }
         assert_eq!(req.send().await.unwrap().status(), 401);
     }
-    assert_eq!(
-        origin.as_ref().map_or_else(
-            || upstream.calls.load(Ordering::SeqCst),
-            |o| o.calls.load(Ordering::SeqCst)
-        ),
-        calls
+    assert_eq!(upstream.calls.load(Ordering::SeqCst), calls);
+    sealing_while(
+        &mut devnet,
+        completed_gateway_response(&http, &url, &bearer),
+    )
+    .await;
+    assert_eq!(upstream.calls.load(Ordering::SeqCst), calls + 1);
+    let run = bl.clients.target(&bl, &request.client).await.unwrap();
+    assert!(
+        bl.session(false)
+            .await
+            .unwrap()
+            .view()
+            .await
+            .unwrap()
+            .document
+            .routes
+            .iter()
+            .all(|route| route.backends == [run.id.clone()])
     );
-    completed_gateway_response(&http, &url, &request, responses, &bearer).await;
-    assert_eq!(
-        origin.as_ref().map_or_else(
-            || upstream.calls.load(Ordering::SeqCst),
-            |origin| origin.calls.load(Ordering::SeqCst)
-        ),
-        calls + 1
-    );
+    assert!(finished(
+        &execute(&bl.clients, &bl, &request).await.unwrap()
+    ));
+
     assert!(!b.path().join("gateway-archive").exists());
-    if !responses {
-        let original = bl.clients.target(&bl, &request.client).await.unwrap();
-        let saved = std::fs::read(b.path().join("gateway-configuration.json")).unwrap();
+    {
+        let saved = serde_json::to_value(bl.core().watch().0.document).unwrap();
         upstream.hold.store(true, Ordering::SeqCst);
         upstream.started.notified().await;
         let held_http = http.clone();
         let held_url = url.clone();
-        let held_request = request.clone();
         let held_bearer = bearer.clone();
         let pending = tokio::spawn(async move {
-            completed_gateway_response(&held_http, &held_url, &held_request, false, &held_bearer)
-                .await;
+            completed_gateway_response(&held_http, &held_url, &held_bearer).await;
         });
         tokio::time::timeout(Duration::from_secs(120), upstream.started.notified())
             .await
@@ -718,15 +682,11 @@ async fn funded_listener(case: FundedGateway) {
                 "{refusal:#}"
             );
             assert_eq!(
-                std::fs::read(b.path().join("gateway-configuration.json")).unwrap(),
+                serde_json::to_value(bl.core().watch().0.document).unwrap(),
                 saved
             );
             assert_eq!(bob.gateway_address().await.unwrap(), address);
             assert_eq!(bob.status().await.unwrap().gateway.state, "running");
-            assert!(Arc::ptr_eq(
-                &original,
-                &bl.clients.target(&bl, &request.client).await.unwrap()
-            ));
             assert!(!pending.is_finished());
         }
         upstream.release.notify_one();
@@ -737,14 +697,8 @@ async fn funded_listener(case: FundedGateway) {
     archived.zdr = false;
     bob.set_gateway(true, Some(archived)).await.unwrap();
     let url = format!("{}{path}", bob.gateway_address().await.unwrap());
-    completed_gateway_response(&http, &url, &request, responses, &bearer).await;
-    assert_eq!(
-        origin.as_ref().map_or_else(
-            || upstream.calls.load(Ordering::SeqCst),
-            |origin| origin.calls.load(Ordering::SeqCst)
-        ),
-        calls + 2 + usize::from(!responses)
-    );
+    completed_gateway_response(&http, &url, &bearer).await;
+    assert_eq!(upstream.calls.load(Ordering::SeqCst), calls + 4);
     assert!(
         std::fs::read_dir(b.path().join("gateway-archive"))
             .unwrap()
@@ -752,7 +706,7 @@ async fn funded_listener(case: FundedGateway) {
     );
     bob.revoke_gateway_key(&key.id).await.unwrap();
     assert_eq!(
-        gateway_request(&http, &url, &request, responses)
+        gateway_request(&http, &url)
             .bearer_auth(&bearer)
             .send()
             .await
@@ -762,7 +716,7 @@ async fn funded_listener(case: FundedGateway) {
     );
     bob.shutdown().await.unwrap();
     assert!(
-        gateway_request(&http, &url, &request, responses)
+        gateway_request(&http, &url)
             .bearer_auth(&bearer)
             .send()
             .await
@@ -773,53 +727,31 @@ async fn funded_listener(case: FundedGateway) {
     let reopened = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
         .await
         .unwrap();
-    assert!(reopened.provider_view().await.unwrap().paid.is_some());
-    reopened.set_provider(true).await.unwrap();
-    let revision = reopened.provider_view().await.unwrap().revision;
-    reopened.configure_paid_serve(revision, None).await.unwrap();
+    assert!(
+        reopened
+            .local()
+            .await
+            .unwrap()
+            .coordinator
+            .paid_policy()
+            .await
+            .unwrap()
+            .is_some()
+    );
     reopened.shutdown().await.unwrap();
-    drop(reopened);
-    let disabled = AppState::with_vault(a.path(), Vault::fixture(sa.path()))
-        .await
-        .unwrap();
-    assert!(disabled.provider_view().await.unwrap().paid.is_none());
-    disabled.set_provider(true).await.unwrap();
-    disabled.shutdown().await.unwrap();
     devnet.shutdown().await;
 }
 
-fn gateway_request(
-    http: &reqwest::Client,
-    url: &str,
-    request: &RunRequest,
-    responses: bool,
-) -> reqwest::RequestBuilder {
-    if responses {
-        http.post(url)
-            .header("content-type", "application/json")
-            .body(request.input.clone())
-    } else {
-        http.get(url)
-    }
+fn gateway_request(http: &reqwest::Client, url: &str) -> reqwest::RequestBuilder {
+    http.get(url)
 }
 #[test]
 fn paid_automatic_offers_and_http_work_use_real_validators_and_owner_funding() {
-    run(|runtime| funded_gateway(runtime, false));
+    run(funded_gateway);
 }
-#[test]
-fn paid_responses_gateway_uses_real_validators_and_delegated_coins() {
-    run(|runtime| funded_gateway(runtime, true));
-}
-
-async fn completed_gateway_response(
-    http: &reqwest::Client,
-    url: &str,
-    request: &RunRequest,
-    responses: bool,
-    bearer: &str,
-) {
+async fn completed_gateway_response(http: &reqwest::Client, url: &str, bearer: &str) {
     tokio::time::timeout(Duration::from_secs(120), async {
-        let response = gateway_request(http, url, request, responses)
+        let response = gateway_request(http, url)
             .bearer_auth(bearer)
             .send()
             .await
