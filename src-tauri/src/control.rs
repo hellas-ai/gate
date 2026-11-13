@@ -62,23 +62,26 @@ impl LocalNode {
         .await?;
         let opened = async {
             let chain = crate::paid::config(&crate::dto::ChainInput::Devnet, directory)?.chain;
-            let core = Core::restore(hellas_sdk::daemon::Options {
-                discovery: !cfg!(test),
-                endpoint: None,
-                remote_control: Default::default(),
-                prover: Some(Arc::new(crate::provider_identity::ListenerProver {
-                    vault: vault.clone(),
+            let core = Core::restore(
+                hellas_sdk::daemon::Options {
+                    discovery: !cfg!(test),
+                    endpoint: None,
+                    remote_control: Default::default(),
+                    prover: Some(Arc::new(crate::provider_identity::ListenerProver {
+                        vault: vault.clone(),
+                        node: coordinator.clone(),
+                    })),
+                    home: home(directory),
+                    signer: Arc::new(identity.node.node_key().clone()),
+                    transport: identity.node.transport_key(),
+                    settlement: settlement_key,
+                    owner: Some(identity.passkey.clone()),
+                    chain,
                     node: coordinator.clone(),
-                })),
-                home: home(directory),
-                signer: Arc::new(identity.node.node_key().clone()),
-                transport: identity.node.transport_key(),
-                settlement: settlement_key,
-                owner: Some(identity.passkey.clone()),
-                chain,
-                node: coordinator.clone(),
-                content: content.clone(),
-            })
+                    content: content.clone(),
+                },
+                None,
+            )
             .await
             .map_err(anyhow::Error::from_boxed)?;
             let local = Arc::new(Self {
