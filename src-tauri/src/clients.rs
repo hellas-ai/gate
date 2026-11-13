@@ -5,7 +5,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use hellas_auth::authority::*;
 use hellas_gateway::{WorkExecutionBackend, WorkFetchRequest};
 use hellas_sdk::{
-    ExecutorGateway, GatewayTarget,
+    Backend, BackendEntry, ExecutorGateway,
     grant_client::{GrantSessionOptions, GrantTransport, UnpinnedOffer},
 };
 use std::{
@@ -20,10 +20,10 @@ use std::{
 use tokio::sync::Mutex;
 
 pub struct Target {
+    pub id: String,
+    owned: bool,
     pub backend: Arc<ExecutorGateway>,
-    pub provider: hellas_sdk::iroh::EndpointId,
-    pub resource: Option<ResourceId>,
-    pub channel: Option<hellas_channel::model::grant::ChannelId>,
+    pub execution: Backend,
     pub service: String,
     pub method: String,
     pub presentation: FetchPresentation,
@@ -66,6 +66,21 @@ fn route(
     ))
 }
 
+fn same_trust(
+    a: &hellas_sdk::client::ProviderTrustAnchor,
+    b: &hellas_sdk::client::ProviderTrustAnchor,
+) -> bool {
+    let apple_pins = |anchor: &hellas_sdk::client::ProviderTrustAnchor| {
+        anchor
+            .apple_app_attest
+            .as_ref()
+            .map(|apple| (apple.app_id.clone(), apple.allowed_cd_hashes.clone()))
+    };
+    a.expected_genesis == b.expected_genesis
+        && a.required_assurance == b.required_assurance
+        && apple_pins(a) == apple_pins(b)
+}
+
 impl Selection {
     fn presentation(&self) -> anyhow::Result<FetchPresentation> {
         match self {
@@ -79,18 +94,30 @@ struct CachedTarget {
     target: Arc<Target>,
 }
 
-async fn retire(backend: &ExecutorGateway) -> anyhow::Result<()> {
-    let result = backend.drain().await;
-    if let GatewayTarget::Paid { options, .. } = backend.target() {
-        options.content.close().await;
+async fn retire(target: &Target) -> anyhow::Result<()> {
+    if !target.owned {
+        return Ok(());
     }
+    let result = target.backend.drain().await;
     Ok(result?)
+}
+fn executor(backend: &Backend, local: &LocalNode) -> anyhow::Result<Arc<ExecutorGateway>> {
+    Ok(ExecutorGateway::new(
+        [(
+            "run".into(),
+            BackendEntry {
+                backend: backend.clone(),
+                evaluator: None,
+                max_in_flight: 4.try_into()?,
+            },
+        )]
+        .into(),
+        Arc::new(local.identity.node.node_key().clone()),
+    ))
 }
 pub struct Clients {
     directory: PathBuf,
     closed: AtomicBool,
-    transport_keys: Mutex<()>,
-    owner: Mutex<BTreeMap<PathBuf, Arc<hellas_sdk::client_owner::ClientOwner>>>,
     #[cfg(test)]
     pub(crate) drained: tokio::sync::Notify,
     #[cfg(test)]
@@ -106,8 +133,6 @@ impl Clients {
         Self {
             directory: directory.to_owned(),
             closed: AtomicBool::new(false),
-            transport_keys: Mutex::new(()),
-            owner: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
             drained: tokio::sync::Notify::new(),
             #[cfg(test)]
@@ -116,15 +141,6 @@ impl Clients {
             opened_paid_trust: Default::default(),
             cache: Mutex::new(BTreeMap::new()),
         }
-    }
-    pub(crate) async fn paid_transport(
-        &self,
-        local: &LocalNode,
-        chain: &hellas_chain::chain_dir::ChainDir,
-        provider: hellas_sdk::iroh::EndpointId,
-    ) -> anyhow::Result<hellas_sdk::iroh::SecretKey> {
-        self.transport(local, &format!("paid:{}:{provider}", chain.state_key()))
-            .await
     }
     fn selection(&self, local: &LocalNode, input: &WorkClientConfig) -> anyhow::Result<Selection> {
         match &input.target {
@@ -220,6 +236,88 @@ impl Clients {
     ) -> anyhow::Result<FetchPresentation> {
         self.selection(local, input)?.presentation()
     }
+    pub(crate) async fn configuration(
+        &self,
+        local: &LocalNode,
+        input: &WorkClientConfig,
+    ) -> anyhow::Result<(
+        hellas_sdk::daemon_config::Backend,
+        String,
+        String,
+        FetchPresentation,
+    )> {
+        use hellas_sdk::daemon_config::{Backend, BackendKind, Trust};
+        let trust = Some(Trust {
+            store: self.directory.join("trust"),
+            policy: input.trust_policy.clone(),
+        });
+        let (kind, service, method, presentation) = match self.selection(local, input)? {
+            Selection::Authorized {
+                access,
+                offer,
+                policy,
+                trust: approved,
+            } => {
+                let (service, method, presentation, _) = route(&policy.invocation_policy)?;
+                UnpinnedOffer::decode(&offer.encode()?, UnixMillis::now()?)?
+                    .pin(&approved.anchor)?;
+                let bundle = hellas_sdk::access_bundle::AccessBundle {
+                    offers: vec![*offer],
+                    authority: access.authority,
+                    authorization: access.authorization,
+                    subject: access.subject,
+                    holder: access.holder,
+                    credential: identity::decode_credential(
+                        &local.vault.required(&access.vault_key()).await?,
+                    )?,
+                    expires: access.expires,
+                    label: None,
+                };
+                (
+                    BackendKind::Grant {
+                        access: Some(STANDARD.encode(bundle.encode()?)),
+                        resource: Some(policy.resource),
+                        evaluator: None,
+                        trust,
+                    },
+                    service,
+                    method,
+                    presentation,
+                )
+            }
+            Selection::Paid {
+                selected,
+                providers,
+                ..
+            } => {
+                let snapshot = providers
+                    .into_iter()
+                    .find(|p| p.input.provider == selected.provider)
+                    .context("paid provider is missing")?;
+                (
+                    BackendKind::Paid {
+                        provider: selected.provider,
+                        chain: Some(snapshot.profile.to_file()),
+                        max_price: selected.policy.fixed_price,
+                        evaluator: None,
+                        trust,
+                    },
+                    selected.policy.service,
+                    selected.policy.method,
+                    selected.policy.presentation,
+                )
+            }
+        };
+        Ok((
+            Backend {
+                max_in_flight: 4.try_into()?,
+                kind,
+            },
+            service,
+            method,
+            presentation,
+        ))
+    }
     pub async fn target(
         &self,
         local: &LocalNode,
@@ -233,6 +331,10 @@ impl Clients {
         input: &WorkClientConfig,
         required: Option<FetchPresentation>,
     ) -> anyhow::Result<Arc<Target>> {
+        ensure!(
+            !self.closed.load(Ordering::SeqCst),
+            "client admission is closed because Gate is shutting down"
+        );
         let selection = self.selection(local, input)?;
         #[cfg(test)]
         if matches!(&selection, Selection::Paid { .. }) {
@@ -279,6 +381,59 @@ impl Clients {
             !self.closed.load(Ordering::SeqCst),
             "client admission is closed because Gate is shutting down"
         );
+        if let Selection::Authorized {
+            access,
+            offer,
+            policy,
+            trust,
+        } = &selection
+        {
+            let backend = local.core().execution();
+            if let Some(
+                execution @ Backend::Grant {
+                    options,
+                    policy: configured,
+                    ..
+                },
+            ) = backend.backend("gateway")
+                && options.principal == access.subject
+                && options.target.offer().grant.id == offer.offer().grant.id
+            {
+                let active = options.target.trust();
+                ensure!(
+                    same_trust(active, &trust.anchor),
+                    "gateway trust differs from the current approval; reconfigure the gateway"
+                );
+                ensure!(
+                    configured == policy.as_ref()
+                        && options.target.signed().encode()? == offer.encode()?,
+                    "this grant channel is configured for another resource or offer; reconfigure the gateway"
+                );
+                let credential =
+                    identity::decode_credential(&local.vault.required(&access.vault_key()).await?)?;
+                ensure!(
+                    options.application.credential.id() == credential.id(),
+                    "gateway application credential differs from the selected access"
+                );
+                let (service, method, presentation, _) = route(&policy.invocation_policy)?;
+                if let Some(required) = required {
+                    ensure!(
+                        required == presentation,
+                        "selected execution contract differs from required presentation"
+                    );
+                }
+                let execution = execution.clone();
+                return Ok(Arc::new(Target {
+                    id: "gateway".into(),
+                    owned: false,
+                    backend,
+                    execution,
+                    service,
+                    method,
+                    presentation,
+                }));
+            }
+        }
         if let Selection::Paid { pool, .. } = &selection {
             let current: PaidPoolInput = vault::read(&paid::pool_path(&self.directory, &pool.id)?)?
                 .context("paid pool disappeared; retry the request")?;
@@ -287,12 +442,55 @@ impl Clients {
                 "paid pool changed while opening; retry the request"
             );
         }
+        if let Selection::Paid {
+            selected,
+            providers,
+            ..
+        } = &selection
+        {
+            let backend = local.core().execution();
+            let snapshot = providers
+                .iter()
+                .find(|p| p.input.provider == selected.provider)
+                .context("selected provider is absent from snapshot")?;
+            if let Some(
+                execution @ Backend::Paid {
+                    options, policy, ..
+                },
+            ) = backend.backend("gateway")
+                && options.provider == snapshot.provider
+                && options.config.chain.state_key() == snapshot.profile.state_key()
+            {
+                ensure!(
+                    same_trust(&options.trust()?, &snapshot.trust.anchor),
+                    "gateway trust differs from the current approval; reconfigure the gateway"
+                );
+                let (service, method, presentation, _) =
+                    route(policy.as_ref().context("gateway quote is absent")?)?;
+                ensure!(
+                    service == selected.policy.service
+                        && method == selected.policy.method
+                        && presentation == selected.policy.presentation
+                        && options.expected_price <= selected.policy.fixed_price,
+                    "gateway terms differ from the selected paid route; reconfigure the gateway"
+                );
+                let execution = execution.clone();
+                return Ok(Arc::new(Target {
+                    id: "gateway".into(),
+                    owned: false,
+                    backend,
+                    execution,
+                    service,
+                    method,
+                    presentation,
+                }));
+            }
+        }
         if let Some(held) = cache.get(&key)
             && held.version == version
             && held
                 .target
-                .backend
-                .target()
+                .execution
                 .endpoint()
                 .is_some_and(|endpoint| !endpoint.is_closed())
         {
@@ -301,7 +499,7 @@ impl Clients {
         let target = match &input.target {
             WorkTarget::Authorized {
                 access_id: _,
-                allowance,
+                allowance: _,
                 resource: _,
             } => {
                 let Selection::Authorized {
@@ -315,21 +513,8 @@ impl Clients {
                 };
                 let (service, method, presentation, _) = route(&selected.invocation_policy)?;
                 let approved = trust.anchor;
-                let provider = hellas_sdk::iroh::EndpointId::from_bytes(
-                    &hellas_authority::model::grant::records::grant_transport(
-                        &offer.offer().provider,
-                    )?,
-                )?;
                 let pinned =
                     UnpinnedOffer::decode(&offer.encode()?, UnixMillis::now()?)?.pin(&approved)?;
-                let channel = pinned
-                    .offer()
-                    .channel(hellas_channel::model::grant::ChannelClient {
-                        principal: access.subject,
-                        node: NodeKey::from_public_key(
-                            local.identity.node.node_key().public_key(),
-                        )?,
-                    });
                 let credential =
                     identity::decode_credential(&local.vault.required(&access.vault_key()).await?)?;
                 let application = Arc::new(hellas_sdk::node_control::profile::ClientProfile {
@@ -340,38 +525,35 @@ impl Clients {
                 });
                 // Refused candidate inputs leave the existing journal owner usable.
                 if let Some(held) = cache.remove(&key) {
-                    retire(&held.target.backend).await?;
+                    retire(&held.target).await?;
                 }
-                // Outgoing work has its own SDK-owned transport lifetime.
-                let endpoint =
-                    hellas_sdk::grant_client::bind_endpoint(self.transport(local, &key).await?)
-                        .await?;
+                let endpoint = local
+                    .core()
+                    .client_endpoint()
+                    .await
+                    .map_err(anyhow::Error::from_boxed)?;
                 let transport = GrantTransport::Remote(endpoint.clone());
                 let signer = Arc::new(local.identity.node.node_key().clone());
-                let backend = ExecutorGateway::new(
-                    GatewayTarget::Grant {
-                        options: GrantSessionOptions {
-                            target: pinned,
-                            principal: access.subject,
-                            signer: signer.clone(),
-                            application,
-                            journal_root: crate::control::home(&self.directory)
-                                .child("work-channels")
-                                .child(access.authority.to_string())
-                                .child(allowance),
-                            control_timeout: Duration::from_secs(300),
-                        },
-                        transport,
-                        policy: *selected.clone(),
+                let execution = Backend::Grant {
+                    options: GrantSessionOptions {
+                        target: pinned,
+                        principal: access.subject,
+                        signer: signer.clone(),
+                        application,
+                        journal_root: crate::control::home(&self.directory)
+                            .child("grants")
+                            .child(format!("p256-{}", hex::encode(access.subject.as_bytes())))
+                            .child("channels"),
+                        control_timeout: Duration::from_secs(300),
                     },
-                    None,
-                    signer,
-                );
+                    transport,
+                    policy: *selected.clone(),
+                };
                 Target {
-                    backend,
-                    provider,
-                    resource: Some(selected.resource),
-                    channel: Some(channel),
+                    id: "run".into(),
+                    owned: true,
+                    backend: executor(&execution, local)?,
+                    execution,
                     service,
                     method,
                     presentation,
@@ -395,80 +577,53 @@ impl Clients {
                     .into_iter()
                     .find(|p| p.input.provider == *provider)
                     .context("selected provider is absent from snapshot")?;
-                let provider_id = snapshot.provider.node;
                 if let Some(held) = cache.remove(&key) {
-                    retire(&held.target.backend).await?;
+                    retire(&held.target).await?;
                 }
                 let settlement_key = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
                     local.identity.node.node_secret_bytes(),
                 )
                 .map_err(|_| anyhow::anyhow!("invalid requester settlement key"))?;
-                let mut options = snapshot.options().await?;
-                let opened: anyhow::Result<_> = async {
-                    let owner = self.funding_owner(local, &options.config.chain).await?;
-                    let transport = self
-                        .paid_transport(local, &options.config.chain, provider_id)
-                        .await?;
-                    let endpoint = hellas_sdk::paid_client::bind_paid_endpoint(transport).await?;
-                    Ok((owner, endpoint))
-                }
-                .await;
-                let (owner, endpoint) = match opened {
-                    Ok(opened) => opened,
-                    Err(error) => {
-                        options.content.close().await;
-                        return Err(error);
-                    }
-                };
-                let quoted: anyhow::Result<_> = async {
-                    let quote = hellas_sdk::paid_client::request_paid_quote(
-                        &options,
-                        &endpoint,
-                        &settlement_key,
-                        owner.principal(),
-                    )
-                    .await?;
-                    let (quoted_service, quoted_method, quoted_presentation, _) =
-                        route(&quote.policy.invocation_policy)?;
-                    ensure!(
-                        quoted_service == *service
-                            && quoted_method == *method
-                            && quoted_presentation == selected.policy.presentation,
-                        "quoted route differs from selected policy"
-                    );
-                    Ok(quote)
-                }
-                .await;
-                let quote = match quoted {
-                    Ok(quote) => quote,
-                    Err(error) => {
-                        endpoint.close().await;
-                        options.content.close().await;
-                        return Err(error);
-                    }
-                };
+                let mut options = snapshot.options(local.core()).await?;
+                let owner = self.funding_owner(local, &options.config.chain).await?;
+                let endpoint = local
+                    .core()
+                    .client_endpoint()
+                    .await
+                    .map_err(anyhow::Error::from_boxed)?;
+                let quote = hellas_sdk::paid_client::request_paid_quote(
+                    &options,
+                    &endpoint,
+                    &settlement_key,
+                    owner.principal(),
+                )
+                .await?;
+                let (quoted_service, quoted_method, quoted_presentation, _) =
+                    route(&quote.policy.invocation_policy)?;
+                ensure!(
+                    quoted_service == *service
+                        && quoted_method == *method
+                        && quoted_presentation == selected.policy.presentation,
+                    "quoted route differs from selected policy"
+                );
                 options.expected_price = quote.policy.payment_policy.fixed_price;
                 #[cfg(test)]
                 self.opened_paid_trust
                     .lock()
                     .unwrap()
                     .push(vec![options.trust()?]);
-                let backend = ExecutorGateway::new(
-                    GatewayTarget::Paid {
-                        options,
-                        policy: quote.policy.invocation_policy,
-                        endpoint,
-                        settlement_key,
-                        owner,
-                    },
-                    None,
-                    Arc::new(local.identity.node.node_key().clone()),
-                );
+                let execution = Backend::Paid {
+                    options,
+                    policy: Some(quote.policy.invocation_policy),
+                    endpoint,
+                    settlement_key,
+                    owner,
+                };
                 Target {
-                    backend,
-                    provider: provider_id,
-                    resource: None,
-                    channel: None,
+                    id: "run".into(),
+                    owned: true,
+                    backend: executor(&execution, local)?,
+                    execution,
                     service: service.clone(),
                     method: method.clone(),
                     presentation: selected.policy.presentation,
@@ -490,25 +645,16 @@ impl Clients {
         local: &LocalNode,
         chain: &hellas_chain::chain_dir::ChainDir,
     ) -> anyhow::Result<Arc<hellas_sdk::client_owner::ClientOwner>> {
-        let mut owner = self.owner.lock().await;
-        if let Some(owner) = owner.get(chain.as_path()) {
-            return Ok(owner.clone());
-        }
         ensure!(
             !self.closed.load(Ordering::SeqCst),
             "client admission is closed because Gate is shutting down"
         );
-        let signer = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
-            local.identity.node.node_secret_bytes(),
-        )
-        .map_err(|_| anyhow::anyhow!("invalid requester settlement key"))?;
-        let opened = Arc::new(hellas_sdk::client_owner::ClientOwner::new(
-            local.identity.passkey.clone(),
-            signer.party_key(),
-            chain,
-        )?);
-        owner.insert(chain.as_path().to_owned(), opened.clone());
-        Ok(opened)
+        local
+            .core()
+            .client_resources(chain)
+            .await
+            .map(|(owner, _)| owner)
+            .map_err(anyhow::Error::from_boxed)
     }
     pub async fn save_pool(&self, input: PaidPoolInput) -> anyhow::Result<()> {
         paid::validate_pool(&self.directory, &input)?;
@@ -531,7 +677,7 @@ impl Clients {
             .collect();
         for key in keys {
             if let Some(held) = cache.remove(&key) {
-                retire(&held.target.backend).await?;
+                retire(&held.target).await?;
             }
         }
         paid::save_pool(&self.directory, input)
@@ -542,51 +688,42 @@ impl Clients {
         input: &RunRequest,
     ) -> anyhow::Result<hellas_gateway::WorkOutputStream<hellas_rpc::output::OutputEvent>> {
         let target = self.target(local, &input.client).await?;
-        Ok(target.backend.fetch(WorkFetchRequest {
-            provider: target.provider,
-            resource: target.resource,
-            channel: target.channel,
-            service: target.service.clone(),
-            method: target.method.clone(),
-            body: input.input.as_bytes().to_vec(),
-        })?)
-    }
-    async fn transport(
-        &self,
-        local: &LocalNode,
-        id: &str,
-    ) -> anyhow::Result<hellas_sdk::iroh::SecretKey> {
-        let _keys = self.transport_keys.lock().await;
-        ensure!(
-            !self.closed.load(Ordering::SeqCst),
-            "client admission is closed because Gate is shutting down"
-        );
-        let key = format!(
-            "outgoing-{}",
-            hex::encode(&hellas_auth::Digest::hash(id.as_bytes()).as_bytes()[..16])
-        );
-        let bytes = match local.vault.get(&key).await? {
-            Some(bytes) => bytes,
-            None => {
-                let key_bytes = crate::identity::random::<32>()?;
-                local.vault.set(&key, &key_bytes).await?;
-                zeroize::Zeroizing::new(key_bytes.to_vec())
-            }
-        };
-        Ok(hellas_sdk::iroh::SecretKey::from_bytes(
-            &bytes.as_slice().try_into()?,
-        ))
+        Ok(target.backend.fetch(
+            &target.id,
+            target.backend.jobs.admit(&hellas_gateway::jobs::Request {
+                origin: hellas_gateway::jobs::Origin::Local,
+                method: "POST".into(),
+                path: "/run".into(),
+            })?,
+            WorkFetchRequest {
+                service: target.service.clone(),
+                method: target.method.clone(),
+                body: input.input.as_bytes().to_vec(),
+            },
+        )?)
     }
     #[cfg(test)]
     pub(crate) async fn cached_targets(&self) -> usize {
         self.cache.lock().await.len()
     }
-    pub async fn reset(&self) -> anyhow::Result<()> {
+    pub(crate) async fn configure_gateway(
+        &self,
+        session: &crate::control::Session,
+        document: hellas_sdk::daemon_config::Document,
+    ) -> anyhow::Result<()> {
         let mut cache = self.cache.lock().await;
-        let held = std::mem::take(&mut *cache);
+        Self::drain(&mut cache).await?;
+        session.configure(document).await?;
+        Ok(())
+    }
+    pub async fn reset(&self) -> anyhow::Result<()> {
+        Self::drain(&mut *self.cache.lock().await).await
+    }
+    async fn drain(cache: &mut BTreeMap<String, CachedTarget>) -> anyhow::Result<()> {
+        let held = std::mem::take(cache);
         let mut failure = None;
         for target in held.values() {
-            if let Err(e) = retire(&target.target.backend).await {
+            if let Err(e) = retire(&target.target).await {
                 failure.get_or_insert(e);
             }
         }
@@ -600,7 +737,6 @@ impl Clients {
         // Once closed, an admitted Run holding LocalNode can never open afterward.
         self.closed.store(true, Ordering::SeqCst);
         self.reset().await?;
-        self.owner.lock().await.clear();
         #[cfg(test)]
         self.drained.notify_one();
         Ok(())

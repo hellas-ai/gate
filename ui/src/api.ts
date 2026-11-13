@@ -54,7 +54,7 @@ export const api = {
   saveListenPort: (port:number|null):Promise<T.AppStatus> => call("save_listen_port",{port}),
   retryOpen: ():Promise<T.AppStatus> => call("retry_open"),
   restart: ():Promise<void> => call("restart_gate"),
-  configurePaidServe: (expected:number,input:T.PaidServeInput|null):Promise<T.ProviderView> => call("configure_paid_serve",{expected,input}),
+  configurePaidServe: (expected:number,input:T.PaidServeInput):Promise<T.ProviderView> => call("configure_paid_serve",{expected,input}),
   savePaidPool: (input: T.PaidPoolInput): Promise<void> => call("save_paid_pool", { input }),
   run: async (request: T.RunRequest, onEvent: (event: T.ExecutionEvent) => void): Promise<string> => {
     const channel = new Channel<T.ExecutionEvent>(); channel.onmessage = onEvent;

@@ -1,7 +1,6 @@
 //! Client-prepared issuance. Exact IDs survive lost replies; no secret is journaled.
 use crate::{
     identity::{self, Identity},
-    period::Period,
     vault::{self, Vault},
 };
 use anyhow::{Context, ensure};
@@ -160,110 +159,6 @@ impl PreparedIssue {
         Ok(())
     }
 }
-async fn prepare_gateway_anchor(
-    directory: &Path,
-    node: &NodeCoordinator,
-    identity: &Identity,
-    vault: &Vault,
-) -> anyhow::Result<PreparedIssue> {
-    let path = directory.join("gateway-listener-credential.json");
-    let held = match vault::read::<PreparedIssue>(&path)? {
-        Some(held) => held,
-        None => {
-            let now = UnixMillis::now()?;
-            let scope = GrantSpec {
-                authority: identity.public.authority,
-                subject: identity.public.owner,
-                permissions: [hellas_authority::operations::Operation::named(
-                    hellas_authority::node::GATEWAY_INVOKE,
-                )?
-                .permission(identity.public.authority, None)?]
-                .into(),
-                not_before: now,
-                expires: Period::Unlimited
-                    .expires_within(now, identity.public.owner_scope.expires)?,
-                delegation_depth: 0,
-                issuance: None,
-            };
-            let caller = node
-                .authenticate_session(
-                    &identity.credential,
-                    SessionKey::Node(identity.node.node_key()),
-                )
-                .await?;
-            let generation = node.status(&caller, identity.public.root).await?.generation;
-            PreparedIssue::prepare(
-                &path,
-                vault,
-                (
-                    GrantId(identity::random()?),
-                    hellas_auth::Digest::hash(b"hellas.gate.gateway-listener.v1"),
-                ),
-                scope,
-                CredentialHolder::Bearer,
-                generation,
-                "Gate listener".into(),
-            )
-            .await?
-        }
-    };
-    validate_gateway_anchor(&held, identity)?;
-    Ok(held)
-}
-
-fn validate_gateway_anchor(held: &PreparedIssue, identity: &Identity) -> anyhow::Result<()> {
-    let scope = held.credential.scope();
-    let permission =
-        hellas_authority::operations::Operation::named(hellas_authority::node::GATEWAY_INVOKE)?
-            .permission(identity.public.authority, None)?;
-    ensure!(
-        held.intent == hellas_auth::Digest::hash(b"hellas.gate.gateway-listener.v1")
-            && held.generation == identity.public.generation
-            && held.credential.holder() == CredentialHolder::Bearer
-            && scope.authority == identity.public.authority
-            && scope.subject == identity.public.owner
-            && scope.permissions == [permission].into()
-            && scope.delegation_depth == 0
-            && scope.issuance.is_none()
-            && scope.expires <= identity.public.owner_scope.expires,
-        "listener credential differs from the scoped gateway intent"
-    );
-    Ok(())
-}
-
-/// Read existing authority only; host startup and restart must never prompt.
-pub async fn load_gateway_anchor(
-    local: &crate::control::LocalNode,
-) -> anyhow::Result<hellas_gateway::GatewayAccess> {
-    let held =
-        vault::read::<PreparedIssue>(&local.directory.join("gateway-listener-credential.json"))?
-            .context("enable Gateway to provision its listener credential")?;
-    validate_gateway_anchor(&held, &local.identity)?;
-    Ok(hellas_gateway::GatewayAccess::new(
-        local.coordinator.clone(),
-        held.id,
-        held.secret(&local.vault).await?,
-    )
-    .await?)
-}
-
-/// Reuse the one explicitly approved control session for grant and credential.
-pub async fn provision_gateway_anchor(
-    local: &crate::control::LocalNode,
-    session: &crate::control::Session,
-) -> anyhow::Result<()> {
-    let held = prepare_gateway_anchor(
-        &local.directory,
-        &local.coordinator,
-        &local.identity,
-        &local.vault,
-    )
-    .await?;
-    held.reconcile_session(session, &local.vault).await?;
-    load_gateway_anchor(local).await?;
-    Ok(())
-}
-
 impl PreparedIssue {
     pub async fn reconcile_session(
         &self,
@@ -452,6 +347,7 @@ fn credential_bytes_for_handoff(credential: &CredentialSecret) -> zeroize::Zeroi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::period::Period;
     use crate::{dto::*, state::AppState};
     use base64::{Engine, engine::general_purpose::STANDARD};
     #[tokio::test(flavor = "multi_thread")]
@@ -512,24 +408,13 @@ mod tests {
             .await
             .is_err()
         );
-        let change = || hellas_rpc::pb::host::ConfigureProviderRequest {
+        let change = || hellas_rpc::pb::host::ConfigureRequest {
             authorization: local.authorization(),
-            update: Some(crate::provider_setup::update(
-                0,
-                ProviderChange::Endpoint {
-                    service: "cli".into(),
-                    method: "get".into(),
-                    hosts: vec!["example.com".into()],
-                    allow_private_addresses: false,
-                },
-            )),
+            expected_revision: 0,
+            document: serde_json::to_vec(&hellas_sdk::daemon_config::Document::default()).unwrap(),
         };
         assert_eq!(
-            client
-                .configure_provider(change())
-                .await
-                .unwrap_err()
-                .code(),
+            client.configure(change()).await.unwrap_err().code(),
             hellas_wire::WireCode::PermissionDenied
         );
         let (approved, _) = hellas_sdk::node_control::connect_local(
@@ -542,8 +427,20 @@ mod tests {
         )
         .await
         .unwrap();
-        approved.configure_provider(change()).await.unwrap();
-        assert_eq!(app.provider_view().await.unwrap().revision, 1);
+        approved.configure(change()).await.unwrap();
+        assert_eq!(
+            local
+                .session(false)
+                .await
+                .unwrap()
+                .view()
+                .await
+                .unwrap()
+                .document
+                .revision
+                .0,
+            1
+        );
         app.shutdown().await.unwrap();
     }
 }

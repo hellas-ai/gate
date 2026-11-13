@@ -4,10 +4,8 @@ use anyhow::ensure;
 use hellas_auth::authority::*;
 use hellas_authority::node::{NodeCoordinator, SessionKey};
 use hellas_rpc::{pb::host::*, services::host_control::HostControlClientImpl};
-use hellas_sdk::node_control::{
-    self,
-    host::{HostHandle, HostOptions},
-};
+use hellas_sdk::daemon::Core;
+use hellas_sdk::node_control;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -23,20 +21,18 @@ pub struct LocalNode {
     pub coordinator: NodeCoordinator,
     pub socket: PathBuf,
     pub vault: Vault,
-    pub composition: crate::provider_setup::Composition,
     pub directory: PathBuf,
     pub clients: crate::clients::Clients,
     pub content: hellas_store::content::DiskStore,
-    pub gateway: crate::gateway::Configuration,
     tls: Arc<rustls::ClientConfig>,
-    pub bound_addresses: std::sync::OnceLock<Vec<String>>,
+    core: Arc<Core>,
 }
 impl LocalNode {
     pub async fn open(
         directory: &Path,
         identity: Identity,
         vault: Vault,
-    ) -> anyhow::Result<(Arc<Self>, HostHandle)> {
+    ) -> anyhow::Result<(Arc<Self>, hellas_wire::local::LocalControlServer)> {
         let store = identity.open_store(directory).await?;
         let coordinator =
             NodeCoordinator::new(store, Arc::new(|| UnixMillis::now().unwrap_or_default()));
@@ -49,9 +45,6 @@ impl LocalNode {
         )?;
         let (tls, _) = node_control::profile::local_trust(certificate, "localhost".into())?;
         let socket = directory.join("gate.sock");
-        let composition = crate::provider_setup::Composition::open(directory, vault.clone())?;
-        let gateway = crate::gateway::Configuration::open(directory)?;
-        let settings = crate::settings::load(directory)?;
         let settlement_key = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
             identity.node.node_secret_bytes(),
         )
@@ -68,82 +61,48 @@ impl LocalNode {
         )
         .await?;
         let opened = async {
-            // Restore retained pins and reservations before cleanup, including inactive
-            // chains. This does not drive those chains through channel close.
-            hellas_sdk::chain_home::recover_provider_chains(
-                &home(directory),
-                &settlement_key,
-                &content,
-            )
-            .await?;
+            let chain = crate::paid::config(&crate::dto::ChainInput::Devnet, directory)?.chain;
+            let core = Core::restore(hellas_sdk::daemon::Options {
+                discovery: !cfg!(test),
+                endpoint: None,
+                remote_control: Default::default(),
+                prover: Some(Arc::new(crate::provider_identity::ListenerProver {
+                    vault: vault.clone(),
+                    node: coordinator.clone(),
+                })),
+                home: home(directory),
+                signer: Arc::new(identity.node.node_key().clone()),
+                transport: identity.node.transport_key(),
+                settlement: settlement_key,
+                owner: Some(identity.passkey.clone()),
+                chain,
+                node: coordinator.clone(),
+                content: content.clone(),
+            })
+            .await
+            .map_err(anyhow::Error::from_boxed)?;
             let local = Arc::new(Self {
                 identity: Arc::new(identity),
                 coordinator: coordinator.clone(),
                 socket: socket.clone(),
-                composition,
                 directory: directory.to_owned(),
                 clients: crate::clients::Clients::new(directory),
                 content: content.clone(),
-                gateway,
                 vault,
                 tls,
-                bound_addresses: Default::default(),
+                core: core.clone(),
             });
-            #[cfg(test)]
-            let endpoint =
-                hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::Minimal);
-            #[cfg(not(test))]
-            let endpoint =
-                hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::N0);
-            let endpoint = if let Some(port) = settings.listen_port {
-                endpoint.bind_addr(std::net::SocketAddrV4::new(
-                    std::net::Ipv4Addr::UNSPECIFIED,
-                    port,
-                ))?
-            } else {
-                endpoint
+            let control = match core
+                .control()
+                .map_err(anyhow::Error::from_boxed)?
+                .bind_local(socket, server)
+            {
+                Ok(control) => control,
+                Err(error) => {
+                    let _ = core.shutdown().await;
+                    return Err(error.into());
+                }
             };
-            let transport = endpoint
-                .secret_key(local.identity.node.transport_key())
-                .bind()
-                .await?;
-            let _ = local.bound_addresses.set(
-                transport
-                    .bound_sockets()
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect(),
-            );
-            let host = HostHandle::start_with_deferred_gateway(
-                HostOptions {
-                    content: local.content.clone(),
-                    transport: Some(transport),
-                    start_provider: false,
-                    control: Some((
-                        coordinator,
-                        hellas_sdk::ProviderControl {
-                            socket,
-                            tls: server,
-                            remote: Default::default(),
-                        },
-                    )),
-                    provider: Some(local.composition.factory(local.clone())),
-                    gateway: None,
-                },
-                crate::gateway::factory(local.clone()),
-                Arc::new({
-                    let local = local.clone();
-                    move || {
-                        let local = local.clone();
-                        Box::pin(async move {
-                            crate::credentials::load_gateway_anchor(&local)
-                                .await
-                                .map_err(Into::into)
-                        })
-                    }
-                }),
-            )
-            .await?;
             let authenticated: anyhow::Result<()> = async {
                 // A committed initialization must authenticate using precisely its prepared ID.
                 let status = local
@@ -161,16 +120,20 @@ impl LocalNode {
             }
             .await;
             if let Err(error) = authenticated {
-                let _ = host.shutdown().await;
+                let _ = control.shutdown().await;
+                let _ = core.shutdown().await;
                 return Err(error);
             }
-            Ok((local, host))
+            Ok((local, control))
         }
         .await;
         if opened.is_err() {
             content.close().await;
         }
         opened
+    }
+    pub fn core(&self) -> &Arc<Core> {
+        &self.core
     }
     pub fn authorization(&self) -> Vec<u8> {
         self.identity.public.root.0.to_vec()
@@ -230,6 +193,40 @@ impl Session {
             authorization,
             progress: Default::default(),
         }
+    }
+    pub async fn view(&self) -> anyhow::Result<hellas_sdk::daemon::View> {
+        use futures::StreamExt;
+        let mut updates = self
+            .client
+            .watch(WatchRequest {
+                authorization: self.authorization.clone(),
+            })
+            .await?;
+        let first = updates
+            .next()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("daemon Watch ended before its snapshot"))??;
+        let Some(watch_response::Update::Snapshot(snapshot)) = first.update else {
+            anyhow::bail!("daemon Watch did not start with a snapshot");
+        };
+        Ok(serde_json::from_slice(&snapshot)?)
+    }
+    pub async fn configure(
+        &self,
+        document: hellas_sdk::daemon_config::Document,
+    ) -> anyhow::Result<u64> {
+        let response = self
+            .track(
+                format!("Configure daemon at revision {}", document.revision.0),
+                true,
+                self.client.configure(ConfigureRequest {
+                    authorization: self.authorization.clone(),
+                    expected_revision: document.revision.0,
+                    document: serde_json::to_vec(&document)?,
+                }),
+            )
+            .await?;
+        Ok(response.revision)
     }
     pub async fn inspect(&self, query: InspectionQuery) -> anyhow::Result<AuthorityInspection> {
         use hellas_rpc::protocol::value::{canonical_dag_cbor, decode_dag_cbor};

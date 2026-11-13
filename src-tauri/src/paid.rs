@@ -184,14 +184,18 @@ pub(crate) fn pool_snapshot(
 }
 
 impl ProviderSnapshot {
-    pub async fn options(&self) -> anyhow::Result<hellas_sdk::paid_client::PaidWorkOptions> {
+    pub async fn options(
+        &self,
+        core: &hellas_sdk::daemon::Core,
+    ) -> anyhow::Result<hellas_sdk::paid_client::PaidWorkOptions> {
         let input = &self.input;
         let config = WorkConfig::for_chain(self.profile.clone(), &self.home)?;
-        let content =
-            hellas_sdk::chain_home::open_gateway_content(&config.chain, self.provider).await?;
+        let (_, content) = core
+            .client_resources(&config.chain)
+            .await
+            .map_err(anyhow::Error::from_boxed)?;
         Ok(hellas_sdk::paid_client::PaidWorkOptions {
             config,
-            journal_kind: hellas_sdk::paid_client::PaidJournalKind::Gateway,
             content,
             provider: self.provider,
             provider_addrs: self.provider_addrs.clone(),
@@ -249,5 +253,44 @@ pub fn save_pool(directory: &Path, input: PaidPoolInput) -> anyhow::Result<()> {
 pub fn validate_serve(input: &PaidServeInput) -> anyhow::Result<()> {
     standing_policy(&input.policy)?;
     WorkConfig::validate_profile(&profile(&input.policy.chain)?)?;
+    Ok(())
+}
+
+/// Standing terms are owner-authorized Work policy; listener configuration stays in Configure.
+pub async fn configure_serve(
+    local: &crate::control::LocalNode,
+    session: &crate::control::Session,
+    input: PaidServeInput,
+) -> anyhow::Result<()> {
+    use hellas_auth::authority::Revision;
+    use hellas_authority::model::grant::admin::WorkControlCommand;
+    use hellas_sdk::daemon_config::Listener;
+    validate_serve(&input)?;
+    let mut document = session.view().await?.document;
+    let Listener::Iroh { chain, .. } = document
+        .listeners
+        .get_mut("work")
+        .context("start the provider before approving paid terms")?
+    else {
+        anyhow::bail!("provider listener is not iroh")
+    };
+    let selected = match &input.policy.chain {
+        ChainInput::Devnet => None,
+        ChainInput::Custom(file) => Some(file.clone()),
+    };
+    if serde_json::to_vec(chain)? != serde_json::to_vec(&selected)? {
+        *chain = selected;
+        session.configure(document).await?;
+    }
+    let policy = standing_policy(&input.policy)?;
+    let current = local.coordinator.paid_policy().await?;
+    if current.as_ref().is_none_or(|p| p.policy != policy) {
+        session
+            .work(WorkControlCommand::SetPaidPolicy {
+                expected_revision: current.map_or(Revision(0), |p| p.revision),
+                policy: Box::new(policy),
+            })
+            .await?;
+    }
     Ok(())
 }

@@ -1,93 +1,53 @@
-//! One SDK gateway factory. Named HTTP keys are ordinary authority credentials.
-mod listener;
+//! HTTP listeners and routes live in the daemon document.
 use crate::{control::LocalNode, credentials::PreparedIssue, dto::*, vault};
 use anyhow::{Context, ensure};
 use hellas_auth::{Digest, authority::*};
-pub use listener::factory;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tokio::sync::Mutex;
 
-pub struct Configuration {
-    directory: PathBuf,
-    config: Mutex<Option<GatewayConfig>>,
-}
-impl Configuration {
-    pub fn open(directory: &Path) -> anyhow::Result<Self> {
-        Ok(Self {
-            directory: directory.to_owned(),
-            config: Mutex::new(vault::read(&directory.join("gateway-configuration.json"))?),
-        })
-    }
-    pub async fn get(&self) -> Option<GatewayConfig> {
-        self.config.lock().await.clone()
-    }
-    pub async fn set(&self, input: GatewayConfig) -> anyhow::Result<()> {
-        vault::write(&self.directory.join("gateway-configuration.json"), &input)?;
-        *self.config.lock().await = Some(input);
-        Ok(())
-    }
-}
-pub(crate) fn validate(
-    local: &LocalNode,
-    config: &GatewayConfig,
-) -> anyhow::Result<Option<hellas_gateway::HttpGatewayConfig>> {
-    let http = http_config(config)?;
+pub(crate) fn validate(local: &LocalNode, config: &GatewayConfig) -> anyhow::Result<()> {
     validate_presentation(
-        http.is_some(),
+        !config.http_routes.is_empty(),
         local.clients.presentation(local, &config.client)?,
     )?;
-    Ok(http)
-}
-fn http_config(
-    config: &GatewayConfig,
-) -> anyhow::Result<Option<hellas_gateway::HttpGatewayConfig>> {
-    if config.http_routes.is_empty() {
-        return Ok(None);
+    let mut keys = std::collections::BTreeSet::new();
+    for route in &config.http_routes {
+        if !keys.insert((&route.path, &route.method)) {
+            return Err(hellas_gateway::GatewayError::Config(
+                hellas_gateway::GatewayConfigError::DuplicateRoute,
+            )
+            .into());
+        }
+        http_route(route).validate()?;
     }
-    let WorkTarget::Paid {
-        service, method, ..
-    } = &config.client.target
-    else {
-        anyhow::bail!("HTTP gateway requires a paid HTTP pool");
-    };
-    let http = hellas_gateway::HttpGatewayConfig {
-        service: Some(service.clone()),
-        method: Some(method.clone()),
-        routes: config
-            .http_routes
-            .iter()
-            .map(|route| hellas_gateway::HttpRoute {
-                path: route.path.clone(),
-                method: route.method.clone(),
-                url: route.url.clone(),
-                credential: route.credential.clone(),
-                tls: hellas_rpc::http_fetch::HttpTls {
-                    roots: if route.tls_roots.is_empty() {
-                        hellas_rpc::http_fetch::HttpTrustRoots::WebPki
-                    } else {
-                        hellas_rpc::http_fetch::HttpTrustRoots::Certificates {
-                            der_base64: route.tls_roots.clone(),
-                        }
-                    },
-                    spki_sha256: vec![],
-                },
-                headers: vec![],
-                max_response_bytes: route.max_response_bytes,
-                models: None,
-            })
-            .collect(),
-        backends: Default::default(),
-        max_in_flight: 4,
-    };
-    http.validate()?;
-    Ok(Some(http))
+    Ok(())
+}
+fn http_route(route: &HttpRouteInput) -> hellas_gateway::HttpRoute {
+    hellas_gateway::HttpRoute {
+        path: route.path.clone(),
+        method: route.method.clone(),
+        url: route.url.clone(),
+        credential: route.credential.clone(),
+        tls: hellas_rpc::http_fetch::HttpTls {
+            roots: if route.tls_roots.is_empty() {
+                hellas_rpc::http_fetch::HttpTrustRoots::WebPki
+            } else {
+                hellas_rpc::http_fetch::HttpTrustRoots::Certificates {
+                    der_base64: route.tls_roots.clone(),
+                }
+            },
+            spki_sha256: vec![],
+        },
+        headers: vec![],
+        max_response_bytes: route.max_response_bytes,
+        models: None,
+    }
 }
 fn validate_presentation(http: bool, presentation: FetchPresentation) -> anyhow::Result<()> {
     if http {
         ensure!(
             matches!(presentation, FetchPresentation::Http),
-            "HTTP gateway requires a paid HTTP pool"
+            "HTTP gateway requires an HTTP resource"
         );
     } else {
         ensure!(
@@ -422,57 +382,60 @@ pub async fn configure(
     enabled: bool,
     config: Option<GatewayConfig>,
 ) -> anyhow::Result<()> {
+    use hellas_sdk::daemon_config::Listener;
+    let mut document = session.view().await?.document;
     if let Some(config) = config {
-        let http = validate(local, &config)?;
-        let required = if http.is_some() {
-            FetchPresentation::Http
+        validate(local, &config)?;
+        let (backend, service, method, presentation) =
+            local.clients.configuration(local, &config.client).await?;
+        document.backends.insert("gateway".into(), backend);
+        document
+            .routes
+            .retain(|route| !route.backends.iter().any(|id| id == "gateway"));
+        if presentation == FetchPresentation::Responses {
+            document.routes.push(hellas_gateway::Route {
+                backends: vec!["gateway".into()],
+                presentation: hellas_gateway::Presentation::Responses {
+                    service,
+                    method,
+                    models: vec![],
+                    overrides: Default::default(),
+                },
+            });
         } else {
-            FetchPresentation::Responses
-        };
-        session
-            .track(
-                "Open/recover gateway execution client".into(),
-                false,
-                local
-                    .clients
-                    .target_for(local, &config.client, Some(required)),
-            )
-            .await?;
-        if session
-            .status()
-            .await?
-            .gateway
-            .is_some_and(|gateway| gateway.state == 2)
-        {
-            session.gateway_state(false).await?;
-            session
-                .track(
-                    "Drain and release old gateway clients".into(),
-                    false,
-                    local.clients.reset(),
-                )
-                .await?;
+            for route in config.http_routes {
+                let target = hellas_gateway::HttpTarget {
+                    service: service.clone(),
+                    method: method.clone(),
+                    route: http_route(&route),
+                };
+                document.routes.push(hellas_gateway::Route {
+                    backends: vec!["gateway".into()],
+                    presentation: hellas_gateway::Presentation::Http {
+                        targets: [("gateway".into(), target)].into(),
+                    },
+                });
+            }
         }
-        session
-            .track(
-                "Publish gateway configuration".into(),
-                false,
-                local.gateway.set(config),
-            )
-            .await?;
+        if enabled {
+            document.listeners.insert(
+                "gateway".into(),
+                Listener::Http {
+                    bind: std::net::SocketAddr::from(([127, 0, 0, 1], config.port.unwrap_or(0))),
+                    zdr: config.zdr,
+                },
+            );
+        }
+    } else if enabled {
+        ensure!(
+            document.listeners.contains_key("gateway"),
+            "configure the gateway listener before starting"
+        );
     }
-    if enabled {
-        crate::credentials::provision_gateway_anchor(local, session).await?;
-    }
-    session.gateway_state(enabled).await?;
     if !enabled {
-        session
-            .track(
-                "Drain and release gateway clients".into(),
-                false,
-                local.clients.reset(),
-            )
-            .await?;
+        document.listeners.remove("gateway");
     }
+    document.validate().map_err(anyhow::Error::msg)?;
+    local.clients.configure_gateway(session, document).await?;
     Ok(())
 }

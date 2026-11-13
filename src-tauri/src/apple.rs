@@ -99,17 +99,27 @@ mod native {
     }
 
     impl RootProver for AppleAppAttestRoot {
-        async fn prove_statement(&self, statement: &[u8]) -> Result<RootProof, AttestationError> {
-            Ok(RootProof::AppleAppAttest(
-                self.assertion_async(apple_client_data_hash(statement))
-                    .await?,
-            ))
+        fn prove_statement<'a>(
+            &'a self,
+            statement: &'a [u8],
+        ) -> hellas_attestation::RootProofFuture<'a> {
+            Box::pin(async move {
+                Ok(RootProof::AppleAppAttest(
+                    self.assertion_async(apple_client_data_hash(statement))
+                        .await?,
+                ))
+            })
         }
 
-        async fn prove_open_binding(&self, binding: Digest) -> Result<RootProof, AttestationError> {
-            Ok(RootProof::AppleAppAttest(
-                self.assertion_async(*binding.as_bytes()).await?,
-            ))
+        fn prove_open_binding<'a>(
+            &'a self,
+            binding: Digest,
+        ) -> hellas_attestation::RootProofFuture<'a> {
+            Box::pin(async move {
+                Ok(RootProof::AppleAppAttest(
+                    self.assertion_async(*binding.as_bytes()).await?,
+                ))
+            })
         }
     }
 
@@ -183,22 +193,26 @@ impl AppleAppAttestRoot {
 
 #[cfg(not(target_os = "macos"))]
 impl hellas_attestation::RootProver for AppleAppAttestRoot {
-    async fn prove_statement(
-        &self,
-        _statement: &[u8],
-    ) -> Result<hellas_rpc::RootProof, hellas_attestation::AttestationError> {
-        Err(hellas_attestation::AttestationError::Platform(
-            "Apple App Attest is unavailable".into(),
-        ))
+    fn prove_statement<'a>(
+        &'a self,
+        _statement: &'a [u8],
+    ) -> hellas_attestation::RootProofFuture<'a> {
+        Box::pin(async move {
+            Err(hellas_attestation::AttestationError::Platform(
+                "Apple App Attest is unavailable".into(),
+            ))
+        })
     }
 
-    async fn prove_open_binding(
-        &self,
+    fn prove_open_binding<'a>(
+        &'a self,
         _binding: hellas_auth::Digest,
-    ) -> Result<hellas_rpc::RootProof, hellas_attestation::AttestationError> {
-        Err(hellas_attestation::AttestationError::Platform(
-            "Apple App Attest is unavailable".into(),
-        ))
+    ) -> hellas_attestation::RootProofFuture<'a> {
+        Box::pin(async move {
+            Err(hellas_attestation::AttestationError::Platform(
+                "Apple App Attest is unavailable".into(),
+            ))
+        })
     }
 }
 

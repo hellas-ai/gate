@@ -83,30 +83,17 @@ impl Session {
                 .await
         }
     }
-    pub(crate) async fn provider_state(&self, enabled: bool) -> anyhow::Result<()> {
-        self.track(
-            format!("Set provider enabled={enabled}"),
-            false,
-            self.client
-                .set_provider_state(hellas_rpc::pb::host::SetProviderStateRequest {
-                    authorization: self.authorization.clone(),
-                    enabled,
-                }),
-        )
-        .await?;
-        Ok(())
-    }
-    pub(crate) async fn gateway_state(&self, enabled: bool) -> anyhow::Result<()> {
-        self.track(
-            format!("Set gateway enabled={enabled}"),
-            false,
-            self.client
-                .set_gateway_state(hellas_rpc::pb::host::SetGatewayStateRequest {
-                    authorization: self.authorization.clone(),
-                    enabled,
-                }),
-        )
-        .await?;
+    pub(crate) async fn provider_state(
+        &self,
+        local: &crate::control::LocalNode,
+        enabled: bool,
+    ) -> anyhow::Result<()> {
+        let mut document = self.view().await?.document;
+        if document.listeners.contains_key("work") == enabled {
+            return Ok(());
+        }
+        crate::provider_setup::enabled(local, &mut document, enabled)?;
+        self.configure(document).await?;
         Ok(())
     }
 }

@@ -70,7 +70,7 @@ pub(crate) fn snapshot(directory: &Path, id: &str) -> anyhow::Result<Snapshot> {
         id,
         record.policy.assurance,
         Arc::new(hellas_sdk::FilesystemAssertionCounterStore::new(
-            directory.join("apple-assertion-counters"),
+            directory.join("apple-app-attest-open-counters"),
         )),
     )?;
     anyhow::ensure!(
@@ -153,7 +153,7 @@ mod tests {
         replacement.counter_store.advance(&key, 8).unwrap();
         let path = directory
             .path()
-            .join("apple-assertion-counters")
+            .join("apple-app-attest-open-counters")
             .join(format!("{}.counter", hex::encode(key)));
         std::fs::write(path, [0, 1]).unwrap();
         assert_eq!(

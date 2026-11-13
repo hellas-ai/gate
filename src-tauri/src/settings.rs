@@ -1,4 +1,4 @@
-//! Startup transport preferences are public local metadata; HostHandle owns the socket.
+//! Port preference for the next explicit provider start; active sockets belong to the daemon.
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 #[derive(Default, Serialize, Deserialize)]
