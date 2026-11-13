@@ -353,8 +353,8 @@ async fn funded_setup(runtime: commonware_runtime::tokio::Context) -> FundedGate
         buyer_before,
         "quote discovery must not spend buyer funding"
     );
-    let hellas_sdk::Backend::Paid(hellas_sdk::PaidBackend { owner, .. }) =
-        target.backend.backend(&target.id).unwrap()
+    let Some(hellas_sdk::PaidBackend { owner, .. }) =
+        &target.backend.backend(&target.id).unwrap().paid
     else {
         panic!("paid target")
     };
@@ -415,8 +415,8 @@ async fn funded_setup(runtime: commonware_runtime::tokio::Context) -> FundedGate
         "Configure must retire the previous target"
     );
     assert!(!Arc::ptr_eq(&target, &replacement));
-    let hellas_sdk::Backend::Paid(hellas_sdk::PaidBackend { options, .. }) =
-        replacement.backend.backend(&replacement.id).unwrap()
+    let Some(hellas_sdk::PaidBackend { options, .. }) =
+        &replacement.backend.backend(&replacement.id).unwrap().paid
     else {
         panic!("paid target")
     };

@@ -68,6 +68,7 @@ fn input(document: &Document, resource: &Resource) -> anyhow::Result<ResourceInp
         anyhow::bail!("resource backend is not Fetch")
     };
     let kind = match &resource.kind {
+        DaemonResourceKind::Model { .. } => anyhow::bail!("Gate edits Fetch resources"),
         DaemonResourceKind::Responses { responses } => ResourceKind::OpenAi {
             model: responses.model.clone(),
             max_output_tokens: responses.max_output_tokens,
