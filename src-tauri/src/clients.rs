@@ -276,7 +276,9 @@ impl Clients {
         let active = backend
             .backend(&selected.id)
             .context("configured backend is unavailable")?;
-        ensure!(active.fetch_routes().iter().any(|(schema, route)| {
+        let mut quoted = active.clone();
+        quoted.quote().await?;
+        ensure!(quoted.fetch_routes().iter().any(|(schema, route)| {
             matches!(route, hellas_rpc::protocol::invocation::fetch::FetchRoutePolicy::SealedRoute { service, method }
                 if *service == selected.service && *method == selected.method)
                 && matches!((schema, selected.presentation),
