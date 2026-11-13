@@ -3,7 +3,7 @@
 
   inputs = {
     hellas = {
-      url = "github:hellas-ai/hellas/8a31585093ab32e8a29602c54db044b0f933b855";
+      url = "github:hellas-ai/hellas/4505726882737b53f62c3033dd1198596853e20b";
       flake = false;
     };
     # Nix pins and flake helpers come from Hellas, separately from the SDK

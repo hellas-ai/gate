@@ -32,7 +32,7 @@ grants scoped access, not access to the key. A malicious or credential-reflectin
 upstream can still disclose the credential. Watch returns routing aliases and redacts secret values. The editor stores no
 separate key catalogue.
 
-Code: [credential scope](https://github.com/hellas-ai/hellas/blob/8a31585093ab32e8a29602c54db044b0f933b855/crates/providers/src/http.rs),
+Code: [credential scope](https://github.com/hellas-ai/hellas/blob/4505726882737b53f62c3033dd1198596853e20b/crates/providers/src/http.rs),
 [control calls](src-tauri/src/control.rs), [provider editing](src-tauri/src/provider_setup.rs).
 
 ## What Apple verification establishes
@@ -51,8 +51,8 @@ reproducible mapping from source to a signed release hash.
 
 Code: [DeviceCheck bridge](src-tauri/src/apple_app_attest.m),
 [key and enrollment](src-tauri/src/apple.rs),
-[connection verification](https://github.com/hellas-ai/hellas/blob/8a31585093ab32e8a29602c54db044b0f933b855/crates/client/src/iroh.rs),
-[Apple verifier](https://github.com/hellas-ai/hellas/blob/8a31585093ab32e8a29602c54db044b0f933b855/crates/attestation/src/apple.rs).
+[connection verification](https://github.com/hellas-ai/hellas/blob/4505726882737b53f62c3033dd1198596853e20b/crates/client/src/iroh.rs),
+[Apple verifier](https://github.com/hellas-ai/hellas/blob/4505726882737b53f62c3033dd1198596853e20b/crates/attestation/src/apple.rs).
 The verifier does not call Apple's fraud-assessment service. Captured evidence
 can test verification at capture time; only provisioned hardware can answer a
 new hardware challenge.
@@ -67,9 +67,9 @@ The HTTP implementation supports SPKI pin checks, while Gate's resource forms
 expose certificate roots. OpenAI Responses uses the public endpoint and bundled
 roots; Gate does not claim an additional signed upstream peer attestation.
 
-Code: [TLS verification](https://github.com/hellas-ai/hellas/blob/8a31585093ab32e8a29602c54db044b0f933b855/crates/providers/src/http/tls.rs),
-[HTTP client](https://github.com/hellas-ai/hellas/blob/8a31585093ab32e8a29602c54db044b0f933b855/crates/providers/src/http/clients.rs),
-[Responses client](https://github.com/hellas-ai/hellas/blob/8a31585093ab32e8a29602c54db044b0f933b855/crates/providers/src/responses_fetch.rs).
+Code: [TLS verification](https://github.com/hellas-ai/hellas/blob/4505726882737b53f62c3033dd1198596853e20b/crates/providers/src/http/tls.rs),
+[HTTP client](https://github.com/hellas-ai/hellas/blob/4505726882737b53f62c3033dd1198596853e20b/crates/providers/src/http/clients.rs),
+[Responses client](https://github.com/hellas-ai/hellas/blob/4505726882737b53f62c3033dd1198596853e20b/crates/providers/src/responses_fetch.rs).
 
 Grant budgets, resource limits and signed paid-channel terms restrict admitted
 work. They do not promise a reserve in the upstream vendor's account or account
