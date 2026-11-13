@@ -21,13 +21,13 @@ path = "src/main.rs"
 required-features = ["desktop"]
 
 [dependencies]
-hellas-webauthn = { git = "https://github.com/hellas-ai/hellas", rev = "051813aa183f9d222d99371a106eae8c751e9610", features = ["der"] }
+hellas-webauthn = { git = "https://github.com/hellas-ai/hellas", rev = "91e6171eb2f592b405cb7a8ec32c9161dbc6209c", features = ["der"] }
 ciborium = "0.2"
 sha2 = "0.11"
-hellas-chain = { git = "https://github.com/hellas-ai/hellas", rev = "051813aa183f9d222d99371a106eae8c751e9610" }
-hellas-authority = { git = "https://github.com/hellas-ai/hellas", rev = "051813aa183f9d222d99371a106eae8c751e9610" }
-hellas-channel = { git = "https://github.com/hellas-ai/hellas", rev = "051813aa183f9d222d99371a106eae8c751e9610" }
-hellas-executor = { git = "https://github.com/hellas-ai/hellas", rev = "051813aa183f9d222d99371a106eae8c751e9610", default-features = false }
+hellas-chain = { git = "https://github.com/hellas-ai/hellas", rev = "91e6171eb2f592b405cb7a8ec32c9161dbc6209c" }
+hellas-authority = { git = "https://github.com/hellas-ai/hellas", rev = "91e6171eb2f592b405cb7a8ec32c9161dbc6209c" }
+hellas-channel = { git = "https://github.com/hellas-ai/hellas", rev = "91e6171eb2f592b405cb7a8ec32c9161dbc6209c" }
+hellas-executor = { git = "https://github.com/hellas-ai/hellas", rev = "91e6171eb2f592b405cb7a8ec32c9161dbc6209c", default-features = false }
 anyhow = "1"
 async-trait = "0.1"
 getrandom = "0.4"
@@ -37,17 +37,17 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 zeroize = "1"
 base64 = "0.23"
 futures = "0.3"
-hellas-genesis = { git = "https://github.com/hellas-ai/hellas", rev = "051813aa183f9d222d99371a106eae8c751e9610" }
-hellas-auth = { git = "https://github.com/hellas-ai/hellas", rev = "051813aa183f9d222d99371a106eae8c751e9610" }
-hellas-adaptors = { git = "https://github.com/hellas-ai/hellas", rev = "051813aa183f9d222d99371a106eae8c751e9610" }
-hellas-store = { git = "https://github.com/hellas-ai/hellas", rev = "051813aa183f9d222d99371a106eae8c751e9610" }
-hellas-share = { git = "https://github.com/hellas-ai/hellas", rev = "051813aa183f9d222d99371a106eae8c751e9610" }
-hellas-attestation = { git = "https://github.com/hellas-ai/hellas", rev = "051813aa183f9d222d99371a106eae8c751e9610", features = ["apple-app-attest"] }
-hellas-gateway = { git = "https://github.com/hellas-ai/hellas", rev = "051813aa183f9d222d99371a106eae8c751e9610" }
-hellas-private = { git = "https://github.com/hellas-ai/hellas", rev = "051813aa183f9d222d99371a106eae8c751e9610" }
-hellas-rpc = { git = "https://github.com/hellas-ai/hellas", rev = "051813aa183f9d222d99371a106eae8c751e9610", features = ["host-control", "execute", "fetch", "work"] }
-hellas-sdk = { git = "https://github.com/hellas-ai/hellas", rev = "051813aa183f9d222d99371a106eae8c751e9610", default-features = false }
-hellas-wire = { git = "https://github.com/hellas-ai/hellas", rev = "051813aa183f9d222d99371a106eae8c751e9610", features = ["unix"] }
+hellas-genesis = { git = "https://github.com/hellas-ai/hellas", rev = "91e6171eb2f592b405cb7a8ec32c9161dbc6209c" }
+hellas-auth = { git = "https://github.com/hellas-ai/hellas", rev = "91e6171eb2f592b405cb7a8ec32c9161dbc6209c" }
+hellas-adaptors = { git = "https://github.com/hellas-ai/hellas", rev = "91e6171eb2f592b405cb7a8ec32c9161dbc6209c" }
+hellas-store = { git = "https://github.com/hellas-ai/hellas", rev = "91e6171eb2f592b405cb7a8ec32c9161dbc6209c" }
+hellas-share = { git = "https://github.com/hellas-ai/hellas", rev = "91e6171eb2f592b405cb7a8ec32c9161dbc6209c" }
+hellas-attestation = { git = "https://github.com/hellas-ai/hellas", rev = "91e6171eb2f592b405cb7a8ec32c9161dbc6209c", features = ["apple-app-attest"] }
+hellas-gateway = { git = "https://github.com/hellas-ai/hellas", rev = "91e6171eb2f592b405cb7a8ec32c9161dbc6209c" }
+hellas-private = { git = "https://github.com/hellas-ai/hellas", rev = "91e6171eb2f592b405cb7a8ec32c9161dbc6209c" }
+hellas-rpc = { git = "https://github.com/hellas-ai/hellas", rev = "91e6171eb2f592b405cb7a8ec32c9161dbc6209c", features = ["host-control", "execute", "fetch", "work"] }
+hellas-sdk = { git = "https://github.com/hellas-ai/hellas", rev = "91e6171eb2f592b405cb7a8ec32c9161dbc6209c", default-features = false }
+hellas-wire = { git = "https://github.com/hellas-ai/hellas", rev = "91e6171eb2f592b405cb7a8ec32c9161dbc6209c", features = ["unix"] }
 # The same bundled SQLite that hellas's Work journals compile in; history.rs
 # drives it through the C API.
 libsqlite3-sys = { version = "0.37", features = ["bundled"] }
