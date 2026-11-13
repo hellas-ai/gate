@@ -353,11 +353,11 @@ async fn funded_setup(runtime: commonware_runtime::tokio::Context) -> FundedGate
         buyer_before,
         "quote discovery must not spend buyer funding"
     );
-    let Some(hellas_sdk::PaidBackend { owner, .. }) =
-        &target.backend.backend(&target.id).unwrap().paid
+    let hellas_sdk::BackendState::Paid(paid) = &target.backend.backend(&target.id).unwrap().state
     else {
         panic!("paid target")
     };
+    let owner = &paid.owner;
     let owner = owner.clone();
     let signer = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
         bl.identity.node.node_secret_bytes(),
@@ -415,12 +415,12 @@ async fn funded_setup(runtime: commonware_runtime::tokio::Context) -> FundedGate
         "Configure must retire the previous target"
     );
     assert!(!Arc::ptr_eq(&target, &replacement));
-    let Some(hellas_sdk::PaidBackend { options, .. }) =
-        &replacement.backend.backend(&replacement.id).unwrap().paid
+    let hellas_sdk::BackendState::Paid(paid) =
+        &replacement.backend.backend(&replacement.id).unwrap().state
     else {
         panic!("paid target")
     };
-    assert_eq!(options.timeout, Some(Duration::from_secs(90)));
+    assert_eq!(paid.options.timeout, Some(Duration::from_secs(90)));
     let args = options.clone();
     bl.session(true)
         .await
