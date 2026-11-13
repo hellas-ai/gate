@@ -2067,7 +2067,7 @@ async fn provider_restart_publishes_configured_resource_without_runtime_catalogu
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn transport_port_persists_on_restart_and_failed_bind_retries_without_owner_recovery() {
+async fn transport_port_persists_and_failed_bind_is_repaired_through_control() {
     let directory = tempfile::tempdir().unwrap();
     let secrets = tempfile::tempdir().unwrap();
     let vault = Vault::fixture(secrets.path());
@@ -2111,17 +2111,35 @@ async fn transport_port_persists_on_restart_and_failed_bind_retries_without_owne
     let reopened = AppState::with_vault(directory.path(), vault.clone())
         .await
         .unwrap();
-    assert!(!reopened.status().await.unwrap().identity.initialized);
+    let failed = reopened.status().await.unwrap();
+    assert!(failed.identity.initialized);
+    assert_eq!(failed.provider.state, "error");
+    assert!(!failed.provider.detail.is_empty());
+    assert!(failed.bound_addresses.is_empty());
+    assert!(
+        reopened
+            .local()
+            .await
+            .unwrap()
+            .session(false)
+            .await
+            .unwrap()
+            .status()
+            .await
+            .is_ok()
+    );
     drop(held);
-    let retried = reopened.retry_open().await.unwrap();
-    assert!(retried.identity.initialized);
-    assert_eq!(retried.identity.principal, original.identity.principal);
-    assert_eq!(retried.identity.generation, original.identity.generation);
+    let repaired = reopened.save_listen_port(Some(port)).await.unwrap();
+    assert_eq!(repaired.provider.state, "running");
+    assert!(repaired.provider.detail.is_empty());
+    assert!(repaired.identity.initialized);
+    assert_eq!(repaired.identity.principal, original.identity.principal);
+    assert_eq!(repaired.identity.generation, original.identity.generation);
     assert_eq!(
-        retried.identity.transport_id,
+        repaired.identity.transport_id,
         original.identity.transport_id
     );
-    assert!(retried.bound_addresses.iter().any(|a| {
+    assert!(repaired.bound_addresses.iter().any(|a| {
         a.parse::<std::net::SocketAddr>()
             .is_ok_and(|a| a.is_ipv4() && a.port() == port)
     }));

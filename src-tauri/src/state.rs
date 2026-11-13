@@ -186,9 +186,15 @@ impl AppState {
             })
             .await?;
         let view = local.session(false).await?.view().await?;
-        let service = |enabled| ServiceStatus {
-            state: if enabled { "running" } else { "stopped" }.into(),
-            detail: String::new(),
+        let service = |id: &str, enabled| match view.listener_errors.get(id) {
+            Some(error) => ServiceStatus {
+                state: "error".into(),
+                detail: error.clone(),
+            },
+            None => ServiceStatus {
+                state: if enabled { "running" } else { "stopped" }.into(),
+                detail: String::new(),
+            },
         };
         use base64::Engine;
         let identity = &local.identity;
@@ -240,8 +246,8 @@ impl AppState {
                     .transpose()?
                     .unwrap_or_default(),
             },
-            provider: service(!view.iroh_addresses.is_empty()),
-            gateway: service(!view.http_addresses.is_empty()),
+            provider: service("work", !view.iroh_addresses.is_empty()),
+            gateway: service("gateway", !view.http_addresses.is_empty()),
             endpoint: view
                 .http_addresses
                 .values()
