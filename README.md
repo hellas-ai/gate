@@ -96,8 +96,8 @@ Work/Auth authority operations.
 Run selects imported access or a named typed paid pool, then accepts the actual
 Fetch request JSON. Successful terminal verification, failure and cancellation
 are reflected in local SQLite history. History entries can be deleted or cleared.
-Closing the window hides it; Quit drains the host and clients. Saving a
-provider UDP port takes effect on the next explicit stop/start of Serve. Restart
+Closing the window hides it; Quit drains the host and clients. Editing the active
+provider UDP port takes effect when Configure commits. Restart
 restores the active listener configuration from the journal.
 
 ## Paid setup and gateways
@@ -125,11 +125,9 @@ are scoped to the chain and full approved provider address. The address's
 enrollment must match the approval; the SDK verifies it on quote, funding and
 reconnect, including retained channels. Node IDs alone are rejected.
 
-Run and listeners share the configured SDK gateway backend and its retained channel.
-While an HTTP gateway is configured for the selected provider, Run uses that
-backend’s channel timing and limits. Native pool timing applies to standalone Run. Gateway jobs use the CLI defaults
-of 300 admission, 3,000 execution and 600 payment blocks; a bond must have more
-than their combined 3,900 blocks remaining. Paid Serve defaults to 10,000 blocks. They select a named route and
+Run declares its selected target through Configure/Watch. HTTP and Run use the
+same channel owner and the timing and limits selected in the paid pool. Paid Serve
+defaults to 10,000 blocks. Clients select a named route and
 HTTP or Responses presentation. The SDK currently prepares the Fetch contract
 from the grant's admitted policy or the paid provider's quoted policy, refusing
 ambiguous admissions. These paths do not independently pin a buyer-named

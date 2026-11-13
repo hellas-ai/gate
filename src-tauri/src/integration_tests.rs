@@ -981,7 +981,6 @@ async fn paid_apple_approvals_and_journals_bind_the_full_provider_address() {
         .await
         .unwrap();
     app.initialize_software("Owner".into()).await.unwrap();
-    let local = app.local().await.unwrap();
     let policy = paid_policy_fixture();
     let approve = |revision, enrollment| {
         trust::approve(
@@ -1012,16 +1011,11 @@ async fn paid_apple_approvals_and_journals_bind_the_full_provider_address() {
             policy: client_policy(&policy),
         }],
     };
-    let original = crate::paid::pool_snapshot(directory.path(), &pool)
-        .unwrap()
-        .providers
-        .remove(0);
-    let options = original.options(local.core()).await.unwrap();
-    let anchor = options.trust().unwrap();
-    assert_eq!(options.assurance, hellas_rpc::Assurance::AppleAppAttest);
-    assert_eq!(anchor.expected_genesis, options.provider.enrollment);
-    assert!(options.apple_trust.is_some());
-    let journal = options.journal_root();
+    crate::paid::pool_snapshot(directory.path(), &pool).unwrap();
+    let original = trust::resolve(directory.path(), "apple").unwrap();
+    let anchor = &original;
+    let config = crate::paid::config(&pool.providers[0].policy.chain, directory.path()).unwrap();
+    let journal = config.chain.client_journals(&pool.providers[0].provider);
     assert_eq!(
         anchor.apple_app_attest.as_ref().unwrap().allowed_cd_hashes,
         vec![[7; 32]]
@@ -1036,24 +1030,15 @@ async fn paid_apple_approvals_and_journals_bind_the_full_provider_address() {
     approve(1, 5);
     assert!(crate::paid::pool_snapshot(directory.path(), &pool).is_err());
     pool.providers[0].provider = paid_address(5, 3);
-    let replacement = crate::paid::pool_snapshot(directory.path(), &pool)
-        .unwrap()
-        .providers
-        .remove(0);
-    let replaced = replacement.options(local.core()).await.unwrap();
-    assert_ne!(journal, replaced.journal_root());
-    assert_eq!(
-        replaced.trust().unwrap().expected_genesis,
-        replaced.provider.enrollment
-    );
+    crate::paid::pool_snapshot(directory.path(), &pool).unwrap();
+    let replacement = trust::resolve(directory.path(), "apple").unwrap();
     assert_ne!(
-        original.trust.anchor.expected_genesis,
-        replacement.trust.anchor.expected_genesis
+        journal,
+        config.chain.client_journals(&pool.providers[0].provider)
     );
+    assert_ne!(original.expected_genesis, replacement.expected_genesis);
     assert_eq!(
         replacement
-            .trust
-            .anchor
             .apple_app_attest
             .unwrap()
             .counter_store
@@ -1138,7 +1123,6 @@ async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channe
     );
     let applied = app.apply_document(&preview.id).await.unwrap();
     assert!(applied.error.is_none(), "{:?}", applied.error);
-    let local = app.local().await.unwrap();
     let bytes = std::fs::read(crate::paid::pool_path(directory.path(), &pool.id).unwrap()).unwrap();
     assert_eq!(
         chain_files(&chain_home),
@@ -1165,12 +1149,6 @@ async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channe
             .to_string()
             .contains("different enrollment")
     );
-    let options = crate::paid::pool_snapshot(directory.path(), &pool).unwrap();
-    assert_eq!(
-        options.providers[0].trust.anchor.expected_genesis,
-        hellas_rpc::ContentId::from_bytes([4; 32])
-    );
-    assert!(options.providers[0].trust.anchor.apple_app_attest.is_none());
     for invalid in [zero, duplicate, node_only, wrong_enrollment] {
         assert!(app.save_paid_pool(invalid).await.is_err());
         assert_eq!(
@@ -1203,50 +1181,11 @@ async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channe
         "refused pools must not mutate chain state"
     );
     let config = crate::paid::config(&pool.providers[0].policy.chain, directory.path()).unwrap();
-    let first = local
-        .clients
-        .funding_owner(&local, &config.chain)
-        .await
-        .unwrap();
-    let second = local
-        .clients
-        .funding_owner(&local, &config.chain)
-        .await
-        .unwrap();
-    assert!(
-        Arc::ptr_eq(&first, &second),
-        "one funding owner serializes all pools"
-    );
-    let resolved = Arc::new(Notify::new());
-    let resume = Arc::new(Notify::new());
-    *local.clients.after_paid_resolution.lock().unwrap() = Some((resolved.clone(), resume.clone()));
-    let input = WorkClientConfig {
-        target: WorkTarget::Paid {
-            pool_id: pool.id.clone(),
-            provider: pool.providers[0].provider.clone(),
-            service: policy.service.clone(),
-            method: policy.method.clone(),
-        },
-        trust_policy: "paid-provider".into(),
-    };
-    let opening = local.clone();
-    let pending = tokio::spawn(async move { opening.clients.target(&opening, &input).await });
-    tokio::time::timeout(std::time::Duration::from_secs(10), resolved.notified())
-        .await
-        .unwrap();
-    pool.providers[0].timeout_seconds = 2;
-    app.save_paid_pool(pool.clone()).await.unwrap();
-    resume.notify_one();
-    let error = pending.await.unwrap().err().unwrap();
-    assert!(error.to_string().contains("paid pool changed"), "{error:#}");
-    let retained = config
-        .chain
-        .client_journals(&options.providers[0].provider.to_string());
+    let retained = config.chain.client_journals(&pool.providers[0].provider);
     assert!(
         !retained.exists(),
         "validation and refused opening cannot create journals"
     );
-    let transport = local.core().client_endpoint().await.unwrap();
     pool.providers[0].provider = paid_address(4, 4);
     app.save_paid_pool(pool).await.unwrap();
     // Journals are addressed by chain and provider, independently of the UI group.
@@ -1257,15 +1196,9 @@ async fn paid_pool_settings_refuse_duplicate_owners_and_preserve_retained_channe
     assert_eq!(
         reopened_config
             .chain
-            .client_journals(&reassigned.providers[0].provider.to_string()),
+            .client_journals(&reassigned[0].input.provider),
         retained
     );
-    assert_eq!(
-        local.core().client_endpoint().await.unwrap().id(),
-        transport.id()
-    );
-    drop(first);
-    drop(second);
     app.shutdown().await.unwrap();
 }
 
@@ -1369,7 +1302,22 @@ async fn real_run_records_verified_success_cancellation_and_failed_incomplete_de
         "cancelled"
     );
     upstream.release.notify_one();
-    bob.local().await.unwrap().clients.reset().await.unwrap();
+    let local = bob.local().await.unwrap();
+    local
+        .session(true)
+        .await
+        .unwrap()
+        .edit(None, |document| {
+            let ids: Vec<_> = document.backends.keys().cloned().collect();
+            for id in ids {
+                document
+                    .remove_backend(&id)
+                    .map_err(anyhow::Error::from_boxed)?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
     upstream.hold.store(false, Ordering::SeqCst);
     upstream.fail.store(true, Ordering::SeqCst);
     let events = std::sync::Mutex::new(Vec::new());
@@ -1658,10 +1606,11 @@ async fn shutdown_closes_opening_for_an_admitted_run_before_paid_target_start() 
     waiting.recv().await.unwrap();
     let quitting = app.clone();
     let shutdown = tokio::spawn(async move { quitting.shutdown().await });
-    tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        local.clients.drained.notified(),
-    )
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !local.core().jobs.is_closed() {
+            tokio::task::yield_now().await;
+        }
+    })
     .await
     .unwrap();
     assert!(
@@ -1681,7 +1630,6 @@ async fn shutdown_closes_opening_for_an_admitted_run_before_paid_target_start() 
             .unwrap()
             .unwrap()
     );
-    assert_eq!(local.clients.cached_targets().await, 0);
     assert!(!local.socket.exists());
     assert!(local.clients.target(&local, &request.client).await.is_err());
     let history = app.history.list(10).unwrap();
@@ -2010,6 +1958,25 @@ async fn late_auth_refusal_reports_committed_share_budgets_and_allowance_exactly
     alice.shutdown().await.unwrap();
 }
 
+async fn resource_policy(
+    local: &crate::control::LocalNode,
+    name: &str,
+) -> anyhow::Result<hellas_authority::model::grant::records::GrantPolicy> {
+    use hellas_authority::model::grant::admin::{WorkControlCommand, WorkControlReply};
+    let WorkControlReply::Catalogue(policies) = local
+        .session(false)
+        .await?
+        .work(WorkControlCommand::Catalogue)
+        .await?
+    else {
+        anyhow::bail!("expected resource catalogue")
+    };
+    policies
+        .into_iter()
+        .find(|policy| policy.name == name)
+        .ok_or_else(|| anyhow::anyhow!("resource is not configured"))
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn provider_restart_publishes_configured_resource_without_runtime_catalogue_mutation() {
     use hellas_authority::model::grant::admin::{WorkControlCommand, WorkControlReply};
@@ -2035,7 +2002,7 @@ async fn provider_restart_publishes_configured_resource_without_runtime_catalogu
         *max_response_bytes = 8192;
     }
     let local = alice.local().await.unwrap();
-    let original = crate::provider_setup::policy(&local, "page").await.unwrap();
+    let original = resource_policy(&local, "page").await.unwrap();
     let plan = crate::apply::plan(&local, desired.clone()).await.unwrap();
     let limited = restricted_session(
         &local,
@@ -2062,7 +2029,6 @@ async fn provider_restart_publishes_configured_resource_without_runtime_catalogu
         panic!("authority catalogue")
     };
     assert!(!active.contains(&original));
-    assert!(active.contains(&crate::provider_setup::policy(&local, "page").await.unwrap()));
     desired.expected_provider_revision = alice.provider_view().await.unwrap().revision;
     if let ResourceKind::Https {
         max_response_bytes, ..
@@ -2083,8 +2049,7 @@ async fn provider_restart_publishes_configured_resource_without_runtime_catalogu
     else {
         panic!("authority catalogue");
     };
-    assert!(active.contains(&crate::provider_setup::policy(&local, "page").await.unwrap()));
-    let policy = crate::provider_setup::policy(&local, "page").await.unwrap();
+    let policy = active.iter().find(|p| p.name == "page").unwrap();
     assert_eq!(
         policy.revision.0, 3,
         "both successfully published configurations advance the revision"
@@ -2110,10 +2075,14 @@ async fn transport_port_persists_on_restart_and_failed_bind_retries_without_owne
         .await
         .unwrap();
     let original = app.initialize_software("Owner".into()).await.unwrap();
+    app.bind_provider(true).await.unwrap();
+    app.set_provider(true).await.unwrap();
+    let bound = app.status().await.unwrap().bound_addresses;
     let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let busy = probe.local_addr().unwrap().port();
     assert!(app.save_listen_port(Some(busy)).await.is_err());
-    assert_eq!(app.status().await.unwrap().listen_port, None);
+    assert_eq!(app.status().await.unwrap().listen_port, Some(0));
+    assert_eq!(app.status().await.unwrap().bound_addresses, bound);
     assert!(
         app.local()
             .await
@@ -2130,9 +2099,10 @@ async fn transport_port_persists_on_restart_and_failed_bind_retries_without_owne
     drop(available);
     let saved = app.save_listen_port(Some(port)).await.unwrap();
     assert_eq!(saved.listen_port, Some(port));
-    assert_eq!(saved.bound_addresses, original.bound_addresses);
-    app.bind_provider(true).await.unwrap();
-    app.set_provider(true).await.unwrap();
+    assert!(saved.bound_addresses.iter().any(|a| {
+        a.parse::<std::net::SocketAddr>()
+            .is_ok_and(|a| a.port() == port)
+    }));
     app.shutdown().await.unwrap();
     drop(app);
     // Simulate a race after saving. The failure remains correctable without
@@ -2213,7 +2183,7 @@ async fn provider_editor_commits_one_document_and_never_echoes_keys() {
     let snapshot = session.view().await.unwrap();
     let public = serde_json::to_value(&snapshot.document).unwrap();
     assert!(!public.to_string().contains("private-backend-key"));
-    assert_eq!(snapshot.document.authority.resources().len(), 1);
+    assert_eq!(snapshot.document.resources.len(), 1);
     assert_eq!(snapshot.document.backends.len(), 1);
     let stored = local.coordinator.configuration().await.unwrap().unwrap();
     assert_eq!(
@@ -2235,7 +2205,12 @@ async fn provider_editor_commits_one_document_and_never_echoes_keys() {
     };
     *allowed_hosts = vec!["invalid host".into()];
     credentials.get_mut("api").unwrap().secret = Some("rejected-rotation".into());
-    assert!(session.configure(invalid).await.is_err());
+    assert!(
+        session
+            .configure(snapshot.revision.0, invalid)
+            .await
+            .is_err()
+    );
     assert_eq!(
         serde_json::to_value(session.view().await.unwrap().document).unwrap(),
         public
@@ -2255,13 +2230,6 @@ async fn provider_editor_commits_one_document_and_never_echoes_keys() {
     let reopened = AppState::with_vault(directory.path(), vault).await.unwrap();
     assert_eq!(reopened.provider_view().await.unwrap().revision, 1);
     assert_eq!(reopened.provider_view().await.unwrap().resources.len(), 1);
-    assert!(
-        !directory
-            .path()
-            .join("provider-configuration.json")
-            .exists()
-    );
-    assert!(!directory.path().join("gateway-configuration.json").exists());
     reopened.shutdown().await.unwrap();
 }
 
@@ -2300,7 +2268,15 @@ async fn native_run_and_http_share_the_configured_grant_channel_and_quota() {
     };
     bob.set_gateway(true, Some(config.clone())).await.unwrap();
     let native = local.clients.target(&local, &request.client).await.unwrap();
-    assert!(Arc::ptr_eq(&native.backend, &local.core().execution()));
+    let watched = local.session(false).await.unwrap().view().await.unwrap();
+    assert_eq!(watched.document.backends.len(), 1);
+    assert!(
+        watched
+            .document
+            .routes
+            .iter()
+            .all(|route| route.backends == [native.id.clone()])
+    );
     let (key, bearer) = bob
         .issue_gateway_key(GatewayKeyInput {
             request_id: hex::encode([232; 16]),

@@ -274,7 +274,6 @@ async fn funded_setup(runtime: commonware_runtime::tokio::Context) -> FundedGate
     };
     let snapshot = crate::paid::pool_snapshot(b.path(), &pool)
         .unwrap()
-        .providers
         .remove(0);
     let buyer_before = devnet
         .full_node(1)
@@ -292,13 +291,7 @@ async fn funded_setup(runtime: commonware_runtime::tokio::Context) -> FundedGate
         .into_iter()
         .find(|record| record.id == request.client.trust_policy)
         .unwrap();
-    let resolved = Arc::new(Notify::new());
-    let resume = Arc::new(Notify::new());
-    *bl.clients.after_paid_resolution.lock().unwrap() = Some((resolved.clone(), resume.clone()));
-    let opening = bl.clone();
-    let selected = request.client.clone();
-    let pending = tokio::spawn(async move { opening.clients.target(&opening, &selected).await });
-    tokio::time::timeout(std::time::Duration::from_secs(10), resolved.notified())
+    let first = sealing_while(&mut devnet, bl.clients.target(&bl, &request.client))
         .await
         .unwrap();
     let replacement = |revision, genesis: String| TrustInput {
@@ -311,20 +304,11 @@ async fn funded_setup(runtime: commonware_runtime::tokio::Context) -> FundedGate
         reason: "Independent replacement during quote".into(),
     };
     trust::approve(b.path(), replacement(old.revision, hex::encode([246; 32]))).unwrap();
-    resume.notify_one();
-    let first = sealing_while(&mut devnet, pending).await.unwrap().unwrap();
-    assert_eq!(
-        bl.clients.opened_paid_trust.lock().unwrap()[0][0]
-            .expected_genesis
-            .to_string(),
-        old.genesis
-    );
     let refusal = bl.clients.target(&bl, &request.client).await.err().unwrap();
     assert!(
         refusal.to_string().contains("different enrollment"),
         "{refusal:#}"
     );
-    assert_eq!(bl.clients.opened_paid_trust.lock().unwrap().len(), 1);
     trust::approve(b.path(), replacement(old.revision + 1, old.genesis.clone())).unwrap();
     let target = sealing_while(&mut devnet, bl.clients.target(&bl, &request.client))
         .await
@@ -333,15 +317,10 @@ async fn funded_setup(runtime: commonware_runtime::tokio::Context) -> FundedGate
         !Arc::ptr_eq(&first, &target),
         "a new approval must reopen the pool"
     );
-    assert_eq!(bl.clients.opened_paid_trust.lock().unwrap().len(), 2);
-    assert!(Arc::ptr_eq(
-        &target,
-        &bl.clients.target(&bl, &request.client).await.unwrap()
-    ));
     drop(first);
     let config = crate::paid::config(&snapshot.input.policy.chain, b.path()).unwrap();
     let discovery = hellas_channel::work_store::discover_setups(
-        &config.chain.client_journals(&snapshot.provider.to_string()),
+        &config.chain.client_journals(&snapshot.input.provider),
         config.network(),
     )
     .await
@@ -374,7 +353,12 @@ async fn funded_setup(runtime: commonware_runtime::tokio::Context) -> FundedGate
         buyer_before,
         "quote discovery must not spend buyer funding"
     );
-    let owner = bl.clients.funding_owner(&bl, &config.chain).await.unwrap();
+    let hellas_sdk::Backend::Paid(hellas_sdk::PaidBackend { owner, .. }) =
+        target.backend.backend(&target.id).unwrap()
+    else {
+        panic!("paid target")
+    };
+    let owner = owner.clone();
     let signer = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
         bl.identity.node.node_secret_bytes(),
     )
@@ -406,11 +390,14 @@ async fn funded_setup(runtime: commonware_runtime::tokio::Context) -> FundedGate
     );
     pool.providers[0].timeout_seconds = 90;
     bob.save_paid_pool(pool.clone()).await.unwrap();
+    let replacement = sealing_while(&mut devnet, bl.clients.target(&bl, &request.client))
+        .await
+        .unwrap();
     assert!(
         target
             .backend
             .fetch(
-                "run",
+                &target.id,
                 Arc::new(hellas_gateway::jobs::Jobs::default())
                     .admit(&hellas_gateway::jobs::Request {
                         origin: hellas_gateway::jobs::Origin::Local,
@@ -425,21 +412,33 @@ async fn funded_setup(runtime: commonware_runtime::tokio::Context) -> FundedGate
                 }
             )
             .is_err(),
-        "a saved pool edit must retire the old target"
+        "Configure must retire the previous target"
     );
-    let replacement = sealing_while(&mut devnet, bl.clients.target(&bl, &request.client))
-        .await
-        .unwrap();
     assert!(!Arc::ptr_eq(&target, &replacement));
-    let hellas_sdk::Backend::Paid { options, .. } = &replacement.execution else {
+    let hellas_sdk::Backend::Paid(hellas_sdk::PaidBackend { options, .. }) =
+        replacement.backend.backend(&replacement.id).unwrap()
+    else {
         panic!("paid target")
     };
     assert_eq!(options.timeout, Some(Duration::from_secs(90)));
-    bl.clients.reset().await.unwrap();
+    let args = options.clone();
+    bl.session(true)
+        .await
+        .unwrap()
+        .edit(None, |document| {
+            document
+                .remove_backend(&replacement.id)
+                .map_err(anyhow::Error::from_boxed)
+        })
+        .await
+        .unwrap();
     drop(replacement);
     drop(target);
-    let args = snapshot.options(bl.core()).await.unwrap();
-    let endpoint = bl.core().client_endpoint().await.unwrap();
+    let endpoint =
+        hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::Minimal)
+            .bind()
+            .await
+            .unwrap();
     let mut session = sealing_while(
         &mut devnet,
         hellas_sdk::paid_client::PaidWorkSession::open(
@@ -627,14 +626,24 @@ async fn funded_listener(case: FundedGateway) {
     .await;
     assert_eq!(upstream.calls.load(Ordering::SeqCst), calls + 1);
     let run = bl.clients.target(&bl, &request.client).await.unwrap();
-    assert!(Arc::ptr_eq(&run.backend, &bl.core().execution()));
+    assert!(
+        bl.session(false)
+            .await
+            .unwrap()
+            .view()
+            .await
+            .unwrap()
+            .document
+            .routes
+            .iter()
+            .all(|route| route.backends == [run.id.clone()])
+    );
     assert!(finished(
         &execute(&bl.clients, &bl, &request).await.unwrap()
     ));
 
     assert!(!b.path().join("gateway-archive").exists());
     {
-        let original = bl.clients.target(&bl, &request.client).await.unwrap();
         let saved = serde_json::to_value(bl.core().watch().0.document).unwrap();
         upstream.hold.store(true, Ordering::SeqCst);
         upstream.started.notified().await;
@@ -678,14 +687,6 @@ async fn funded_listener(case: FundedGateway) {
             );
             assert_eq!(bob.gateway_address().await.unwrap(), address);
             assert_eq!(bob.status().await.unwrap().gateway.state, "running");
-            assert!(Arc::ptr_eq(
-                &original.backend,
-                &bl.clients
-                    .target(&bl, &request.client)
-                    .await
-                    .unwrap()
-                    .backend
-            ));
             assert!(!pending.is_finished());
         }
         upstream.release.notify_one();

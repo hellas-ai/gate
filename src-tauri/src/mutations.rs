@@ -83,17 +83,12 @@ impl Session {
                 .await
         }
     }
-    pub(crate) async fn provider_state(
-        &self,
-        local: &crate::control::LocalNode,
-        enabled: bool,
-    ) -> anyhow::Result<()> {
-        let mut document = self.view().await?.document;
-        if document.listeners.contains_key("work") == enabled {
-            return Ok(());
-        }
-        crate::provider_setup::enabled(local, &mut document, enabled)?;
-        self.configure(document).await?;
+    pub(crate) async fn provider_state(&self, enabled: bool) -> anyhow::Result<()> {
+        self.edit(None, |document| {
+            crate::provider_setup::enabled(document, enabled);
+            Ok(())
+        })
+        .await?;
         Ok(())
     }
 }

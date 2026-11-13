@@ -5,11 +5,12 @@ use hellas_auth::{Digest, authority::*};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub(crate) fn validate(local: &LocalNode, config: &GatewayConfig) -> anyhow::Result<()> {
-    validate_presentation(
-        !config.http_routes.is_empty(),
-        local.clients.presentation(local, &config.client)?,
-    )?;
+pub(crate) async fn validate(
+    local: &LocalNode,
+    config: &GatewayConfig,
+) -> anyhow::Result<crate::clients::ConfiguredTarget> {
+    let selected = local.clients.configuration(local, &config.client).await?;
+    validate_presentation(!config.http_routes.is_empty(), selected.presentation)?;
     let mut keys = std::collections::BTreeSet::new();
     for route in &config.http_routes {
         if !keys.insert((&route.path, &route.method)) {
@@ -20,7 +21,7 @@ pub(crate) fn validate(local: &LocalNode, config: &GatewayConfig) -> anyhow::Res
         }
         http_route(route).validate()?;
     }
-    Ok(())
+    Ok(selected)
 }
 fn http_route(route: &HttpRouteInput) -> hellas_gateway::HttpRoute {
     hellas_gateway::HttpRoute {
@@ -383,59 +384,71 @@ pub async fn configure(
     config: Option<GatewayConfig>,
 ) -> anyhow::Result<()> {
     use hellas_sdk::daemon_config::Listener;
-    let mut document = session.view().await?.document;
-    if let Some(config) = config {
-        validate(local, &config)?;
-        let (backend, service, method, presentation) =
-            local.clients.configuration(local, &config.client).await?;
-        document.backends.insert("gateway".into(), backend);
-        document
-            .routes
-            .retain(|route| !route.backends.iter().any(|id| id == "gateway"));
-        if presentation == FetchPresentation::Responses {
-            document.routes.push(hellas_gateway::Route {
-                backends: vec!["gateway".into()],
-                presentation: hellas_gateway::Presentation::Responses {
+    let selected = if let Some(config) = &config {
+        Some(validate(local, config).await?)
+    } else {
+        None
+    };
+    session
+        .edit(None, |document| {
+            if let Some(config) = config {
+                let crate::clients::ConfiguredTarget {
+                    id,
+                    backend,
                     service,
                     method,
-                    models: vec![],
-                    overrides: Default::default(),
-                },
-            });
-        } else {
-            for route in config.http_routes {
-                let target = hellas_gateway::HttpTarget {
-                    service: service.clone(),
-                    method: method.clone(),
-                    route: http_route(&route),
-                };
-                document.routes.push(hellas_gateway::Route {
-                    backends: vec!["gateway".into()],
-                    presentation: hellas_gateway::Presentation::Http {
-                        targets: [("gateway".into(), target)].into(),
-                    },
-                });
+                    presentation,
+                } = selected.context("missing target")?;
+                document.backends.insert(id.clone(), backend);
+                document.routes.clear();
+                if presentation == FetchPresentation::Responses {
+                    document.routes.push(hellas_gateway::Route {
+                        backends: vec![id.clone()],
+                        presentation: hellas_gateway::Presentation::Responses {
+                            service,
+                            method,
+                            models: vec![],
+                            overrides: Default::default(),
+                        },
+                    });
+                } else {
+                    for route in config.http_routes {
+                        let target = hellas_gateway::HttpTarget {
+                            service: service.clone(),
+                            method: method.clone(),
+                            route: http_route(&route),
+                        };
+                        document.routes.push(hellas_gateway::Route {
+                            backends: vec![id.clone()],
+                            presentation: hellas_gateway::Presentation::Http {
+                                targets: [(id.clone(), target)].into(),
+                            },
+                        });
+                    }
+                }
+                if enabled {
+                    document.listeners.insert(
+                        "gateway".into(),
+                        Listener::Http {
+                            bind: std::net::SocketAddr::from((
+                                [127, 0, 0, 1],
+                                config.port.unwrap_or(0),
+                            )),
+                            zdr: config.zdr,
+                        },
+                    );
+                }
+            } else if enabled {
+                ensure!(
+                    document.listeners.contains_key("gateway"),
+                    "configure the gateway listener before starting"
+                );
             }
-        }
-        if enabled {
-            document.listeners.insert(
-                "gateway".into(),
-                Listener::Http {
-                    bind: std::net::SocketAddr::from(([127, 0, 0, 1], config.port.unwrap_or(0))),
-                    zdr: config.zdr,
-                },
-            );
-        }
-    } else if enabled {
-        ensure!(
-            document.listeners.contains_key("gateway"),
-            "configure the gateway listener before starting"
-        );
-    }
-    if !enabled {
-        document.listeners.remove("gateway");
-    }
-    document.validate().map_err(anyhow::Error::msg)?;
-    local.clients.configure_gateway(session, document).await?;
+            if !enabled {
+                document.listeners.remove("gateway");
+            }
+            Ok(())
+        })
+        .await?;
     Ok(())
 }

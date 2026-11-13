@@ -213,20 +213,35 @@ impl Session {
     }
     pub async fn configure(
         &self,
+        expected: u64,
         document: hellas_sdk::daemon_config::Document,
     ) -> anyhow::Result<u64> {
         let response = self
             .track(
-                format!("Configure daemon at revision {}", document.revision.0),
+                format!("Configure daemon at revision {expected}"),
                 true,
                 self.client.configure(ConfigureRequest {
                     authorization: self.authorization.clone(),
-                    expected_revision: document.revision.0,
+                    expected_revision: expected,
                     document: serde_json::to_vec(&document)?,
                 }),
             )
             .await?;
         Ok(response.revision)
+    }
+    pub async fn edit(
+        &self,
+        expected: Option<u64>,
+        edit: impl FnOnce(&mut hellas_sdk::daemon_config::Document) -> anyhow::Result<()>,
+    ) -> anyhow::Result<hellas_sdk::daemon::View> {
+        let mut view = self.view().await?;
+        if let Some(expected) = expected {
+            check_revision(&view, expected)?;
+        }
+        edit(&mut view.document)?;
+        crate::provider_setup::sync_listener(&mut view.document);
+        self.configure(view.revision.0, view.document).await?;
+        self.view().await
     }
     pub async fn inspect(&self, query: InspectionQuery) -> anyhow::Result<AuthorityInspection> {
         use hellas_rpc::protocol::value::{canonical_dag_cbor, decode_dag_cbor};
@@ -283,6 +298,11 @@ impl Session {
             })
             .await?)
     }
+}
+
+pub(crate) fn check_revision(view: &hellas_sdk::daemon::View, expected: u64) -> anyhow::Result<()> {
+    anyhow::ensure!(view.revision.0 == expected, "provider revision conflict");
+    Ok(())
 }
 
 #[cfg(test)]

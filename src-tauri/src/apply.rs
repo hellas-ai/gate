@@ -5,9 +5,8 @@ use crate::{
     dto::*,
     gateway, provider_setup,
 };
-use anyhow::ensure;
-use hellas_sdk::daemon_config::{Backend, BackendKind, Credential, Document, Upstream};
-use std::collections::BTreeMap;
+use anyhow::{Context, ensure};
+use hellas_sdk::daemon_config::{BackendKind, Document};
 
 pub struct Plan {
     revision: u64,
@@ -103,7 +102,6 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
         contacts::validate(contact)?;
     }
     for share in &document.shares {
-        let _: hellas_auth::authority::GrantId = share.request_id.parse()?;
         ensure!(
             !document.revoke_shares.contains(&share.request_id),
             "one share cannot be both active and revoked"
@@ -117,7 +115,6 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
             .expires(hellas_auth::authority::UnixMillis::now()?)?;
     }
     for key in &document.gateway_keys {
-        let _: hellas_auth::authority::GrantId = key.request_id.parse()?;
         ensure!(
             !document.revoke_gateway_keys.contains(&key.request_id),
             "one gateway key cannot be both active and revoked"
@@ -132,17 +129,9 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
             "quota and concurrency must be positive"
         );
     }
-    for id in document
-        .revoke_shares
-        .iter()
-        .chain(document.revoke_gateway_keys.iter())
-    {
-        let _: hellas_auth::authority::GrantId = id.parse()?;
-    }
-
     let session = local.session(false).await?;
     let snapshot = session.view().await?;
-    let revision = snapshot.document.revision.0;
+    let revision = snapshot.revision.0;
     ensure!(
         document.expected_provider_revision == revision,
         "provider revision conflict"
@@ -159,65 +148,50 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
                 && r.method == upstream.method
                 && matches!(r.resource, ResourceKind::OpenAi { .. })
         });
-        let source = if responses {
+        if responses {
             ensure!(
                 upstream.keys.len() == 1,
                 "Responses requires one write-only backend key"
             );
-            let key = &upstream.keys[0];
-            Upstream::OpenaiResponses {
-                secret: key.secret.clone(),
-            }
-        } else {
-            let mut credentials = BTreeMap::new();
-            for key in upstream.keys {
-                ensure!(
-                    !credentials.contains_key(&key.name),
-                    "duplicate backend key"
-                );
-                credentials.insert(
-                    key.name,
-                    Credential {
-                        trust_roots: hellas_rpc::http_fetch::HttpTrustRoots::WebPki,
-                        allowed_origins: key.origins,
-                        allowed_paths: key.paths,
-                        allowed_methods: key.methods,
-                        header_name: key.header,
-                        secret: key.secret.map(|s| format!("{}{s}", key.prefix)),
-                    },
-                );
-            }
-            Upstream::Http {
-                allowed_hosts: upstream.hosts,
-                allow_private_addresses: upstream.allow_private_addresses,
-                credentials,
-            }
-        };
-        let max_in_flight = snapshot
-            .document
-            .backends
-            .get(&id)
-            .map_or(8.try_into()?, |b| b.max_in_flight);
-        candidate.backends.insert(
-            id,
-            Backend {
-                max_in_flight,
-                kind: BackendKind::Fetch {
+            provider_setup::change(
+                &mut candidate,
+                ProviderChange::OpenAi {
                     service: upstream.service,
                     method: upstream.method,
-                    upstream: source,
+                    secret: upstream.keys[0].secret.clone(),
                 },
-            },
-        );
+            )?;
+        } else {
+            provider_setup::change(
+                &mut candidate,
+                ProviderChange::Endpoint {
+                    service: upstream.service.clone(),
+                    method: upstream.method.clone(),
+                    hosts: upstream.hosts,
+                    allow_private_addresses: upstream.allow_private_addresses,
+                },
+            )?;
+            let mut keys = std::collections::BTreeSet::new();
+            for key in upstream.keys {
+                ensure!(keys.insert(key.name.clone()), "duplicate backend key");
+                provider_setup::put_key(&mut candidate, &upstream.service, &upstream.method, key)?;
+            }
+        }
+        if let Some(old) = snapshot.document.backends.get(&id) {
+            candidate
+                .backends
+                .get_mut(&id)
+                .context("backend was not created")?
+                .max_in_flight = old.max_in_flight;
+        }
     }
-    provider_setup::resources(&mut candidate, document.resources, &snapshot.catalogue)?;
+    provider_setup::resources(&mut candidate, document.resources)?;
     if let Some(enabled) = document.provider_enabled {
-        provider_setup::enabled(local, &mut candidate, enabled)?;
+        provider_setup::enabled(&mut candidate, enabled);
     }
     provider_setup::sync_listener(&mut candidate);
-    candidate.validate().map_err(anyhow::Error::msg)?;
     let mut steps = Vec::new();
-    if serde_json::to_vec(&candidate)? != serde_json::to_vec(&snapshot.document)? {
+    if candidate != snapshot.document {
         steps.push(Step::Configure(candidate));
     }
     steps.extend(document.contacts.into_iter().map(Step::Contact));
@@ -254,7 +228,7 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
             .map(Step::RevokeKey),
     );
     if let Some(config) = document.gateway {
-        gateway::validate(local, &config)?;
+        gateway::validate(local, &config).await?;
         steps.push(Step::GatewayConfig(
             config,
             document
@@ -283,7 +257,7 @@ pub async fn execute_session(
     session: &Session,
 ) -> anyhow::Result<ApplyReport> {
     ensure!(
-        session.view().await?.document.revision.0 == plan.revision,
+        session.view().await?.revision.0 == plan.revision,
         "provider revision conflict; preview again"
     );
     session.take_progress()?;
@@ -296,7 +270,7 @@ pub async fn execute_session(
         let result: anyhow::Result<()> = async {
             match step {
                 Step::Configure(document) => {
-                    session.configure(document).await?;
+                    session.configure(plan.revision, document).await?;
                 }
                 Step::Contact(input) => {
                     session.track_local("Publish verified contact/device".into(), || {
@@ -389,7 +363,7 @@ pub async fn execute_session(
         unapplied,
         uncertain,
         error,
-        provider_revision: session.view().await?.document.revision.0,
+        provider_revision: session.view().await?.revision.0,
         authority_revision,
     })
 }

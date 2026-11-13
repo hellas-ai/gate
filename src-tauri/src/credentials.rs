@@ -436,7 +436,6 @@ mod tests {
                 .view()
                 .await
                 .unwrap()
-                .document
                 .revision
                 .0,
             1

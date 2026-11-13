@@ -176,7 +176,7 @@ impl AppState {
             detail: String::new(),
         };
         let Some(local) = self.local.lock().await.clone() else {
-            return Ok(AppStatus { version: env!("CARGO_PKG_VERSION").into(), identity: IdentityStatus { initialized: false, journal_error: self.journal_failure.load(Ordering::SeqCst), recovery_available:self.directory.join("installation.json").try_exists()? && !self.journal_failure.load(Ordering::SeqCst), principal: String::new(), fingerprint: String::new(), node_key: String::new(), transport_id: String::new(), provider_address: String::new(), authority: String::new(), generation: 0, attestation: "unavailable".into(), detail: self.failure.lock().await.clone().unwrap_or_else(||"Create your identity with a system passkey on macOS. Software identities are available explicitly for development.".into()), contact_card: String::new() }, provider: stopped(), gateway: stopped(), endpoint: String::new(), socket_path: self.directory.join("gate.sock").display().to_string(), listen_port: crate::settings::load(&self.directory)?.listen_port, bound_addresses: vec![] });
+            return Ok(AppStatus { version: env!("CARGO_PKG_VERSION").into(), identity: IdentityStatus { initialized: false, journal_error: self.journal_failure.load(Ordering::SeqCst), recovery_available:self.directory.join("installation.json").try_exists()? && !self.journal_failure.load(Ordering::SeqCst), principal: String::new(), fingerprint: String::new(), node_key: String::new(), transport_id: String::new(), provider_address: String::new(), authority: String::new(), generation: 0, attestation: "unavailable".into(), detail: self.failure.lock().await.clone().unwrap_or_else(||"Create your identity with a system passkey on macOS. Software identities are available explicitly for development.".into()), contact_card: String::new() }, provider: stopped(), gateway: stopped(), endpoint: String::new(), socket_path: self.directory.join("gate.sock").display().to_string(), listen_port: None, bound_addresses: vec![] });
         };
         let status = local
             .client(false)
@@ -249,12 +249,18 @@ impl AppState {
                 .map(|address| format!("http://{address}"))
                 .unwrap_or_default(),
             socket_path: local.socket.display().to_string(),
-            listen_port: crate::settings::load(&self.directory)?.listen_port,
-            bound_addresses: local
-                .core()
-                .iroh_endpoints()
-                .iter()
-                .flat_map(|endpoint| endpoint.bound_sockets())
+            listen_port: view
+                .document
+                .listeners
+                .get("work")
+                .and_then(|listener| match listener {
+                    hellas_sdk::daemon_config::Listener::Iroh { port, .. } => Some(*port),
+                    _ => None,
+                }),
+            bound_addresses: view
+                .iroh_addresses
+                .values()
+                .flat_map(|address| address.ip_addrs())
                 .map(|address| address.to_string())
                 .collect(),
         })
@@ -271,7 +277,6 @@ impl AppState {
             control.shutdown().await?;
         }
         if let Some(local) = self.local.lock().await.take() {
-            let drained = local.clients.shutdown().await;
             let core = local
                 .core()
                 .shutdown()
@@ -280,7 +285,6 @@ impl AppState {
             local.coordinator.close().await;
             core?;
             local.content.close().await;
-            drained?;
         }
         self.plans.lock().await.clear();
         let _drained = self.runs.acquire_many(64).await?;
@@ -316,7 +320,7 @@ impl AppState {
         let _lock = self.operation.lock().await;
         let local = self.local().await?;
         let session = local.session(true).await?;
-        crate::provider_setup::configure(&local, &session, expected, change).await
+        crate::provider_setup::configure(&session, expected, change).await
     }
     pub async fn provider_view(&self) -> anyhow::Result<ProviderView> {
         crate::provider_setup::view(self.local().await?.as_ref()).await
@@ -324,11 +328,7 @@ impl AppState {
     pub async fn set_provider(&self, enabled: bool) -> anyhow::Result<AppStatus> {
         let _lock = self.operation.lock().await;
         let local = self.local().await?;
-        local
-            .session(true)
-            .await?
-            .provider_state(&local, enabled)
-            .await?;
+        local.session(true).await?.provider_state(enabled).await?;
         self.status().await
     }
     pub async fn configure_resource(
@@ -339,7 +339,7 @@ impl AppState {
         let _lock = self.operation.lock().await;
         let local = self.local().await?;
         let session = local.session(true).await?;
-        crate::provider_setup::configure_resource(&local, &session, expected, input).await
+        crate::provider_setup::configure_resource(&session, expected, input).await
     }
 }
 
@@ -520,12 +520,10 @@ impl AppState {
         let _lock = self.operation.lock().await;
         let local = self.local().await?;
         let session = local.session(true).await?;
-        anyhow::ensure!(
-            session.view().await?.document.revision.0 == expected,
-            "provider revision conflict"
-        );
+        crate::control::check_revision(&session.view().await?, expected)?;
         crate::paid::configure_serve(&local, &session, input).await?;
-        crate::provider_setup::view(&local).await
+        let view = session.view().await?;
+        crate::provider_setup::view_document(&view.document, view.revision.0)
     }
 }
 
@@ -536,20 +534,22 @@ impl AppState {
             !self.stopping.load(Ordering::SeqCst),
             "Gate is shutting down"
         );
-        let local = self.local.lock().await.clone();
-        let current = if let Some(local) = local {
-            local.session(false).await?.status().await?;
-            local
-                .core()
-                .iroh_endpoints()
-                .iter()
-                .flat_map(|endpoint| endpoint.bound_sockets())
-                .map(|address| address.to_string())
-                .collect()
-        } else {
-            vec![]
-        };
-        crate::settings::save(&self.directory, port, &current)?;
+        let local = self.local().await?;
+        local
+            .session(true)
+            .await?
+            .edit(None, |document| {
+                let hellas_sdk::daemon_config::Listener::Iroh { port: current, .. } = document
+                    .listeners
+                    .get_mut("work")
+                    .context("start Serve before editing its port")?
+                else {
+                    anyhow::bail!("provider listener is not iroh")
+                };
+                *current = port.unwrap_or(0);
+                Ok(())
+            })
+            .await?;
         self.status().await
     }
     pub async fn retry_open(&self) -> anyhow::Result<AppStatus> {

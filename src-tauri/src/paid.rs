@@ -107,20 +107,12 @@ pub fn pool_path(directory: &Path, id: &str) -> anyhow::Result<std::path::PathBu
 }
 pub(crate) struct ProviderSnapshot {
     pub input: PaidProviderInput,
-    pub provider: hellas_sdk::client::ProviderAddress,
     pub profile: hellas_genesis::ChainProfile,
-    home: hellas_private::StoreLocation,
-    provider_addrs: Vec<std::net::SocketAddr>,
-    pub trust: trust::Snapshot,
-}
-pub(crate) struct PoolSnapshot {
-    pub providers: Vec<ProviderSnapshot>,
-    pub approvals: Vec<hellas_sdk::trust_policy::ApprovalRecord>,
 }
 pub(crate) fn pool_snapshot(
     directory: &Path,
     pool: &PaidPoolInput,
-) -> anyhow::Result<PoolSnapshot> {
+) -> anyhow::Result<Vec<ProviderSnapshot>> {
     pool_path(directory, &pool.id)?;
     ensure!(
         !pool.providers.is_empty() && pool.providers.len() <= 16,
@@ -142,8 +134,8 @@ pub(crate) fn pool_snapshot(
     ensure!(nodes.len() == addresses.len(), "duplicate paid provider");
     validate_assignments(directory, &pool.id, &nodes)?;
     let mut providers = Vec::new();
-    let mut snapshots = std::collections::BTreeMap::<String, trust::Snapshot>::new();
-    let mut approvals = Vec::new();
+    let mut snapshots =
+        std::collections::BTreeMap::<String, hellas_sdk::client::ProviderTrustAnchor>::new();
     for (input, provider) in pool.providers.iter().zip(addresses) {
         FetchRoutePolicy::sealed_route(&input.policy.service, &input.policy.method)?;
         let profile = profile(&input.policy.chain)?;
@@ -151,10 +143,10 @@ pub(crate) fn pool_snapshot(
         let approved = match snapshots.entry(input.trust_policy.clone()) {
             std::collections::btree_map::Entry::Occupied(entry) => entry.get().clone(),
             std::collections::btree_map::Entry::Vacant(entry) => entry
-                .insert(trust::snapshot(directory, &input.trust_policy)?)
+                .insert(trust::resolve(directory, &input.trust_policy)?)
                 .clone(),
         };
-        provider.trust(approved.anchor.required_assurance, Some(&approved.anchor))?;
+        provider.trust(approved.required_assurance, Some(&approved))?;
         hellas_sdk::paid_client::validate_terms(
             input.policy.fixed_price,
             input.acceptance_blocks,
@@ -162,54 +154,17 @@ pub(crate) fn pool_snapshot(
             input.payment_blocks,
             Some(Duration::from_secs(input.timeout_seconds)),
         )?;
-        let provider_addrs = input
+        let _: Vec<std::net::SocketAddr> = input
             .addresses
             .iter()
             .map(|address| address.parse())
             .collect::<Result<_, _>>()?;
-        approvals.push(approved.record.clone());
         providers.push(ProviderSnapshot {
             input: input.clone(),
-            provider,
             profile,
-            home: crate::control::home(directory),
-            provider_addrs,
-            trust: approved,
         });
     }
-    Ok(PoolSnapshot {
-        providers,
-        approvals,
-    })
-}
-
-impl ProviderSnapshot {
-    pub async fn options(
-        &self,
-        core: &hellas_sdk::daemon::Core,
-    ) -> anyhow::Result<hellas_sdk::paid_client::PaidWorkOptions> {
-        let input = &self.input;
-        let config = WorkConfig::for_chain(self.profile.clone(), &self.home)?;
-        let (_, content) = core
-            .client_resources(&config.chain)
-            .await
-            .map_err(anyhow::Error::from_boxed)?;
-        Ok(hellas_sdk::paid_client::PaidWorkOptions {
-            config,
-            content,
-            provider: self.provider,
-            provider_addrs: self.provider_addrs.clone(),
-            assurance: self.trust.anchor.required_assurance,
-            apple_trust: (self.trust.anchor.required_assurance
-                == hellas_rpc::Assurance::AppleAppAttest)
-                .then(|| self.trust.anchor.clone()),
-            expected_price: input.policy.fixed_price,
-            acceptance_blocks: input.acceptance_blocks,
-            terminal_blocks: input.terminal_blocks,
-            payment_blocks: input.payment_blocks,
-            timeout: Some(Duration::from_secs(input.timeout_seconds)),
-        })
-    }
+    Ok(providers)
 }
 fn validate_assignments(
     directory: &Path,
@@ -266,22 +221,22 @@ pub async fn configure_serve(
     use hellas_authority::model::grant::admin::WorkControlCommand;
     use hellas_sdk::daemon_config::Listener;
     validate_serve(&input)?;
-    let mut document = session.view().await?.document;
-    let Listener::Iroh { chain, .. } = document
-        .listeners
-        .get_mut("work")
-        .context("start the provider before approving paid terms")?
-    else {
-        anyhow::bail!("provider listener is not iroh")
-    };
-    let selected = match &input.policy.chain {
-        ChainInput::Devnet => None,
-        ChainInput::Custom(file) => Some(file.clone()),
-    };
-    if serde_json::to_vec(chain)? != serde_json::to_vec(&selected)? {
-        *chain = selected;
-        session.configure(document).await?;
-    }
+    session
+        .edit(None, |document| {
+            let Listener::Iroh { chain, .. } = document
+                .listeners
+                .get_mut("work")
+                .context("start the provider before approving paid terms")?
+            else {
+                anyhow::bail!("provider listener is not iroh")
+            };
+            *chain = match &input.policy.chain {
+                ChainInput::Devnet => None,
+                ChainInput::Custom(file) => Some(file.clone()),
+            };
+            Ok(())
+        })
+        .await?;
     let policy = standing_policy(&input.policy)?;
     let current = local.coordinator.paid_policy().await?;
     if current.as_ref().is_none_or(|p| p.policy != policy) {
