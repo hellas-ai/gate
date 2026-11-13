@@ -3485,7 +3485,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "hellas-adaptors"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "base64 0.23.1",
  "futures-core",
@@ -3500,7 +3500,7 @@ dependencies = [
 [[package]]
 name = "hellas-admission"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "serde",
 ]
@@ -3508,7 +3508,7 @@ dependencies = [
 [[package]]
 name = "hellas-attestation"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "base64 0.23.1",
  "ciborium",
@@ -3527,7 +3527,7 @@ dependencies = [
 [[package]]
 name = "hellas-auth"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
@@ -3546,7 +3546,7 @@ dependencies = [
 [[package]]
 name = "hellas-authority"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3585,7 +3585,7 @@ dependencies = [
 [[package]]
 name = "hellas-chain"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "axum",
  "base64ct",
@@ -3636,7 +3636,7 @@ dependencies = [
 [[package]]
 name = "hellas-channel"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3669,7 +3669,7 @@ dependencies = [
 [[package]]
 name = "hellas-client"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3709,7 +3709,7 @@ dependencies = [
 [[package]]
 name = "hellas-executor"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "async-trait",
  "futures-core",
@@ -3787,7 +3787,7 @@ dependencies = [
 [[package]]
 name = "hellas-gateway"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "async-stream",
  "axum",
@@ -3825,7 +3825,7 @@ dependencies = [
 [[package]]
 name = "hellas-genesis"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "hex",
  "serde",
@@ -3838,7 +3838,7 @@ dependencies = [
 [[package]]
 name = "hellas-kernel"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "hellas-webauthn",
  "hellas-xet",
@@ -3849,7 +3849,7 @@ dependencies = [
 [[package]]
 name = "hellas-presentation"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "anyhow",
  "catena-models",
@@ -3867,7 +3867,7 @@ dependencies = [
 [[package]]
 name = "hellas-private"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "apple-native-keyring-store",
  "base64 0.23.1",
@@ -3884,7 +3884,7 @@ dependencies = [
 [[package]]
 name = "hellas-providers"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "async-stream",
  "base64 0.23.1",
@@ -3910,7 +3910,7 @@ dependencies = [
 [[package]]
 name = "hellas-rpc"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "base64 0.23.1",
  "base64ct",
@@ -3947,7 +3947,7 @@ dependencies = [
 [[package]]
 name = "hellas-sdk"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "arc-swap",
  "async-stream",
@@ -3994,7 +3994,7 @@ dependencies = [
 [[package]]
 name = "hellas-share"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "hellas-adaptors",
  "hellas-auth",
@@ -4010,7 +4010,7 @@ dependencies = [
 [[package]]
 name = "hellas-store"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4042,7 +4042,7 @@ dependencies = [
 [[package]]
 name = "hellas-webauthn"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "p256",
  "sha2 0.11.1",
@@ -4051,7 +4051,7 @@ dependencies = [
 [[package]]
 name = "hellas-wire"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "async-stream",
  "blake3",
@@ -4087,7 +4087,7 @@ dependencies = [
 [[package]]
 name = "hellas-xet"
 version = "0.1.0"
-source = "git+https://github.com/hellas-ai/hellas?rev=4505726882737b53f62c3033dd1198596853e20b#4505726882737b53f62c3033dd1198596853e20b"
+source = "git+https://github.com/hellas-ai/hellas?rev=a2fb38b144e10105cf75472810c2b91913374333#a2fb38b144e10105cf75472810c2b91913374333"
 dependencies = [
  "blake3",
  "gearhash",
