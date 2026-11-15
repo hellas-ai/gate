@@ -705,6 +705,7 @@ mod tests {
                         method: "fetch".into(),
                         hosts: vec!["example.com".into()],
                         allow_private_addresses: false,
+                        keys: vec![],
                     },
                 )
                 .await
@@ -724,7 +725,7 @@ mod tests {
                             origin: "https://example.com".into(),
                             paths: vec!["/".into()],
                             methods: vec!["GET".into()],
-                            credential: None,
+                            account_backed: false,
                             max_response_bytes: 4096,
                         },
                     },

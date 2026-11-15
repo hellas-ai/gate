@@ -7,7 +7,6 @@ use hellas_sdk::daemon_config::{
     Backend, BackendKind, Credential, Document, Listener, Resource,
     ResourceKind as DaemonResourceKind, Upstream,
 };
-use std::collections::BTreeMap;
 
 pub fn route_id(service: &str, method: &str) -> String {
     format!("{service}/{method}")
@@ -34,7 +33,19 @@ pub fn view_document(document: &Document, revision: u64) -> anyhow::Result<Provi
                     allowed_hosts,
                     credentials,
                     ..
-                } => (allowed_hosts.clone(), credentials.keys().cloned().collect()),
+                } => (
+                    allowed_hosts.clone(),
+                    credentials
+                        .iter()
+                        .map(|key| DesiredKey {
+                            origins: key.allowed_origins.clone(),
+                            paths: key.allowed_paths.clone(),
+                            methods: key.allowed_methods.clone(),
+                            header: key.header_name.clone(),
+                            secret: None,
+                        })
+                        .collect(),
+                ),
                 Upstream::OpenaiResponses { .. } => (vec!["api.openai.com".into()], vec![]),
             };
             Some(UpstreamView {
@@ -77,7 +88,7 @@ fn input(document: &Document, resource: &Resource) -> anyhow::Result<ResourceInp
             origin: https.origin.clone(),
             paths: https.paths.clone(),
             methods: https.methods.clone(),
-            credential: https.credential.clone(),
+            account_backed: https.account_backed,
             max_response_bytes: https.max_response_bytes,
             tls_roots: match &https.tls.roots {
                 hellas_rpc::http_fetch::HttpTrustRoots::WebPki => vec![],
@@ -113,18 +124,8 @@ pub fn change(document: &mut Document, change: ProviderChange) -> anyhow::Result
             method,
             hosts,
             allow_private_addresses,
+            keys,
         } => {
-            let credentials = match document
-                .backends
-                .get(&route_id(&service, &method))
-                .map(|b| &b.kind)
-            {
-                Some(BackendKind::Fetch {
-                    upstream: Upstream::Http { credentials, .. },
-                    ..
-                }) => credentials.clone(),
-                _ => BTreeMap::new(),
-            };
             put(
                 document,
                 service,
@@ -132,7 +133,17 @@ pub fn change(document: &mut Document, change: ProviderChange) -> anyhow::Result
                 Upstream::Http {
                     allowed_hosts: hosts,
                     allow_private_addresses,
-                    credentials,
+                    credentials: keys
+                        .into_iter()
+                        .map(|key| Credential {
+                            trust_roots: hellas_rpc::http_fetch::HttpTrustRoots::WebPki,
+                            allowed_origins: key.origins,
+                            allowed_paths: key.paths,
+                            allowed_methods: key.methods,
+                            header_name: key.header,
+                            secret: key.secret,
+                        })
+                        .collect(),
                 },
             )?;
         }
@@ -140,40 +151,6 @@ pub fn change(document: &mut Document, change: ProviderChange) -> anyhow::Result
             document
                 .remove_backend(&route_id(&service, &method))
                 .map_err(anyhow::Error::from_boxed)?;
-        }
-        ProviderChange::SetKey { key } => {
-            put_key(
-                document,
-                &key.service,
-                &key.method,
-                DesiredKey {
-                    name: key.key,
-                    origins: key.origins,
-                    paths: key.paths,
-                    methods: key.methods,
-                    header: key.header,
-                    prefix: key.prefix,
-                    secret: Some(key.secret),
-                },
-            )?;
-        }
-        ProviderChange::RemoveKey {
-            service,
-            method,
-            key,
-        } => {
-            let BackendKind::Fetch {
-                upstream: Upstream::Http { credentials, .. },
-                ..
-            } = &mut document
-                .backends
-                .get_mut(&route_id(&service, &method))
-                .context("select an HTTP backend")?
-                .kind
-            else {
-                anyhow::bail!("select an HTTP backend")
-            };
-            ensure!(credentials.remove(&key).is_some(), "unknown key");
         }
     }
     sync_listener(document);
@@ -200,36 +177,6 @@ fn put(
                 method,
                 upstream,
             },
-        },
-    );
-    Ok(())
-}
-pub fn put_key(
-    document: &mut Document,
-    service: &str,
-    method: &str,
-    key: DesiredKey,
-) -> anyhow::Result<()> {
-    let BackendKind::Fetch {
-        upstream: Upstream::Http { credentials, .. },
-        ..
-    } = &mut document
-        .backends
-        .get_mut(&route_id(service, method))
-        .context("select an HTTP backend")?
-        .kind
-    else {
-        anyhow::bail!("select an HTTP backend")
-    };
-    credentials.insert(
-        key.name,
-        Credential {
-            trust_roots: hellas_rpc::http_fetch::HttpTrustRoots::WebPki,
-            allowed_origins: key.origins,
-            allowed_paths: key.paths,
-            allowed_methods: key.methods,
-            header_name: key.header,
-            secret: key.secret.map(|secret| format!("{}{secret}", key.prefix)),
         },
     );
     Ok(())
@@ -274,7 +221,7 @@ pub fn resources(document: &mut Document, inputs: Vec<ResourceInput>) -> anyhow:
                 origin,
                 paths,
                 methods,
-                credential,
+                account_backed,
                 max_response_bytes,
                 tls_roots,
             } => DaemonResourceKind::Https {
@@ -282,7 +229,7 @@ pub fn resources(document: &mut Document, inputs: Vec<ResourceInput>) -> anyhow:
                     origin,
                     paths,
                     methods,
-                    credential,
+                    account_backed,
                     max_response_bytes,
                     tls: hellas_rpc::http_fetch::HttpTls {
                         roots: if tls_roots.is_empty() {

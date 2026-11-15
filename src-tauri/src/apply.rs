@@ -169,13 +169,9 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
                     method: upstream.method.clone(),
                     hosts: upstream.hosts,
                     allow_private_addresses: upstream.allow_private_addresses,
+                    keys: upstream.keys,
                 },
             )?;
-            let mut keys = std::collections::BTreeSet::new();
-            for key in upstream.keys {
-                ensure!(keys.insert(key.name.clone()), "duplicate backend key");
-                provider_setup::put_key(&mut candidate, &upstream.service, &upstream.method, key)?;
-            }
         }
         if let Some(old) = snapshot.document.backends.get(&id) {
             candidate

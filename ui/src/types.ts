@@ -11,7 +11,6 @@ export type { TrustInput } from "./generated/TrustInput.ts";
 export type { TrustRecord } from "./generated/TrustRecord.ts";
 export type { ResourceKind } from "./generated/ResourceKind.ts";
 export type { ResourceInput } from "./generated/ResourceInput.ts";
-export type { UpstreamKeyInput } from "./generated/UpstreamKeyInput.ts";
 export type { ProviderChange } from "./generated/ProviderChange.ts";
 export type { UpstreamView } from "./generated/UpstreamView.ts";
 export type { ProviderView } from "./generated/ProviderView.ts";

@@ -28,7 +28,6 @@ fn http_route(route: &HttpRouteInput) -> hellas_gateway::HttpRoute {
         path: route.path.clone(),
         method: route.method.clone(),
         url: route.url.clone(),
-        credential: route.credential.clone(),
         tls: hellas_rpc::http_fetch::HttpTls {
             roots: if route.tls_roots.is_empty() {
                 hellas_rpc::http_fetch::HttpTrustRoots::WebPki

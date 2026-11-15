@@ -540,6 +540,7 @@ async fn grant_https(
                 method: "get".into(),
                 hosts: vec!["127.0.0.1".into()],
                 allow_private_addresses: true,
+                keys: vec![],
             },
         )
         .await
@@ -556,7 +557,7 @@ async fn grant_https(
                     origin: upstream.url.clone(),
                     paths: vec!["/".into()],
                     methods: vec!["GET".into()],
-                    credential: None,
+                    account_backed: false,
                     max_response_bytes: 4096,
                     tls_roots: vec![upstream.root.clone()],
                 },
@@ -628,7 +629,6 @@ async fn grant_https(
                     },
                     spki_sha256: vec![],
                 },
-                credential: None,
                 max_response_bytes: 4096,
             })
             .unwrap(),
@@ -2153,7 +2153,6 @@ mod chain_acceptance;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn provider_editor_commits_one_document_and_never_echoes_keys() {
-    use hellas_sdk::daemon_config::{BackendKind, Upstream};
     let directory = tempfile::tempdir().unwrap();
     let secrets = tempfile::tempdir().unwrap();
     let vault = Vault::fixture(secrets.path());
@@ -2165,13 +2164,11 @@ async fn provider_editor_commits_one_document_and_never_echoes_keys() {
     desired.upstreams[0].hosts = vec!["example.com".into()];
     desired.upstreams[0].allow_private_addresses = false;
     desired.upstreams[0].keys.push(DesiredKey {
-        name: "api".into(),
         origins: vec!["https://example.com".into()],
         paths: vec!["/".into()],
         methods: vec!["GET".into()],
         header: "authorization".into(),
-        prefix: "Bearer ".into(),
-        secret: Some("private-backend-key".into()),
+        secret: Some("Bearer private-backend-key".into()),
     });
     desired.resources.push(ResourceInput {
         name: "page".into(),
@@ -2181,7 +2178,7 @@ async fn provider_editor_commits_one_document_and_never_echoes_keys() {
             origin: "https://example.com".into(),
             paths: vec!["/".into()],
             methods: vec!["GET".into()],
-            credential: Some("api".into()),
+            account_backed: true,
             max_response_bytes: 4096,
             tls_roots: vec![],
         },
@@ -2205,29 +2202,37 @@ async fn provider_editor_commits_one_document_and_never_echoes_keys() {
     assert_eq!(snapshot.document.backends.len(), 1);
     let stored = local.coordinator.configuration().await.unwrap().unwrap();
     assert_eq!(
-        stored.secrets.0["web/get"]["api"],
+        stored.secrets.0["web/get"]["0"],
         "Bearer private-backend-key"
     );
-    let mut invalid = snapshot.document;
-    let BackendKind::Fetch {
-        upstream:
-            Upstream::Http {
-                allowed_hosts,
-                credentials,
-                ..
-            },
-        ..
-    } = &mut invalid.backends.get_mut("web/get").unwrap().kind
-    else {
-        panic!("HTTP backend")
-    };
-    *allowed_hosts = vec!["invalid host".into()];
-    credentials.get_mut("api").unwrap().secret = Some("rejected-rotation".into());
+    let view = app.provider_view().await.unwrap();
     assert!(
-        session
-            .configure(snapshot.revision.0, invalid)
-            .await
-            .is_err()
+        !serde_json::to_string(&view)
+            .unwrap()
+            .contains("private-backend-key")
+    );
+    assert_eq!(view.upstreams[0].keys[0].origins, ["https://example.com"]);
+    let mut keys = desired.upstreams[0].keys.clone();
+    keys.push(keys[0].clone());
+    keys[1].secret = Some("rejected-rotation".into());
+    let error = app
+        .configure_provider(
+            snapshot.revision.0,
+            ProviderChange::Endpoint {
+                service: "web".into(),
+                method: "get".into(),
+                hosts: vec!["example.com".into()],
+                allow_private_addresses: false,
+                keys,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("overlapping HTTP credential scopes"),
+        "{error:#}"
     );
     assert_eq!(
         serde_json::to_value(session.view().await.unwrap().document).unwrap(),
@@ -2277,7 +2282,6 @@ async fn native_run_and_http_share_the_configured_grant_channel_and_quota() {
             path: "/proxy".into(),
             method: "GET".into(),
             url: format!("{}/", upstream.url),
-            credential: None,
             max_response_bytes: 4096,
             tls_roots: vec![upstream.root.clone()],
         }],

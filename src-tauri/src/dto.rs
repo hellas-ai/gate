@@ -164,7 +164,7 @@ pub enum ResourceKind {
         origin: String,
         paths: Vec<String>,
         methods: Vec<String>,
-        credential: Option<String>,
+        account_backed: bool,
         max_response_bytes: u32,
         tls_roots: Vec<String>,
     },
@@ -178,21 +178,6 @@ pub struct ResourceInput {
     pub service: String,
     pub method: String,
     pub resource: ResourceKind,
-}
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "desktop", derive(TS))]
-#[cfg_attr(feature = "desktop", ts(export))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct UpstreamKeyInput {
-    pub service: String,
-    pub method: String,
-    pub key: String,
-    pub origins: Vec<String>,
-    pub paths: Vec<String>,
-    pub methods: Vec<String>,
-    pub header: String,
-    pub prefix: String,
-    pub secret: String,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
@@ -214,18 +199,11 @@ pub enum ProviderChange {
         method: String,
         hosts: Vec<String>,
         allow_private_addresses: bool,
+        keys: Vec<DesiredKey>,
     },
     RemoveEndpoint {
         service: String,
         method: String,
-    },
-    SetKey {
-        key: UpstreamKeyInput,
-    },
-    RemoveKey {
-        service: String,
-        method: String,
-        key: String,
     },
 }
 #[derive(Clone, Debug, Serialize)]
@@ -236,7 +214,7 @@ pub struct UpstreamView {
     pub service: String,
     pub method: String,
     pub hosts: Vec<String>,
-    pub keys: Vec<String>,
+    pub keys: Vec<DesiredKey>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "desktop", derive(TS))]
@@ -413,7 +391,6 @@ pub struct HttpRouteInput {
     pub path: String,
     pub method: String,
     pub url: String,
-    pub credential: Option<String>,
     pub max_response_bytes: u32,
     pub tls_roots: Vec<String>,
 }
@@ -488,12 +465,10 @@ pub struct AdminAccess {
 #[cfg_attr(feature = "desktop", ts(export))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DesiredKey {
-    pub name: String,
     pub origins: Vec<String>,
     pub paths: Vec<String>,
     pub methods: Vec<String>,
     pub header: String,
-    pub prefix: String,
     pub secret: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]

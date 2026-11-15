@@ -598,7 +598,6 @@ async fn funded_listener(case: FundedGateway) {
             path: "/proxy".into(),
             method: "GET".into(),
             url: format!("{}/", upstream.url),
-            credential: None,
             max_response_bytes: 4096,
             tls_roots: vec![upstream.root.clone()],
         }],

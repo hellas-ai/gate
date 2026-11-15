@@ -66,7 +66,8 @@ Identity and imported credential custody use the SDK OS secret store. An unavail
 or locked store is an error. Test fixtures use isolated private files. The authority
 journal stores the daemon configuration and backend secrets atomically in the private
 application data directory. Upstream keys are write-only: Configure accepts them,
-and Watch returns only the routing aliases. The editor has no separate key catalogue.
+and Watch returns only their scopes. The provider selects credentials by exact
+origin, path and method; scopes within one backend must not overlap. The editor has no separate key catalogue.
 Verified cards, offers, trust approvals, replay counters, channel journals and history
 also remain in the private application data directory.
 History and browser state never store access or upstream secrets.
@@ -78,6 +79,8 @@ and configure OpenAI Responses or HTTPS resources. OpenAI keys are restricted to
 its public Responses endpoint. HTTPS private addresses and private TLS roots
 require explicit settings. Compatible resources can share a route; coupled
 changes use one atomic Configure. Watch is the provider editor’s source of truth.
+Mark HTTPS resources that use a provider account; the daemon checks this against
+the backend's credential scopes.
 Invalid settings leave the previous configuration serving. One daemon serves
 authorized and paid work.
 
@@ -146,7 +149,9 @@ state. Gateway reconfiguration preserves admitted work on retained backends; shu
 drains accepted work.
 
 Settings can preview and apply a typed desired-state document. It accepts write-only backend keys and uses the same operations as interactive
-forms. Omit a secret value to keep its existing backend key. Preview captures the configuration revision; stale previews refuse.
+forms. Omit secret values only when the backend settings are unchanged; changes require
+all of that backend’s secrets. HTTP secrets contain the complete header value,
+including any `Bearer ` prefix. Preview captures the configuration revision; stale previews refuse.
 Applies are sequential: failures report acknowledged effects, unapplied work
 and any uncertain operation separately. Reapplying converges without resetting
 budgets, credentials or journal history.
