@@ -165,8 +165,8 @@ pub async fn plan(local: &LocalNode, mut document: DesiredState) -> anyhow::Resu
             provider_setup::change(
                 &mut candidate,
                 ProviderChange::Endpoint {
-                    service: upstream.service.clone(),
-                    method: upstream.method.clone(),
+                    service: upstream.service,
+                    method: upstream.method,
                     hosts: upstream.hosts,
                     allow_private_addresses: upstream.allow_private_addresses,
                     keys: upstream.keys,

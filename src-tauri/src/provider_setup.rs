@@ -153,7 +153,6 @@ pub fn change(document: &mut Document, change: ProviderChange) -> anyhow::Result
                 .map_err(anyhow::Error::from_boxed)?;
         }
     }
-    sync_listener(document);
     Ok(())
 }
 fn put(
@@ -298,7 +297,6 @@ pub fn enabled(document: &mut Document, enabled: bool) {
                 chain: None,
                 backends: vec![],
             });
-        sync_listener(document);
     } else {
         document.listeners.remove("work");
     }
