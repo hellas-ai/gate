@@ -9,28 +9,74 @@ use hellas_rpc::{
 };
 use std::{path::Path, sync::Arc};
 
+/// The iroh listener proves with the provider enrollment bound by the owner.
+/// The daemon may start before that one-time binding exists.
+pub struct ListenerProver {
+    pub vault: crate::vault::Vault,
+    pub node: hellas_authority::node::NodeCoordinator,
+}
+impl ListenerProver {
+    async fn root(&self) -> Result<AppleAppAttestRoot, AttestationError> {
+        let load: anyhow::Result<_> = async {
+            let enrollment = self
+                .node
+                .provider()
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("provider is unbound"))?;
+            let PlatformEnrollment::AppleAppAttest(platform) = enrollment.platform else {
+                anyhow::bail!("provider does not use App Attest")
+            };
+            let credential = hellas_attestation::AppleCredential {
+                attestation: platform.attestation_object,
+                client_data_hash: platform.client_data_hash,
+            };
+            let reference = String::from_utf8(
+                self.vault
+                    .required("provider-apple-reference")
+                    .await?
+                    .to_vec(),
+            )?;
+            Ok(AppleAppAttestRoot::load(reference, credential.content_id()))
+        }
+        .await;
+        load.map_err(|e| AttestationError::Platform(e.to_string()))
+    }
+}
+impl RootProver for ListenerProver {
+    fn prove_statement<'a>(&'a self, bytes: &'a [u8]) -> hellas_attestation::RootProofFuture<'a> {
+        Box::pin(async move { self.root().await?.prove_statement(bytes).await })
+    }
+    fn prove_open_binding<'a>(&'a self, digest: Digest) -> hellas_attestation::RootProofFuture<'a> {
+        Box::pin(async move { self.root().await?.prove_open_binding(digest).await })
+    }
+}
+
 pub enum ProviderRoot {
     Software(ProducerSigningKey),
     Apple(Arc<AppleAppAttestRoot>),
 }
 impl RootProver for ProviderRoot {
-    async fn prove_statement(&self, bytes: &[u8]) -> Result<RootProof, AttestationError> {
-        match self {
-            Self::Software(key) => Ok(RootProof::Software(
-                key.sign_digest(Digest::hash(bytes))
-                    .map_err(|e| AttestationError::Platform(e.to_string()))?,
-            )),
-            Self::Apple(root) => root.prove_statement(bytes).await,
-        }
+    fn prove_statement<'a>(&'a self, bytes: &'a [u8]) -> hellas_attestation::RootProofFuture<'a> {
+        Box::pin(async move {
+            match self {
+                Self::Software(key) => Ok(RootProof::Software(
+                    key.sign_digest(Digest::hash(bytes))
+                        .map_err(|e| AttestationError::Platform(e.to_string()))?,
+                )),
+                Self::Apple(root) => root.prove_statement(bytes).await,
+            }
+        })
     }
-    async fn prove_open_binding(&self, digest: Digest) -> Result<RootProof, AttestationError> {
-        match self {
-            Self::Software(key) => Ok(RootProof::Software(
-                key.sign_digest(digest)
-                    .map_err(|e| AttestationError::Platform(e.to_string()))?,
-            )),
-            Self::Apple(root) => root.prove_open_binding(digest).await,
-        }
+    fn prove_open_binding<'a>(&'a self, digest: Digest) -> hellas_attestation::RootProofFuture<'a> {
+        Box::pin(async move {
+            match self {
+                Self::Software(key) => Ok(RootProof::Software(
+                    key.sign_digest(digest)
+                        .map_err(|e| AttestationError::Platform(e.to_string()))?,
+                )),
+                Self::Apple(root) => root.prove_open_binding(digest).await,
+            }
+        })
     }
 }
 pub struct ProviderIdentity {

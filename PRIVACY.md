@@ -25,14 +25,15 @@ vulnerability. [Run history](src-tauri/src/history.rs) and optional gateway arch
 can retain local request and response data. ZDR disables gateway body archival;
 it does not erase Run history, backups, swap or the API vendor's records.
 
-The provider's upstream key stays in its referenced OS secret store. The Fetch
+The provider’s upstream key is written through Configure into its private authority
+journal alongside the daemon configuration. The Fetch
 provider injects it only for its configured origin, paths and methods. Sharing
 grants scoped access, not access to the key. A malicious or credential-reflecting
-upstream can still disclose the credential. Gate shows key references,
-fingerprints and use metadata, not the stored secret.
+upstream can still disclose the credential. Watch returns routing aliases and redacts secret values. The editor stores no
+separate key catalogue.
 
-Code: [credential scope](https://github.com/hellas-ai/hellas/blob/dd91add386aa988d7f7414c8503a9c71c35ec819/crates/providers/src/http.rs),
-[secret references](src-tauri/src/vault.rs), [provider composition](src-tauri/src/provider_setup.rs).
+Code: [credential scope](https://github.com/hellas-ai/hellas/blob/18f887a508fafa0843b7ab2c9dda26924093d228/crates/providers/src/http.rs),
+[control calls](src-tauri/src/control.rs), [provider editing](src-tauri/src/provider_setup.rs).
 
 ## What Apple verification establishes
 
@@ -50,8 +51,8 @@ reproducible mapping from source to a signed release hash.
 
 Code: [DeviceCheck bridge](src-tauri/src/apple_app_attest.m),
 [key and enrollment](src-tauri/src/apple.rs),
-[connection verification](https://github.com/hellas-ai/hellas/blob/dd91add386aa988d7f7414c8503a9c71c35ec819/crates/client/src/iroh.rs),
-[Apple verifier](https://github.com/hellas-ai/hellas/blob/dd91add386aa988d7f7414c8503a9c71c35ec819/crates/attestation/src/apple.rs).
+[connection verification](https://github.com/hellas-ai/hellas/blob/18f887a508fafa0843b7ab2c9dda26924093d228/crates/client/src/iroh.rs),
+[Apple verifier](https://github.com/hellas-ai/hellas/blob/18f887a508fafa0843b7ab2c9dda26924093d228/crates/attestation/src/apple.rs).
 The verifier does not call Apple's fraud-assessment service. Captured evidence
 can test verification at capture time; only provisioned hardware can answer a
 new hardware challenge.
@@ -66,9 +67,9 @@ The HTTP implementation supports SPKI pin checks, while Gate's resource forms
 expose certificate roots. OpenAI Responses uses the public endpoint and bundled
 roots; Gate does not claim an additional signed upstream peer attestation.
 
-Code: [TLS verification](https://github.com/hellas-ai/hellas/blob/dd91add386aa988d7f7414c8503a9c71c35ec819/crates/providers/src/http/tls.rs),
-[HTTP client](https://github.com/hellas-ai/hellas/blob/dd91add386aa988d7f7414c8503a9c71c35ec819/crates/providers/src/http/clients.rs),
-[Responses client](https://github.com/hellas-ai/hellas/blob/dd91add386aa988d7f7414c8503a9c71c35ec819/crates/providers/src/responses_fetch.rs).
+Code: [TLS verification](https://github.com/hellas-ai/hellas/blob/18f887a508fafa0843b7ab2c9dda26924093d228/crates/providers/src/http/tls.rs),
+[HTTP client](https://github.com/hellas-ai/hellas/blob/18f887a508fafa0843b7ab2c9dda26924093d228/crates/providers/src/http/clients.rs),
+[Responses client](https://github.com/hellas-ai/hellas/blob/18f887a508fafa0843b7ab2c9dda26924093d228/crates/providers/src/responses_fetch.rs).
 
 Grant budgets, resource limits and signed paid-channel terms restrict admitted
 work. They do not promise a reserve in the upstream vendor's account or account

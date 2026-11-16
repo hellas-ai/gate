@@ -22,19 +22,8 @@ impl Vault {
             SecretStore::headless_files(directory.to_owned(), "gate-test").unwrap(),
         ))
     }
-    pub fn source(&self, key: &str, prefix: &str) -> hellas_providers::HttpSecret {
-        hellas_providers::HttpSecret::Store {
-            store: (*self.0).clone(),
-            key: key.to_owned(),
-            prefix: prefix.to_owned(),
-        }
-    }
     pub fn blocking_get(&self, key: &str) -> anyhow::Result<Option<Zeroizing<Vec<u8>>>> {
         Ok(tokio::task::block_in_place(|| self.0.get(key))?)
-    }
-    pub fn blocking_delete(&self, key: &str) -> anyhow::Result<()> {
-        tokio::task::block_in_place(|| self.0.delete(key))?;
-        Ok(())
     }
     pub fn blocking_set(&self, key: &str, value: &[u8]) -> anyhow::Result<()> {
         tokio::task::block_in_place(|| self.0.set(key, value))?;

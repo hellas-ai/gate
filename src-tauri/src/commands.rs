@@ -317,7 +317,7 @@ pub async fn reconcile_gateway_key(
 pub async fn configure_paid_serve(
     state: State<'_, Arc<AppState>>,
     expected: u64,
-    input: Option<PaidServeInput>,
+    input: PaidServeInput,
 ) -> ApiResult<ProviderView> {
     state
         .configure_paid_serve(expected, input)

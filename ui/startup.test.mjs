@@ -144,7 +144,7 @@ test("Paid Serve publishes standing terms only after owner approval", async () =
         if (command === "frontend_debug") return;
         if (command === "get_status") return { identity: { initialized: true },
           provider: { state: "running" }, gateway: { state: "stopped" }, minOmitResponseBlocks: 16 };
-        if (command === "provider_view") return { revision: 7, resources: [], upstreams: [], paid: null };
+        if (command === "provider_view") return { revision: 7, resources: [], upstreams: [] };
         if (command === "configure_paid_serve") { changes.push(args); return {}; }
         throw new Error(`unexpected command ${command}`);
       },

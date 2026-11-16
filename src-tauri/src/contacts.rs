@@ -696,25 +696,26 @@ mod tests {
         bob.initialize_software("Bob".into()).await.unwrap();
         let bob_status = bob.export_contact_card().await.unwrap();
         alice.bind_provider(true).await.unwrap();
-        for (i, name) in ["a", "b"].into_iter().enumerate() {
+        for name in ["a", "b"] {
             alice
                 .configure_provider(
-                    i as u64,
+                    alice.provider_view().await.unwrap().revision,
                     ProviderChange::Endpoint {
                         service: name.into(),
                         method: "fetch".into(),
                         hosts: vec!["example.com".into()],
                         allow_private_addresses: false,
+                        keys: vec![],
                     },
                 )
                 .await
                 .unwrap();
         }
         alice.set_provider(true).await.unwrap();
-        for (i, name) in ["a", "b"].into_iter().enumerate() {
+        for name in ["a", "b"] {
             alice
                 .configure_resource(
-                    (2 + i) as u64,
+                    alice.provider_view().await.unwrap().revision,
                     ResourceInput {
                         name: name.into(),
                         service: name.into(),
@@ -724,7 +725,7 @@ mod tests {
                             origin: "https://example.com".into(),
                             paths: vec!["/".into()],
                             methods: vec!["GET".into()],
-                            credential: None,
+                            account_backed: false,
                             max_response_bytes: 4096,
                         },
                     },
