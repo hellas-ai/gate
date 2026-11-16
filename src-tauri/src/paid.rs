@@ -9,18 +9,14 @@ use hellas_rpc::protocol::invocation::{
     Admission, InvocationPolicy, Limits,
     fetch::{FetchAdmission, FetchLimits, FetchRoutePolicy},
 };
-use hellas_sdk::{
-    kernel::{EdgeValues, NetworkId},
-    work_config::{ChainCrossCheck, WorkConfig},
-};
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use hellas_sdk::{kernel::EdgeValues, work_config::WorkConfig};
+use std::{path::Path, time::Duration};
 
 pub fn contract(presentation: FetchPresentation) -> anyhow::Result<hellas_rpc::FetchContract> {
     Ok(match presentation {
-        FetchPresentation::Responses => hellas_reseller::responses_contract()?,
+        FetchPresentation::Responses => {
+            hellas_adaptors::openai::responses::fetch::responses_contract()?
+        }
         FetchPresentation::Http => hellas_rpc::FetchContract::http()?,
     })
 }
@@ -71,7 +67,6 @@ pub fn standing_policy(input: &PaidPolicyInput) -> anyhow::Result<PaidPolicy> {
             oracle_grace_blocks: input.oracle_blocks,
         },
         expected_payment_values: EdgeValues::new(value, 0, hellas_chain::domain::KERNEL_FEES),
-        min_omit_response_blocks: input.min_omit_response_blocks,
         jobs_per_channel: input.jobs_per_channel,
         offers: OfferPolicy {
             max_stake_per_client: input.max_stake_per_client,
@@ -85,53 +80,20 @@ pub fn standing_policy(input: &PaidPolicyInput) -> anyhow::Result<PaidPolicy> {
     Ok(policy)
 }
 
-pub fn config(
-    chain: &ChainInput,
-    poll_ms: u64,
-    max_observation_age_ms: u64,
-    journal_root: PathBuf,
-) -> anyhow::Result<WorkConfig> {
-    let genesis = if chain.committee.is_empty() {
-        None
-    } else {
-        Some(hellas_genesis::Genesis {
-            schema_version: hellas_genesis::GENESIS_SCHEMA_VERSION,
-            network_id: chain.network.clone(),
-            validators: chain
-                .committee
-                .iter()
-                .map(|v| hellas_genesis::GenesisValidator {
-                    public_key: v.public_key.clone(),
-                    label: v.label.clone(),
-                })
-                .collect(),
-            allocations: chain
-                .allocations
-                .iter()
-                .map(|v| hellas_genesis::GenesisAllocation {
-                    address: v.address.clone(),
-                    balance: v.balance,
-                })
-                .collect(),
-        })
-    };
-    if let Some(genesis) = &genesis {
-        genesis.validate()?;
-    }
-    let config = WorkConfig {
-        chain: ChainCrossCheck {
-            network: NetworkId::new(&chain.network).context("invalid network identifier")?,
-            genesis_payload_digest: chain.genesis_digest.parse()?,
-            threshold_identity: hex::decode(&chain.threshold_identity)?,
-            genesis,
-        },
-        validators: chain.validators.clone(),
-        journal_root,
-        poll: Duration::from_millis(poll_ms),
-        max_observation_age: Duration::from_millis(max_observation_age_ms),
-    };
-    Ok(config.validate()?)
+pub fn profile(input: &ChainInput) -> anyhow::Result<hellas_genesis::ChainProfile> {
+    Ok(match input {
+        ChainInput::Devnet => hellas_genesis::ChainProfile::known(hellas_genesis::Chain::Devnet),
+        ChainInput::Custom(file) => hellas_genesis::ChainProfile::custom(file.clone())?,
+    })
 }
+
+pub fn config(chain: &ChainInput, directory: &Path) -> anyhow::Result<WorkConfig> {
+    Ok(WorkConfig::for_chain(
+        profile(chain)?,
+        &crate::control::home(directory),
+    )?)
+}
+
 pub fn pool_path(directory: &Path, id: &str) -> anyhow::Result<std::path::PathBuf> {
     ensure!(
         !id.is_empty()
@@ -143,14 +105,16 @@ pub fn pool_path(directory: &Path, id: &str) -> anyhow::Result<std::path::PathBu
     );
     Ok(directory.join("paid-pools").join(format!("{id}.json")))
 }
-pub fn pool_options(
-    directory: &Path,
-    pool: &PaidPoolInput,
-) -> anyhow::Result<hellas_sdk::paid_gateway::PaidGatewayOptions> {
-    Ok(pool_snapshot(directory, pool)?.options)
+pub(crate) struct ProviderSnapshot {
+    pub input: PaidProviderInput,
+    pub provider: hellas_sdk::client::ProviderAddress,
+    pub profile: hellas_genesis::ChainProfile,
+    home: hellas_private::StoreLocation,
+    provider_addrs: Vec<std::net::SocketAddr>,
+    pub trust: trust::Snapshot,
 }
 pub(crate) struct PoolSnapshot {
-    pub options: hellas_sdk::paid_gateway::PaidGatewayOptions,
+    pub providers: Vec<ProviderSnapshot>,
     pub approvals: Vec<hellas_sdk::trust_policy::ApprovalRecord>,
 }
 pub(crate) fn pool_snapshot(
@@ -158,83 +122,101 @@ pub(crate) fn pool_snapshot(
     pool: &PaidPoolInput,
 ) -> anyhow::Result<PoolSnapshot> {
     pool_path(directory, &pool.id)?;
-    validate_assignments(directory, pool)?;
     ensure!(
         !pool.providers.is_empty() && pool.providers.len() <= 16,
         "select 1 to 16 paid providers"
     );
-    let pool_id = &pool.id;
+    let addresses = pool
+        .providers
+        .iter()
+        .map(|input| {
+            input
+                .provider
+                .parse::<hellas_sdk::client::ProviderAddress>()
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let nodes = addresses
+        .iter()
+        .map(|provider| provider.node)
+        .collect::<std::collections::BTreeSet<_>>();
+    ensure!(nodes.len() == addresses.len(), "duplicate paid provider");
+    validate_assignments(directory, &pool.id, &nodes)?;
     let mut providers = Vec::new();
     let mut snapshots = std::collections::BTreeMap::<String, trust::Snapshot>::new();
     let mut approvals = Vec::new();
-    for input in &pool.providers {
-        let provider: hellas_sdk::client::ProviderAddress = input.provider.parse()?;
+    for (input, provider) in pool.providers.iter().zip(addresses) {
         FetchRoutePolicy::sealed_route(&input.policy.service, &input.policy.method)?;
-        let config = config(
-            &input.policy.chain,
-            input.policy.poll_ms,
-            input.policy.max_observation_age_ms,
-            directory
-                .join("paid-channels")
-                .join(pool_id)
-                .join(provider.node.to_string()),
-        )?;
+        let profile = profile(&input.policy.chain)?;
+        WorkConfig::validate_profile(&profile)?;
         let approved = match snapshots.entry(input.trust_policy.clone()) {
             std::collections::btree_map::Entry::Occupied(entry) => entry.get().clone(),
             std::collections::btree_map::Entry::Vacant(entry) => entry
                 .insert(trust::snapshot(directory, &input.trust_policy)?)
                 .clone(),
         };
-        ensure!(
-            approved.anchor.expected_genesis == provider.enrollment,
-            "paid provider address differs from the approved enrollment"
-        );
-        approvals.push(approved.record);
-        let args = hellas_sdk::paid_client::PaidWorkOptions {
-            config: config.clone(),
-            journal_root: config.journal_root.clone(),
+        provider.trust(approved.anchor.required_assurance, Some(&approved.anchor))?;
+        hellas_sdk::paid_client::validate_terms(
+            input.policy.fixed_price,
+            input.acceptance_blocks,
+            input.terminal_blocks,
+            input.payment_blocks,
+            Some(Duration::from_secs(input.timeout_seconds)),
+        )?;
+        let provider_addrs = input
+            .addresses
+            .iter()
+            .map(|address| address.parse())
+            .collect::<Result<_, _>>()?;
+        approvals.push(approved.record.clone());
+        providers.push(ProviderSnapshot {
+            input: input.clone(),
             provider,
-            provider_addrs: input
-                .addresses
-                .iter()
-                .map(|a| a.parse())
-                .collect::<Result<_, _>>()?,
-            assurance: approved.anchor.required_assurance,
-            apple_trust: (approved.anchor.required_assurance
+            profile,
+            home: crate::control::home(directory),
+            provider_addrs,
+            trust: approved,
+        });
+    }
+    Ok(PoolSnapshot {
+        providers,
+        approvals,
+    })
+}
+
+impl ProviderSnapshot {
+    pub async fn options(&self) -> anyhow::Result<hellas_sdk::paid_client::PaidWorkOptions> {
+        let input = &self.input;
+        let config = WorkConfig::for_chain(self.profile.clone(), &self.home)?;
+        let content =
+            hellas_sdk::chain_home::open_gateway_content(&config.chain, self.provider).await?;
+        Ok(hellas_sdk::paid_client::PaidWorkOptions {
+            config,
+            journal_kind: hellas_sdk::paid_client::PaidJournalKind::Gateway,
+            content,
+            provider: self.provider,
+            provider_addrs: self.provider_addrs.clone(),
+            assurance: self.trust.anchor.required_assurance,
+            apple_trust: (self.trust.anchor.required_assurance
                 == hellas_rpc::Assurance::AppleAppAttest)
-                .then_some(approved.anchor),
+                .then(|| self.trust.anchor.clone()),
             expected_price: input.policy.fixed_price,
             acceptance_blocks: input.acceptance_blocks,
             terminal_blocks: input.terminal_blocks,
             payment_blocks: input.payment_blocks,
             timeout: Some(Duration::from_secs(input.timeout_seconds)),
-        };
-        args.validate()?;
-        providers.push(args);
-    }
-    let options = hellas_sdk::paid_gateway::PaidGatewayOptions {
-        providers,
-        max_pending_requests: pool.max_pending_requests,
-    };
-    options.validate()?;
-    Ok(PoolSnapshot { options, approvals })
-}
-fn validate_assignments(directory: &Path, pool: &PaidPoolInput) -> anyhow::Result<()> {
-    let providers = pool
-        .providers
-        .iter()
-        .map(|p| {
-            p.provider
-                .parse::<hellas_sdk::client::ProviderAddress>()
-                .map(|address| address.node)
         })
-        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+    }
+}
+fn validate_assignments(
+    directory: &Path,
+    id: &str,
+    providers: &std::collections::BTreeSet<hellas_sdk::iroh::EndpointId>,
+) -> anyhow::Result<()> {
     let pools = directory.join("paid-pools");
     if pools.try_exists()? {
         for entry in std::fs::read_dir(pools)? {
             let path = entry?.path();
-            if path.extension().is_none_or(|ext| ext != "json")
-                || path == pool_path(directory, &pool.id)?
+            if path.extension().is_none_or(|ext| ext != "json") || path == pool_path(directory, id)?
             {
                 continue;
             }
@@ -253,28 +235,10 @@ fn validate_assignments(directory: &Path, pool: &PaidPoolInput) -> anyhow::Resul
             }
         }
     }
-    let channels = directory.join("paid-channels");
-    if channels.try_exists()? {
-        for entry in std::fs::read_dir(channels)? {
-            let path = entry?.path();
-            if path
-                .file_name()
-                .is_some_and(|name| name == pool.id.as_str())
-            {
-                continue;
-            }
-            for provider in &providers {
-                ensure!(
-                    !path.join(provider.to_string()).try_exists()?,
-                    "provider has retained channel state in another paid pool; reuse that pool"
-                );
-            }
-        }
-    }
     Ok(())
 }
 pub fn validate_pool(directory: &Path, input: &PaidPoolInput) -> anyhow::Result<()> {
-    pool_options(directory, input)?;
+    pool_snapshot(directory, input)?;
     Ok(())
 }
 pub fn save_pool(directory: &Path, input: PaidPoolInput) -> anyhow::Result<()> {
@@ -282,20 +246,8 @@ pub fn save_pool(directory: &Path, input: PaidPoolInput) -> anyhow::Result<()> {
     vault::write(&pool_path(directory, &input.id)?, &input)
 }
 
-pub fn serve_config(directory: &Path, input: &PaidServeInput) -> anyhow::Result<WorkConfig> {
+pub fn validate_serve(input: &PaidServeInput) -> anyhow::Result<()> {
     standing_policy(&input.policy)?;
-    config(
-        &input.policy.chain,
-        input.policy.poll_ms,
-        input.policy.max_observation_age_ms,
-        directory.join("paid-provider"),
-    )
-}
-
-pub fn canonical_serve(
-    directory: &Path,
-    mut input: PaidServeInput,
-) -> anyhow::Result<PaidServeInput> {
-    input.policy.chain.validators = serve_config(directory, &input)?.validators;
-    Ok(input)
+    WorkConfig::validate_profile(&profile(&input.policy.chain)?)?;
+    Ok(())
 }

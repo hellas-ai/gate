@@ -2,4 +2,4 @@
 import type { IdentityStatus } from "./IdentityStatus.ts";
 import type { ServiceStatus } from "./ServiceStatus.ts";
 
-export type AppStatus = { version: string, identity: IdentityStatus, provider: ServiceStatus, gateway: ServiceStatus, endpoint: string, socketPath: string, listenPort: number | null, boundAddresses: Array<string>, minOmitResponseBlocks: number, };
+export type AppStatus = { version: string, identity: IdentityStatus, provider: ServiceStatus, gateway: ServiceStatus, endpoint: string, socketPath: string, listenPort: number | null, boundAddresses: Array<string>, };

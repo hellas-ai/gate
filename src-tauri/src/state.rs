@@ -175,7 +175,7 @@ impl AppState {
             detail: String::new(),
         };
         let Some(local) = self.local.lock().await.clone() else {
-            return Ok(AppStatus { version: env!("CARGO_PKG_VERSION").into(), identity: IdentityStatus { initialized: false, journal_error: self.journal_failure.load(Ordering::SeqCst), recovery_available:self.directory.join("installation.json").try_exists()? && !self.journal_failure.load(Ordering::SeqCst), principal: String::new(), fingerprint: String::new(), node_key: String::new(), transport_id: String::new(), provider_address: String::new(), authority: String::new(), generation: 0, attestation: "unavailable".into(), detail: self.failure.lock().await.clone().unwrap_or_else(||"Create your identity with a system passkey on macOS. Software identities are available explicitly for development.".into()), contact_card: String::new() }, provider: stopped(), gateway: stopped(), endpoint: String::new(), socket_path: self.directory.join("gate.sock").display().to_string(), listen_port: crate::settings::load(&self.directory)?.listen_port, bound_addresses: vec![], min_omit_response_blocks: hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS });
+            return Ok(AppStatus { version: env!("CARGO_PKG_VERSION").into(), identity: IdentityStatus { initialized: false, journal_error: self.journal_failure.load(Ordering::SeqCst), recovery_available:self.directory.join("installation.json").try_exists()? && !self.journal_failure.load(Ordering::SeqCst), principal: String::new(), fingerprint: String::new(), node_key: String::new(), transport_id: String::new(), provider_address: String::new(), authority: String::new(), generation: 0, attestation: "unavailable".into(), detail: self.failure.lock().await.clone().unwrap_or_else(||"Create your identity with a system passkey on macOS. Software identities are available explicitly for development.".into()), contact_card: String::new() }, provider: stopped(), gateway: stopped(), endpoint: String::new(), socket_path: self.directory.join("gate.sock").display().to_string(), listen_port: crate::settings::load(&self.directory)?.listen_port, bound_addresses: vec![] });
         };
         let status = local
             .client(false)
@@ -254,7 +254,6 @@ impl AppState {
             socket_path: local.socket.display().to_string(),
             listen_port: crate::settings::load(&self.directory)?.listen_port,
             bound_addresses: local.bound_addresses.get().cloned().unwrap_or_default(),
-            min_omit_response_blocks: hellas_sdk::kernel::MIN_OMIT_RESPONSE_BLOCKS,
         })
     }
     pub async fn shutdown(&self) -> anyhow::Result<bool> {
@@ -269,7 +268,9 @@ impl AppState {
             host.shutdown().await?;
         }
         if let Some(local) = self.local.lock().await.take() {
-            local.clients.shutdown().await?;
+            let drained = local.clients.shutdown().await;
+            local.content.close().await;
+            drained?;
         }
         self.plans.lock().await.clear();
         let _drained = self.runs.acquire_many(64).await?;

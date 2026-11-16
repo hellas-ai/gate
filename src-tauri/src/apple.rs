@@ -206,3 +206,82 @@ impl hellas_attestation::RootProver for AppleAppAttestRoot {
 unsafe extern "C" {
     fn hellas_apple_supported() -> bool;
 }
+
+#[cfg(all(test, target_os = "macos"))]
+mod hardware_tests {
+    use super::AppleAppAttestRoot;
+    use hellas_attestation::{
+        AnchorTime, ApplePolicy, RootProver, apple_app_attest_root_ca, apple_app_id_hash,
+        apple_client_data_hash, register_apple, verify_apple_assertion,
+    };
+    use std::io::Read as _;
+
+    #[tokio::test]
+    #[ignore = "requires a provisioned macOS 27 Full Security bundle and live Apple hardware"]
+    async fn provisioned_apple_root_verifies_live_assertions_after_reload() {
+        let app_id = std::env::var("HELLAS_GATE_TEST_APP_ID").expect("set the exact signed App ID");
+        let cd_hash: [u8; 32] = hex::decode(
+            std::env::var("HELLAS_GATE_TEST_CDHASH").expect("set CandidateCDHashFull sha256"),
+        )
+        .unwrap()
+        .try_into()
+        .expect("full SHA-256 CDHash must be 32 bytes");
+        let mut nonce = [0; 32];
+        std::fs::File::open("/dev/urandom")
+            .unwrap()
+            .read_exact(&mut nonce)
+            .unwrap();
+        let (root, credential) = AppleAppAttestRoot::create(&nonce).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let registered = register_apple(
+            &credential,
+            apple_app_id_hash(&app_id),
+            apple_app_attest_root_ca(),
+            AnchorTime(now),
+        )
+        .unwrap();
+        let policy = ApplePolicy {
+            expected_rp_id_hash: apple_app_id_hash(&app_id),
+            allowed_cd_hashes: vec![cd_hash],
+        };
+        let hellas_rpc::RootProof::AppleAppAttest(first) =
+            root.prove_statement(&nonce).await.unwrap()
+        else {
+            panic!("hardware root returned a software proof");
+        };
+        let first = verify_apple_assertion(
+            &first,
+            &apple_client_data_hash(&nonce),
+            &registered,
+            &policy,
+        )
+        .unwrap();
+        // Reconstruct using the same hardware key identifier, as persisted
+        // provider identity loading does; no private key leaves DeviceCheck.
+        let reloaded = AppleAppAttestRoot::load(root.key().to_owned(), credential.content_id());
+        std::fs::File::open("/dev/urandom")
+            .unwrap()
+            .read_exact(&mut nonce)
+            .unwrap();
+        let binding = hellas_auth::Digest::from_bytes(nonce);
+        let hellas_rpc::RootProof::AppleAppAttest(assertion) =
+            reloaded.prove_open_binding(binding).await.unwrap()
+        else {
+            panic!("reloaded hardware root returned a software proof");
+        };
+        let second =
+            verify_apple_assertion(&assertion, binding.as_bytes(), &registered, &policy).unwrap();
+        assert!(second.counter > first.counter);
+        nonce[0] ^= 1;
+        assert!(verify_apple_assertion(&assertion, &nonce, &registered, &policy).is_err());
+        println!(
+            "Apple root chain OK; App ID={app_id}; CDHash={}; live challenge verified; counter {} -> {}",
+            hex::encode(cd_hash),
+            first.counter,
+            second.counter
+        );
+    }
+}

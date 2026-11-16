@@ -15,7 +15,9 @@ struct Driver {
 }
 impl FetchProvider for Driver {
     fn execution_environment(&self) -> hellas_rpc::ContentId {
-        hellas_reseller::responses_contract().unwrap().manifest_id()
+        hellas_adaptors::openai::responses::fetch::responses_contract()
+            .unwrap()
+            .manifest_id()
     }
     fn run(&self, request: PreparedFetchRequest) -> FetchProviderFuture<'_> {
         Box::pin(async move {

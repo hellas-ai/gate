@@ -2,7 +2,11 @@
 
 Gate is a Tauri desktop application for Fetch work. One SDK `HostHandle` owns
 local control, provider and gateway lifecycles. Run and gateway requests share
-SDK clients and their durable channels; paid roles share one lazy chain node.
+SDK `ExecutorGateway` targets and their durable channels. Paid roles use verified
+light-client reads against the selected chain profile.
+
+Read [the privacy and trust boundaries](PRIVACY.md) before sharing an account or
+approving a provider.
 
 A person has a P-256 passkey principal. Each installation has separate node and
 transport keys; provider attestation has its own key. On macOS, Gate uses AuthenticationServices to create a system passkey and request
@@ -58,13 +62,6 @@ owner authenticator, is explicit, advances
 the authority generation and invalidates earlier credentials. A failed service
 open can be retried without recovering or replacing the owner.
 
-This version uses the Hellas PR 115 node journal format. Existing journals that
-contain legacy Work resource or capacity mutations may not replay; keep the
-original data and matching Gate/Hellas build. If opening fails, Gate reports the
-error without offering owner recovery or resetting the store. Use a separate
-data directory for a fresh installation; no automatic migration is provided.
-The provider/daemon serving a configured node must use the matching Hellas version.
-
 All private material uses the SDK OS secret store. An unavailable or locked store
 is an error. Private files are used only by isolated headless tests. Public
 configuration, verified cards, offers, trust approvals, replay counters, channel
@@ -97,10 +94,15 @@ Work/Auth authority operations.
 Run selects imported access or a named typed paid pool, then accepts the actual
 Fetch request JSON. Successful terminal verification, failure and cancellation
 are reflected in local SQLite history. History entries can be deleted or cleared.
-Closing the window hides it; Quit drains the host, clients and chain. Saving a
+Closing the window hides it; Quit drains the host and clients. Saving a
 host UDP port takes effect on an explicit drain/restart.
 
 ## Paid setup and gateways
+
+Choose the compiled devnet profile or paste custom chain-profile JSON
+containing `trust`, `validators` and `genesis_json`. Gate saves these contents in
+the pool or Serve settings. The SDK validates the genesis and trust schedule and
+keeps each chain’s state in its own directory.
 
 Start Serve with a configured Fetch resource, then approve one standing paid
 policy with the owner passkey: price, jobs per channel, per-job limits, maximum
@@ -115,7 +117,7 @@ independently approved trust, named route and
 price. Quote discovery does not fund a channel. The first accepted request asks
 the owner to approve an exact funding split; the SDK retains funding and channel
 state for recovery. Each provider belongs to one paid pool. Reuse that pool for
-retained work so its transport and journal owner remain stable. The address's
+retained work. Transport keys and journals are scoped to the chain and provider. The address's
 enrollment must match the approval; the SDK verifies it on quote, funding and
 reconnect, including retained channels. Node IDs alone are rejected.
 

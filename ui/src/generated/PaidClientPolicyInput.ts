@@ -2,4 +2,4 @@
 import type { ChainInput } from "./ChainInput.ts";
 import type { FetchPresentation } from "./FetchPresentation.ts";
 
-export type PaidClientPolicyInput = { chain: ChainInput, service: string, method: string, presentation: FetchPresentation, fixedPrice: number, pollMs: number, maxObservationAgeMs: number, };
+export type PaidClientPolicyInput = { chain: ChainInput, service: string, method: string, presentation: FetchPresentation, fixedPrice: number, };

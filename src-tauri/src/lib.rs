@@ -2,7 +2,6 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 pub mod apple;
 pub mod apply;
-pub mod chain;
 pub mod clients;
 #[cfg(feature = "desktop")]
 pub mod commands;

@@ -13,6 +13,10 @@ use std::{
     sync::Arc,
 };
 
+pub fn home(directory: &Path) -> hellas_private::StoreLocation {
+    hellas_private::StoreLocation::from_home(directory, hellas_private::Durability::Power)
+}
+
 pub type Client = HostControlClientImpl<hellas_wire::mux::MuxTransport>;
 pub struct LocalNode {
     pub identity: Arc<Identity>,
@@ -22,7 +26,7 @@ pub struct LocalNode {
     pub composition: crate::provider_setup::Composition,
     pub directory: PathBuf,
     pub clients: crate::clients::Clients,
-    pub chain: Arc<crate::chain::ChainNode>,
+    pub content: hellas_store::content::DiskStore,
     pub gateway: crate::gateway::Configuration,
     tls: Arc<rustls::ClientConfig>,
     pub bound_addresses: std::sync::OnceLock<Vec<String>>,
@@ -45,87 +49,128 @@ impl LocalNode {
         )?;
         let (tls, _) = node_control::profile::local_trust(certificate, "localhost".into())?;
         let socket = directory.join("gate.sock");
-        let chain = Arc::new(crate::chain::ChainNode::new(directory.join("chain")));
-        let local = Arc::new(Self {
-            identity: Arc::new(identity),
-            coordinator: coordinator.clone(),
-            socket: socket.clone(),
-            composition: crate::provider_setup::Composition::open(directory, vault.clone())?,
-            directory: directory.to_owned(),
-            clients: crate::clients::Clients::new(directory, chain.clone()),
-            chain,
-            gateway: crate::gateway::Configuration::open(directory)?,
-            vault,
-            tls,
-            bound_addresses: Default::default(),
-        });
-        #[cfg(test)]
-        let endpoint =
-            hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::Minimal);
-        #[cfg(not(test))]
-        let endpoint = hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::N0);
+        let composition = crate::provider_setup::Composition::open(directory, vault.clone())?;
+        let gateway = crate::gateway::Configuration::open(directory)?;
         let settings = crate::settings::load(directory)?;
-        let endpoint = if let Some(port) = settings.listen_port {
-            endpoint.bind_addr(std::net::SocketAddrV4::new(
-                std::net::Ipv4Addr::UNSPECIFIED,
-                port,
-            ))?
-        } else {
-            endpoint
-        };
-        let transport = endpoint
-            .secret_key(local.identity.node.transport_key())
-            .bind()
-            .await?;
-        let _ = local.bound_addresses.set(
-            transport
-                .bound_sockets()
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-        );
-        let host = HostHandle::start_with_deferred_gateway(
-            HostOptions {
-                transport: Some(transport),
-                start_provider: false,
-                control: Some((
-                    coordinator,
-                    hellas_sdk::ProviderControl {
-                        socket,
-                        tls: server,
-                        remote: Default::default(),
-                    },
-                )),
-                provider: Some(local.composition.factory(local.clone())),
-                gateway: None,
-            },
-            crate::gateway::factory(local.clone()),
-            Arc::new({
-                let local = local.clone();
-                move || {
-                    let local = local.clone();
-                    Box::pin(async move {
-                        crate::credentials::load_gateway_anchor(&local)
-                            .await
-                            .map_err(Into::into)
-                    })
-                }
-            }),
+        let settlement_key = hellas_sdk::kernel::Secp256k1Signer::from_secret_scalar(
+            identity.node.node_secret_bytes(),
+        )
+        .map_err(|_| anyhow::anyhow!("invalid provider settlement key"))?;
+        let content = hellas_store::content::DiskStore::open(
+            crate::control::home(directory).child("content"),
+            vec![],
+            hellas_store::content::IndexMode::Resume,
+            None,
+            hellas_store::content::Reservations::ram(
+                hellas_channel::content::DEFAULT_MAX_STAGING_BYTES,
+            ),
+            false,
         )
         .await?;
-        // A committed initialization must authenticate using precisely its prepared ID.
-        let status = local
-            .client(false)
-            .await?
-            .get_host_status(GetHostStatusRequest {
-                authorization: local.authorization(),
-            })
+        let opened = async {
+            // Restore retained pins and reservations before cleanup, including inactive
+            // chains. This does not drive those chains through channel close.
+            hellas_sdk::chain_home::recover_provider_chains(
+                &home(directory),
+                &settlement_key,
+                &content,
+            )
             .await?;
-        ensure!(
-            status.authority == local.identity.public.authority.0.as_bytes(),
-            "local authority mismatch"
-        );
-        Ok((local, host))
+            let local = Arc::new(Self {
+                identity: Arc::new(identity),
+                coordinator: coordinator.clone(),
+                socket: socket.clone(),
+                composition,
+                directory: directory.to_owned(),
+                clients: crate::clients::Clients::new(directory),
+                content: content.clone(),
+                gateway,
+                vault,
+                tls,
+                bound_addresses: Default::default(),
+            });
+            #[cfg(test)]
+            let endpoint =
+                hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::Minimal);
+            #[cfg(not(test))]
+            let endpoint =
+                hellas_sdk::iroh::Endpoint::builder(hellas_sdk::iroh::endpoint::presets::N0);
+            let endpoint = if let Some(port) = settings.listen_port {
+                endpoint.bind_addr(std::net::SocketAddrV4::new(
+                    std::net::Ipv4Addr::UNSPECIFIED,
+                    port,
+                ))?
+            } else {
+                endpoint
+            };
+            let transport = endpoint
+                .secret_key(local.identity.node.transport_key())
+                .bind()
+                .await?;
+            let _ = local.bound_addresses.set(
+                transport
+                    .bound_sockets()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+            );
+            let host = HostHandle::start_with_deferred_gateway(
+                HostOptions {
+                    content: local.content.clone(),
+                    transport: Some(transport),
+                    start_provider: false,
+                    control: Some((
+                        coordinator,
+                        hellas_sdk::ProviderControl {
+                            socket,
+                            tls: server,
+                            remote: Default::default(),
+                        },
+                    )),
+                    provider: Some(local.composition.factory(local.clone())),
+                    gateway: None,
+                },
+                crate::gateway::factory(local.clone()),
+                Arc::new({
+                    let local = local.clone();
+                    move || {
+                        let local = local.clone();
+                        Box::pin(async move {
+                            crate::credentials::load_gateway_anchor(&local)
+                                .await
+                                .map_err(Into::into)
+                        })
+                    }
+                }),
+            )
+            .await?;
+            let authenticated: anyhow::Result<()> = async {
+                // A committed initialization must authenticate using precisely its prepared ID.
+                let status = local
+                    .client(false)
+                    .await?
+                    .get_host_status(GetHostStatusRequest {
+                        authorization: local.authorization(),
+                    })
+                    .await?;
+                ensure!(
+                    status.authority == local.identity.public.authority.0.as_bytes(),
+                    "local authority mismatch"
+                );
+                Ok(())
+            }
+            .await;
+            if let Err(error) = authenticated {
+                let _ = host.shutdown().await;
+                return Err(error);
+            }
+            Ok((local, host))
+        }
+        .await;
+        if opened.is_err() {
+            content.close().await;
+        }
+        opened
     }
     pub fn authorization(&self) -> Vec<u8> {
         self.identity.public.root.0.to_vec()
