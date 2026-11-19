@@ -227,6 +227,7 @@ pub fn resources(document: &mut Document, inputs: Vec<ResourceInput>) -> anyhow:
                 https: hellas_authority::model::grant::resource::HttpsResource {
                     origin,
                     paths,
+                    queries: Default::default(),
                     methods,
                     account_backed,
                     max_response_bytes,
